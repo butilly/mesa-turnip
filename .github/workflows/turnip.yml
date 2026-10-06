@@ -2,7 +2,7 @@ name: Turnip
 
 on:
   pull_request:
-    branches: [turnip]
+    branches: [turnip, turnip-gen8]
   push:
     tags: ["v*"]
   workflow_dispatch:
