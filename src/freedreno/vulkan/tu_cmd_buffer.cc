@@ -370,6 +370,7 @@ tu6_emit_flushes(struct tu_cmd_buffer *cmd_buffer,
       flushes |= TU_CMD_FLAG_WAIT_MEM_WRITES |
                  TU_CMD_FLAG_WAIT_FOR_IDLE |
                  TU_CMD_FLAG_WAIT_FOR_ME;
+   flushes |= TU_CMD_FLAG_WAIT_FOR_ME;
 
    /* Experiments show that invalidating CCU while it still has data in it
     * doesn't work, so make sure to always flush before invalidating in case
