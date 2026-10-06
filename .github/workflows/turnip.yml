@@ -53,6 +53,7 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           PR: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.head_ref }}
           VARIANT: ${{ inputs.variant }}
           IN_REPO: ${{ inputs.mesa_repo }}
           IN_REF: ${{ inputs.mesa_ref }}
@@ -64,7 +65,9 @@ jobs:
           e = os.environ
           label, repo, ref, patches = "checkout", e["IN_REPO"], e["IN_REF"], e["IN_PATCHES"]
           if e["EVENT"] == "pull_request":
-              label = "pr-" + e["PR"]
+              import re
+              slug = re.sub(r"[^a-z0-9]+", "-", re.sub(r"^fix/", "", e.get("HEAD_REF", "")).lower()).strip("-")[:48]
+              label = (slug + "-pr" + e["PR"]) if slug else ("pr-" + e["PR"])
           elif e["EVENT"] == "push":
               label = e["GITHUB_REF_NAME"]
           elif e["VARIANT"]:
