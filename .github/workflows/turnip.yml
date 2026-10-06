@@ -1,0 +1,133 @@
+name: Turnip
+
+on:
+  pull_request:
+    branches: [turnip]
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: Key from variants/matrix.yml; empty builds this checkout
+        default: ""
+      mesa_repo:
+        description: Mesa git repository (overrides the variant's repo; set to build another tree)
+        default: ""
+      mesa_ref:
+        description: Branch, tag or commit (overrides the variant's ref; set to build another tree)
+        default: ""
+      patches:
+        description: Newline-separated patch URLs or paths under patches/ (overrides the variant's patches)
+        default: ""
+      variant_name:
+        description: Driver name shown in GameNative
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: turnip-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    outputs:
+      artifact: ${{ steps.artifact.outputs.name }}
+      mesa_version: ${{ steps.build.outputs.mesa_version }}
+      mesa_commit: ${{ steps.build.outputs.mesa_commit }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build flex bison glslang-tools pkg-config zip unzip
+          python3 -m pip install --user --upgrade meson mako pyyaml packaging
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Resolve source
+        id: resolve
+        env:
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          VARIANT: ${{ inputs.variant }}
+          IN_REPO: ${{ inputs.mesa_repo }}
+          IN_REF: ${{ inputs.mesa_ref }}
+          IN_PATCHES: ${{ inputs.patches }}
+          IN_NAME: ${{ inputs.variant_name }}
+        run: |
+          python3 - <<'PY'
+          import os, sys, yaml
+          e = os.environ
+          label, repo, ref, patches = "checkout", e["IN_REPO"], e["IN_REF"], e["IN_PATCHES"]
+          if e["EVENT"] == "pull_request":
+              label = "pr-" + e["PR"]
+          elif e["EVENT"] == "push":
+              label = e["GITHUB_REF_NAME"]
+          elif e["VARIANT"]:
+              label = e["VARIANT"]
+              rows = {r["id"]: r for r in yaml.safe_load(open("variants/matrix.yml"))["variants"]}
+              if label not in rows:
+                  sys.exit(f"Unknown variant {label}; known: {', '.join(rows)}")
+              row = rows[label]
+              repo = repo or row["source"]["repo"]
+              ref = ref or row["source"]["ref"]
+              if not patches:
+                  missing = [p["name"] for p in row.get("patches") or [] if not p.get("url")]
+                  if missing:
+                      sys.exit(f"Variant {label} has patches with no url: {', '.join(missing)}. Pass them in the patches input.")
+                  patches = "\n".join(p["url"] for p in row.get("patches") or [])
+          name = e["IN_NAME"] or label
+          with open(e["GITHUB_ENV"], "a") as f:
+              f.write(f"MESA_REPO={repo}\nMESA_REF={ref}\nVARIANT_NAME={name}\n")
+              f.write(f"PATCHES<<EOF_PATCHES\n{patches}\nEOF_PATCHES\n")
+          with open(e["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"label={label}\n")
+          print(f"label={label} repo={repo or '(checkout)'} ref={ref or '(checkout)'} name={name}\npatches:\n{patches}")
+          PY
+
+      - name: Build
+        id: build
+        env:
+          PACKAGE_VERSION: ${{ github.run_number }}
+          WORKDIR: ${{ runner.temp }}/work
+          OUT_DIR: ${{ runner.temp }}/out
+        run: ./ci/build.sh
+
+      - name: Artifact name
+        id: artifact
+        env:
+          LABEL: ${{ steps.resolve.outputs.label }}
+          VERSION: ${{ steps.build.outputs.mesa_version }}
+          COMMIT: ${{ steps.build.outputs.mesa_commit }}
+        run: echo "name=turnip-$LABEL-$VERSION-$COMMIT" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: ${{ steps.build.outputs.zip_path }}
+          if-no-files-found: error
+
+  release:
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact }}
+          path: dist
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.zip \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --notes "Mesa ${{ needs.build.outputs.mesa_version }} (${{ needs.build.outputs.mesa_commit }}) from $GITHUB_REF_NAME"
