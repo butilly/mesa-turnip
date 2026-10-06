@@ -8,8 +8,11 @@
  */
 
 #include "tu_queue.h"
+#include <errno.h>
 
 #include "vk_util.h"
+#include "vk_enum_to_str.h"
+#include "util/log.h"
 
 #include "tu_buffer.h"
 #include "tu_cmd_buffer.h"
@@ -599,6 +602,11 @@ out:
 fail_create_submit:
    if (cmd_buffers != (struct tu_cmd_buffer **) vk_submit->command_buffers)
       vk_free(&queue->device->vk.alloc, cmd_buffers);
+
+   if (result != VK_SUCCESS)
+      mesa_loge("tu: queue_submit failed: %s (queue %u, submit %u, %u cmd buffers, errno %d)",
+                vk_Result_to_str(result), queue->msm_queue_id, device->submit_count,
+                vk_submit->command_buffer_count, errno);
 
    return result;
 }
