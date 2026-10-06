@@ -47,3 +47,17 @@ jobs:
           else
             gh pr create --head upstream-main --base turnip --title "Sync with upstream Mesa main" --body "$body"
           fi
+
+  sync-gen8:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: turnip
+          fetch-depth: 1
+          token: ${{ secrets.SYNC_TOKEN || github.token }}
+
+      - name: Mirror whitebelyash/mesa-unified turnip/gen8 to turnip-gen8
+        run: |
+          git fetch --no-tags https://github.com/whitebelyash/mesa-unified.git turnip/gen8
+          git push --force origin FETCH_HEAD:refs/heads/turnip-gen8
