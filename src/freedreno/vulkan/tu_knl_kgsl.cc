@@ -50,17 +50,32 @@ safe_ioctl(int fd, unsigned long request, void *arg)
 static int
 kgsl_submitqueue_new(struct tu_device *dev, struct tu_queue *queue)
 {
+   int ret = pthread_mutex_init(&queue->diagnostic_mutex, NULL);
+   if (ret)
+      return ret;
+
    struct kgsl_drawctxt_create req = {
       .flags = KGSL_CONTEXT_SAVE_GMEM |
               KGSL_CONTEXT_NO_GMEM_ALLOC |
               KGSL_CONTEXT_PREAMBLE,
    };
 
-   int ret = safe_ioctl(dev->physical_device->local_fd, IOCTL_KGSL_DRAWCTXT_CREATE, &req);
-   if (ret)
+   ret = safe_ioctl(dev->physical_device->local_fd, IOCTL_KGSL_DRAWCTXT_CREATE, &req);
+   if (ret) {
+      pthread_mutex_destroy(&queue->diagnostic_mutex);
       return ret;
+   }
 
    queue->msm_queue_id = req.drawctxt_id;
+
+   queue->diagnostic_next = 0;
+   queue->diagnostic_count = 0;
+   queue->diagnostic_dumped = 0;
+   if (dev->physical_device->info->chip >= 8 &&
+       dev->instance->drirc.debug.gen8_submit_history)
+      mesa_logi("TU-DIAG submission history enabled queue=%u capacity=%u",
+                queue->msm_queue_id,
+                (unsigned)ARRAY_SIZE(queue->diagnostic_history));
 
    return 0;
 }
@@ -73,6 +88,86 @@ kgsl_submitqueue_close(struct tu_device *dev, struct tu_queue *queue)
    };
 
    safe_ioctl(dev->physical_device->local_fd, IOCTL_KGSL_DRAWCTXT_DESTROY, &req);
+   pthread_mutex_destroy(&queue->diagnostic_mutex);
+}
+
+static bool
+kgsl_diagnostic_enabled(struct tu_queue *queue)
+{
+   return queue->device->physical_device->info->chip >= 8 &&
+          queue->device->instance->drirc.debug.gen8_submit_history;
+}
+
+static void
+kgsl_diagnostic_record(struct tu_queue *queue, uint32_t timestamp,
+                       uint32_t waits, uint32_t signals)
+{
+   if (!kgsl_diagnostic_enabled(queue))
+      return;
+
+   pthread_mutex_lock(&queue->diagnostic_mutex);
+   queue->diagnostic_history[queue->diagnostic_next] = {
+      timestamp,
+      p_atomic_read(&queue->diagnostic_submit_id),
+      p_atomic_read(&queue->diagnostic_command_buffer_count),
+      p_atomic_read(&queue->diagnostic_ib_count),
+      waits,
+      signals,
+   };
+   queue->diagnostic_next =
+      (queue->diagnostic_next + 1) % ARRAY_SIZE(queue->diagnostic_history);
+   queue->diagnostic_count =
+      MIN2(queue->diagnostic_count + 1, ARRAY_SIZE(queue->diagnostic_history));
+   pthread_mutex_unlock(&queue->diagnostic_mutex);
+}
+
+/* Dump only once, at the first error, before later recovery can obscure the
+ * timestamps. Do not take submit_mutex or wait for the GPU here. The kernel
+ * timestamps are observations, not proof that a particular batch is guilty.
+ */
+static void
+kgsl_diagnostic_dump(struct tu_queue *queue, const char *reason,
+                     uint32_t waited_timestamp)
+{
+   if (!kgsl_diagnostic_enabled(queue) ||
+       p_atomic_cmpxchg(&queue->diagnostic_dumped, 0, 1) != 0)
+      return;
+
+   const int saved_errno = errno;
+   for (uint32_t type = KGSL_TIMESTAMP_CONSUMED;
+        type <= KGSL_TIMESTAMP_QUEUED; type++) {
+      struct kgsl_cmdstream_readtimestamp_ctxtid req = {
+         .context_id = queue->msm_queue_id,
+         .type = type,
+      };
+      int ret = safe_ioctl(queue->device->fd,
+                           IOCTL_KGSL_CMDSTREAM_READTIMESTAMP_CTXTID, &req);
+      mesa_loge("TU-DIAG PROGRESS queue=%u reason=%s waited=%u type=%u "
+                "timestamp=%u result=%d errno=%d",
+                queue->msm_queue_id, reason, waited_timestamp, type,
+                req.timestamp, ret, ret ? errno : 0);
+   }
+
+   struct tu_kgsl_submit_record history[64];
+   pthread_mutex_lock(&queue->diagnostic_mutex);
+   const uint32_t count = queue->diagnostic_count;
+   const uint32_t first =
+      (queue->diagnostic_next + ARRAY_SIZE(history) - count) % ARRAY_SIZE(history);
+   for (uint32_t i = 0; i < count; i++)
+      history[i] = queue->diagnostic_history[(first + i) % ARRAY_SIZE(history)];
+   pthread_mutex_unlock(&queue->diagnostic_mutex);
+
+   mesa_loge("TU-DIAG HISTORY queue=%u count=%u capacity=%u "
+             "(successful submissions; in-progress ioctl may be absent)",
+             queue->msm_queue_id, count, (unsigned)ARRAY_SIZE(history));
+   for (uint32_t i = 0; i < count; i++) {
+      const struct tu_kgsl_submit_record *entry = &history[i];
+      mesa_loge("TU-DIAG HISTORY queue=%u timestamp=%u submit=%u "
+                "command_buffers=%u ibs=%u waits=%u signals=%u",
+                queue->msm_queue_id, entry->timestamp, entry->submit_id,
+                entry->command_buffers, entry->ibs, entry->waits, entry->signals);
+   }
+   errno = saved_errno;
 }
 
 static void kgsl_bo_finish(struct tu_device *dev, struct tu_bo *bo);
@@ -816,19 +911,19 @@ get_relative_ms(uint64_t abs_timeout_ns)
  * which could lead to waiting substantially longer than requested
  */
 static VkResult
-wait_timestamp_safe(int fd,
-                    unsigned int context_id,
+wait_timestamp_safe(struct tu_queue *queue,
                     unsigned int timestamp,
                     uint64_t abs_timeout_ns)
 {
    struct kgsl_device_waittimestamp_ctxtid wait = {
-      .context_id = context_id,
+      .context_id = queue->msm_queue_id,
       .timestamp = timestamp,
       .timeout = get_relative_ms(abs_timeout_ns),
    };
 
    while (true) {
-      int ret = ioctl(fd, IOCTL_KGSL_DEVICE_WAITTIMESTAMP_CTXTID, &wait);
+      int ret = ioctl(queue->device->fd,
+                      IOCTL_KGSL_DEVICE_WAITTIMESTAMP_CTXTID, &wait);
 
       if (ret == -1 && (errno == EINTR || errno == EAGAIN)) {
          int timeout_ms = get_relative_ms(abs_timeout_ns);
@@ -839,6 +934,14 @@ wait_timestamp_safe(int fd,
 
          wait.timeout = timeout_ms;
       } else if (ret == -1) {
+         if (errno != ETIMEDOUT) {
+            const int wait_errno = errno;
+            mesa_loge("TU-DIAG WAITTIMESTAMP queue=%u timestamp=%u errno=%d (%s)",
+                      queue->msm_queue_id, timestamp, wait_errno,
+                      strerror(wait_errno));
+            kgsl_diagnostic_dump(queue, "waittimestamp", timestamp);
+            errno = wait_errno;
+         }
          assert(errno == ETIMEDOUT);
          return VK_TIMEOUT;
       } else {
@@ -853,8 +956,7 @@ kgsl_queue_wait_fence(struct tu_queue *queue, uint32_t fence,
 {
    uint64_t abs_timeout_ns = os_time_get_nano() + timeout_ns;
 
-   return wait_timestamp_safe(queue->device->fd, queue->msm_queue_id,
-                              fence, abs_timeout_ns);
+   return wait_timestamp_safe(queue, fence, abs_timeout_ns);
 }
 
 static VkResult
@@ -902,8 +1004,7 @@ kgsl_syncobj_wait(struct tu_device *device,
       return VK_TIMEOUT;
 
    case KGSL_SYNCOBJ_STATE_TS: {
-      return wait_timestamp_safe(device->fd, s->queue->msm_queue_id,
-                                 s->timestamp, abs_timeout_ns);
+      return wait_timestamp_safe(s->queue, s->timestamp, abs_timeout_ns);
    }
 
    case KGSL_SYNCOBJ_STATE_FD: {
@@ -1000,8 +1101,8 @@ kgsl_syncobj_wait_any(struct tu_device* device, struct kgsl_syncobj **syncobjs, 
    }
 
    if (u_vector_length(&poll_fds) == 0) {
-      result = wait_timestamp_safe(device->fd, queue->msm_queue_id,
-                                   lowest_timestamp, MIN2(abs_timeout_ns, INT64_MAX));
+      result = wait_timestamp_safe(queue, lowest_timestamp,
+                                   MIN2(abs_timeout_ns, INT64_MAX));
    } else {
       int ret, i;
 
@@ -1429,6 +1530,10 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
    struct tu_kgsl_queue_submit *submit =
       (struct tu_kgsl_queue_submit *)_submit;
 
+   p_atomic_set(&queue->diagnostic_ib_count,
+                util_dynarray_num_elements(&submit->commands,
+                                            struct kgsl_command_object));
+
 #if HAVE_PERFETTO
    uint64_t start_ts = tu_perfetto_begin_submit();
 #endif
@@ -1603,6 +1708,19 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
       ret = safe_ioctl(queue->device->physical_device->local_fd,
                        IOCTL_KGSL_GPU_COMMAND, &req);
 
+      if (ret) {
+         const int submit_errno = errno;
+         mesa_loge("TU-DIAG GPU_COMMAND queue=%u submit=%u command_buffers=%u "
+                   "ibs=%u waits=%u signals=%u last_fence=%d errno=%d (%s)",
+                   queue->msm_queue_id, queue->device->submit_count,
+                   p_atomic_read(&queue->diagnostic_command_buffer_count),
+                   req.numcmds, wait_count, signal_count,
+                   p_atomic_read(&queue->fence), submit_errno,
+                   strerror(submit_errno));
+         kgsl_diagnostic_dump(queue, "gpu-command", 0);
+         errno = submit_errno;
+      }
+
       timestamp = req.timestamp;
    } else {
       /* kgsl doesn't support multiple bind commands at once */
@@ -1635,6 +1753,14 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
                           IOCTL_KGSL_GPU_AUX_COMMAND, &req);
 
          if (ret) {
+            const int submit_errno = errno;
+            mesa_loge("TU-DIAG GPU_AUX_COMMAND queue=%u submit=%u "
+                      "command_buffers=0 bind_index=%u waits=%u signals=%u "
+                      "errno=%d (%s)", queue->msm_queue_id,
+                      queue->device->submit_count, i, wait_count, signal_count,
+                      submit_errno, strerror(submit_errno));
+            kgsl_diagnostic_dump(queue, "gpu-aux-command", 0);
+            errno = submit_errno;
             result = vk_device_set_lost(&queue->device->vk,
                                         "bind submit failed: %s\n",
                                         strerror(errno));
@@ -1694,6 +1820,7 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
    }
 
    p_atomic_set(&queue->fence, timestamp);
+   kgsl_diagnostic_record(queue, timestamp, wait_count, signal_count);
 
    for (uint32_t i = 0; i < signal_count; i++) {
       struct kgsl_syncobj *signal_sync =
@@ -1769,11 +1896,31 @@ kgsl_device_check_status(struct tu_device *device)
          uint32_t value = device->queues[i][q].msm_queue_id;
          VkResult status = get_kgsl_prop(device->fd, KGSL_PROP_GPU_RESET_STAT,
                                        &value, sizeof(value));
-         if (status != VK_SUCCESS)
+         if (status != VK_SUCCESS) {
+            const int status_errno = errno;
+            struct tu_queue *queue = &device->queues[i][q];
+            mesa_loge("TU-DIAG RESET_STAT query queue=%u submit=%u "
+                      "command_buffers=%u ibs=%u errno=%d (%s)",
+                      queue->msm_queue_id,
+                      p_atomic_read(&queue->diagnostic_submit_id),
+                      p_atomic_read(&queue->diagnostic_command_buffer_count),
+                      p_atomic_read(&queue->diagnostic_ib_count),
+                      status_errno, strerror(status_errno));
+            errno = status_errno;
             return vk_device_set_lost(&device->vk, "Failed to get GPU reset status");
+         }
 
          if (value != KGSL_CTX_STAT_NO_ERROR &&
-            value != KGSL_CTX_STAT_INNOCENT_CONTEXT_RESET_EXT) {
+             value != KGSL_CTX_STAT_INNOCENT_CONTEXT_RESET_EXT) {
+            struct tu_queue *queue = &device->queues[i][q];
+            kgsl_diagnostic_dump(queue, "reset-status", 0);
+            mesa_loge("TU-DIAG RESET_STAT fault queue=%u submit=%u "
+                      "command_buffers=%u ibs=%u last_fence=%d reset_status=%u errno=0",
+                      queue->msm_queue_id,
+                      p_atomic_read(&queue->diagnostic_submit_id),
+                      p_atomic_read(&queue->diagnostic_command_buffer_count),
+                      p_atomic_read(&queue->diagnostic_ib_count),
+                      p_atomic_read(&queue->fence), value);
             return vk_device_set_lost(&device->vk, "GPU faulted or hung");
          }
       }

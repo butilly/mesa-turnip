@@ -18,6 +18,16 @@ enum tu_queue_type
    TU_QUEUE_SPARSE,
 };
 
+struct tu_kgsl_submit_record
+{
+   uint32_t timestamp;
+   uint32_t submit_id;
+   uint32_t command_buffers;
+   uint32_t ibs;
+   uint32_t waits;
+   uint32_t signals;
+};
+
 struct tu_queue
 {
    struct vk_queue vk;
@@ -36,6 +46,20 @@ struct tu_queue
    unsigned render_pass_idx;
 
    int fence;           /* timestamp/fence of the last queue submission */
+
+   /* Diagnostic snapshot: status queries may run outside submit_mutex. */
+   uint32_t diagnostic_submit_id;
+   uint32_t diagnostic_command_buffer_count;
+   uint32_t diagnostic_ib_count;
+
+   /* KGSL-only bounded history, protected independently of submit_mutex:
+    * timestamp waits/status queries can run on other threads.
+    */
+   pthread_mutex_t diagnostic_mutex;
+   struct tu_kgsl_submit_record diagnostic_history[64];
+   uint32_t diagnostic_next;
+   uint32_t diagnostic_count;
+   uint32_t diagnostic_dumped;
 };
 VK_DEFINE_HANDLE_CASTS(tu_queue, vk.base, VkQueue, VK_OBJECT_TYPE_QUEUE)
 
