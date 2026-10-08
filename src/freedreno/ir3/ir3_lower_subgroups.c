@@ -841,9 +841,11 @@ make_shuffle_uniform(nir_builder *b, nir_def *val, nir_def *index,
 static nir_def *
 lower_shuffle(nir_builder *b, nir_instr *instr, void *data)
 {
+   struct ir3_shader *shader = data;
    nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
    nir_def *val = intrin->src[0].ssa;
    nir_def *index = intrin->src[1].ssa;
+   nir_def *abs_index = index;
 
    if (intrin->intrinsic == nir_intrinsic_shuffle) {
       /* The hw only does relative shuffles/rotates so transform shuffle(val, x)
@@ -855,6 +857,25 @@ lower_shuffle(nir_builder *b, nir_instr *instr, void *data)
 
    if (!index->divergent) {
       return shuffle_to_uniform(b, intrin->intrinsic, val, index);
+   }
+
+   if (intrin->intrinsic == nir_intrinsic_shuffle &&
+       shader->compiler->info->props.has_movs && val->bit_size <= 32) {
+      /* shuffle(val, x) with the same x in every lane is a broadcast. Its
+       * relative index differs in every lane, so the waterfall below would
+       * run once per lane. Detect it at run time and use movs instead.
+       */
+      nir_def *first = nir_read_first_invocation(b, abs_index);
+      first->divergent = false;
+      nir_def *uniform = nir_vote_all(b, 1, nir_ieq(b, abs_index, first));
+      uniform->divergent = false;
+
+      nir_if *nif = nir_push_if(b, uniform);
+      nir_def *bcast = nir_read_invocation(b, val, first);
+      nir_push_else(b, nif);
+      nir_def *waterfall = make_shuffle_uniform(b, val, index, intrin->intrinsic);
+      nir_pop_if(b, nif);
+      return nir_if_phi(b, bcast, waterfall);
    }
 
    return make_shuffle_uniform(b, val, index, intrin->intrinsic);
@@ -874,5 +895,5 @@ ir3_nir_lower_shuffle(nir_shader *nir, struct ir3_shader *shader)
 
    nir_divergence_analysis(nir);
    return nir_shader_lower_instructions(nir, filter_shuffle, lower_shuffle,
-                                        NULL);
+                                        shader);
 }
