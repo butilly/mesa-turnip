@@ -841,11 +841,22 @@ make_shuffle_uniform(nir_builder *b, nir_def *val, nir_def *index,
 static nir_def *
 lower_shuffle(nir_builder *b, nir_instr *instr, void *data)
 {
+   struct ir3_shader *shader = data;
    nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
    nir_def *val = intrin->src[0].ssa;
    nir_def *index = intrin->src[1].ssa;
 
    if (intrin->intrinsic == nir_intrinsic_shuffle) {
+      /* An absolute uniform index is a broadcast. Subtracting the lane ID
+       * first makes it divergent and forces one rotate-loop iteration per
+       * active lane. Use MOVS through read_invocation when available, before
+       * introducing that divergence. Check uniformity at this use so values
+       * escaping a divergent loop do not take this path.
+       */
+      if (shader->compiler->info->props.has_movs &&
+          val->bit_size <= 32 && !nir_src_is_divergent(&intrin->src[1]))
+         return nir_read_invocation(b, val, index);
+
       /* The hw only does relative shuffles/rotates so transform shuffle(val, x)
        * into rotate(val, x - gl_SubgroupInvocationID) which is valid since we
        * make sure to only use it with uniform indices.
@@ -874,5 +885,5 @@ ir3_nir_lower_shuffle(nir_shader *nir, struct ir3_shader *shader)
 
    nir_divergence_analysis(nir);
    return nir_shader_lower_instructions(nir, filter_shuffle, lower_shuffle,
-                                        NULL);
+                                        shader);
 }
