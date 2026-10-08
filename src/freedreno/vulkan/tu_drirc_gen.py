@@ -22,6 +22,9 @@ def declare_options():
     EV = drirc_gen.DrircEnumValue
 
     debug_options = [
+        B("tu_gen8_submit_history", False,
+          "Diagnostic KGSL submission history and fault-time GPU timestamps",
+          c_name="gen8_submit_history"),
         B("tu_gen8_flush_all", False,
           "Diagnostic full cache clean and invalidate at Gen8 flush points",
           c_name="gen8_flush_all"),
