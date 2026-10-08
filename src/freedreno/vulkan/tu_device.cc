@@ -2003,6 +2003,10 @@ tu_init_dri_options(struct tu_instance *instance)
       mesa_logi("TU-DIAG Gen8 full-cache flush requested for %s",
                 instance->vk.app_info.app_name);
 
+   if (instance->drirc.debug.gen8_sync_draw)
+      mesa_logi("TU-DIAG Gen8 execution waits requested for %s",
+                instance->vk.app_info.app_name);
+
    if (TU_DEBUG(NO_CONCURRENT_BINNING))
       instance->drirc.perf.allow_concurrent_binning = false;
    if (TU_DEBUG(FORCE_CONCURRENT_BINNING))

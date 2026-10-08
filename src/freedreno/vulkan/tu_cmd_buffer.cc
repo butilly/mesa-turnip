@@ -363,15 +363,15 @@ tu6_emit_flushes(struct tu_cmd_buffer *cmd_buffer,
    BITMASK_ENUM(tu_cmd_flush_bits) flushes = cache->flush_bits;
    cache->flush_bits = 0;
 
-   /* Keep the diagnostic scoped to this instance and Gen8.  Reuse the
-    * FLUSHALL path without also enabling SYNCDRAW so the next run isolates
-    * cache maintenance from additional execution serialization.
+   /* Keep cache maintenance and execution waits independently selectable,
+    * scoped to this instance and Gen8, for the device-loss bisect.
     */
    if (TU_DEBUG(FLUSHALL) ||
        (CHIP >= A8XX && cmd_buffer->device->instance->drirc.debug.gen8_flush_all))
       flushes |= TU_CMD_FLAG_ALL_CLEAN | TU_CMD_FLAG_ALL_INVALIDATE;
 
-   if (TU_DEBUG(SYNCDRAW))
+   if (TU_DEBUG(SYNCDRAW) ||
+       (CHIP >= A8XX && cmd_buffer->device->instance->drirc.debug.gen8_sync_draw))
       flushes |= TU_CMD_FLAG_WAIT_MEM_WRITES |
                  TU_CMD_FLAG_WAIT_FOR_IDLE |
                  TU_CMD_FLAG_WAIT_FOR_ME;
@@ -630,7 +630,10 @@ void
 tu_emit_cache_flush_renderpass(struct tu_cmd_buffer *cmd_buffer)
 {
    if (!cmd_buffer->state.renderpass_cache.flush_bits &&
-       likely(!tu_env.debug))
+       likely(!tu_env.debug) &&
+       !(CHIP >= A8XX &&
+         (cmd_buffer->device->instance->drirc.debug.gen8_flush_all ||
+          cmd_buffer->device->instance->drirc.debug.gen8_sync_draw)))
       return;
 
    struct tu_cs *cs = &cmd_buffer->draw_cs;
