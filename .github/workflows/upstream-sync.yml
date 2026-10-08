@@ -57,7 +57,10 @@ jobs:
           fetch-depth: 1
           token: ${{ secrets.SYNC_TOKEN || github.token }}
 
-      - name: Mirror whitebelyash/mesa-unified turnip/gen8 to turnip-gen8
+      - name: Mirror whitebelyash/mesa-unified turnip/gen8 to turnip-gen8 with the Turnip CI on top
         run: |
           git fetch --no-tags https://github.com/whitebelyash/mesa-unified.git turnip/gen8
-          git push --force origin FETCH_HEAD:refs/heads/turnip-gen8
+          git checkout -q --detach FETCH_HEAD
+          git checkout refs/remotes/origin/turnip -- .github/workflows/turnip.yml ci patches variants
+          git -c user.name=turnip-ci -c user.email=turnip-ci@users.noreply.github.com commit -qm "Add the Turnip CI (workflow, ci/, patches/, variants/) to the gen8 branch"
+          git push --force origin HEAD:refs/heads/turnip-gen8
