@@ -1272,14 +1272,6 @@ radv_bind_dynamic_state(struct radv_cmd_buffer *cmd_buffer, const struct radv_dy
    }
 }
 
-bool
-radv_cmd_buffer_uses_mec(struct radv_cmd_buffer *cmd_buffer)
-{
-   struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
-   const struct radv_physical_device *pdev = radv_device_physical(device);
-   return cmd_buffer->qf == RADV_QUEUE_COMPUTE && pdev->info.gfx_level >= GFX7;
-}
-
 static void
 radv_emit_clear_data(struct radv_cmd_buffer *cmd_buffer, unsigned engine_sel, uint64_t va, unsigned size)
 {
@@ -1395,6 +1387,7 @@ radv_create_cmd_buffer(struct vk_command_pool *pool, VkCommandBufferLevel level,
    }
 
    cmd_buffer->qf = vk_queue_to_radv(pdev, pool->queue_family_index);
+   cmd_buffer->is_mec = pdev->info.gfx_level >= GFX7 && cmd_buffer->qf == RADV_QUEUE_COMPUTE;
 
    if (cmd_buffer->qf != RADV_QUEUE_SPARSE) {
       const enum amd_ip_type ip = radv_queue_family_to_ring(pdev, cmd_buffer->qf);
@@ -1708,11 +1701,10 @@ static const VkPipelineStageFlags2 radv_post_transfer_ps_only_stage_mask =
 /* Stages that require waiting for CP DMA.
  *
  * Make sure CP DMA is idle because the driver might have performed a DMA operation for:
+ * - clearing a buffer
  * - copying a buffer or for copying CMASK/FMASK with an accelerated MSAA copy
  * - updating a buffer (considered a clear operation from the Vulkan spec)
  * - building an acceleration structure
- *
- * Other operations using a CP DMA clear are implicitly synchronized (see CP_DMA_SYNC).
  */
 static const VkPipelineStageFlags2 radv_post_cp_dma_stage_mask =
    VK_PIPELINE_STAGE_2_COPY_BIT |
@@ -3090,7 +3082,7 @@ radv_emit_shader_prefetch(struct radv_cmd_buffer *cmd_buffer, struct radv_shader
    struct radv_cmd_stream *cs = radv_get_pm4_cs(cmd_buffer);
    const uint64_t va = radv_shader_get_va(shader);
 
-   radv_cs_cp_dma_prefetch(device, cs, va, shader->code_size, cmd_buffer->state.cond_render.enabled);
+   radv_cs_cp_dma_prefetch(device, cs, va, shader->code_size);
 }
 
 ALWAYS_INLINE static void
@@ -8941,6 +8933,7 @@ radv_EndCommandBuffer(VkCommandBuffer commandBuffer)
 {
    VK_FROM_HANDLE(radv_cmd_buffer, cmd_buffer, commandBuffer);
    struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
+   ASSERTED const struct radv_physical_device *pdev = radv_device_physical(device);
    struct radv_cmd_stream *cs = cmd_buffer->cs;
    struct radv_cmd_stream *ace_cs = cmd_buffer->gang.cs;
 
@@ -8984,12 +8977,22 @@ radv_EndCommandBuffer(VkCommandBuffer commandBuffer)
    }
 
    if (is_gfx_or_ace) {
-      radv_emit_cache_flush(cmd_buffer, false);
+      /* If the CP DMA realignment packet is busy, make sure we wait for it instead of the preceding
+       * CP DMA packet.
+       */
+      if (cmd_buffer->state.cp_dma_realignment_is_busy) {
+         assert(pdev->info.has_cp_dma_unaligned_copy_perf_issue);
+         cmd_buffer->state.dma_is_busy = true;
+         device->ws->cs_set_last_cp_dma_header(cmd_buffer->cs->b, NULL);
+      }
 
       /* Make sure CP DMA is idle at the end of IBs because the kernel
        * doesn't wait for it.
        */
-      radv_cp_dma_wait_for_idle(cmd_buffer);
+      cmd_buffer->state.flush_bits |= AC_BARRIER_SYNC_CP_DMA;
+
+      /* Execute cache flushes at the end of command buffers. */
+      radv_emit_cache_flush(cmd_buffer, false);
    }
 
    radv_describe_end_cmd_buffer(cmd_buffer);
@@ -10482,6 +10485,7 @@ radv_invalidate_state(struct radv_cmd_buffer *cmd_buffer)
    uint32_t active_pipeline_queries_save = cmd_buffer->state.active_pipeline_queries;
    uint32_t active_emulated_pipeline_queries_save = cmd_buffer->state.active_emulated_pipeline_queries;
    uint32_t active_occlusion_queries_save = cmd_buffer->state.active_occlusion_queries;
+   bool cp_dma_realignment_busy = cmd_buffer->state.cp_dma_realignment_is_busy;
    uint32_t perfect_occlusion_queries_enabled_save = cmd_buffer->state.perfect_occlusion_queries_enabled;
    bool uses_draw_indirect = cmd_buffer->state.uses_draw_indirect;
 
@@ -10500,6 +10504,7 @@ radv_invalidate_state(struct radv_cmd_buffer *cmd_buffer)
    cmd_buffer->state.active_pipeline_queries = active_pipeline_queries_save;
    cmd_buffer->state.active_emulated_pipeline_queries = active_emulated_pipeline_queries_save;
    cmd_buffer->state.active_occlusion_queries = active_occlusion_queries_save;
+   cmd_buffer->state.cp_dma_realignment_is_busy = cp_dma_realignment_busy;
    cmd_buffer->state.perfect_occlusion_queries_enabled = perfect_occlusion_queries_enabled_save;
    cmd_buffer->state.uses_draw_indirect = uses_draw_indirect;
 
@@ -10523,11 +10528,11 @@ radv_CmdExecuteCommands(VkCommandBuffer commandBuffer, uint32_t commandBufferCou
    if (is_gfx_or_ace) {
       radv_emit_mip_change_flush_default(primary);
 
+      /* Make sure CP DMA is idle on primary prior to executing secondary. */
+      primary->state.flush_bits |= AC_BARRIER_SYNC_CP_DMA;
+
       /* Emit pending flushes on primary prior to executing secondary */
       radv_emit_cache_flush(primary, false);
-
-      /* Make sure CP DMA is idle on primary prior to executing secondary. */
-      radv_cp_dma_wait_for_idle(primary);
    }
 
    for (uint32_t i = 0; i < commandBufferCount; i++) {
@@ -15043,7 +15048,7 @@ radv_CmdExecuteGeneratedCommandsEXT(VkCommandBuffer commandBuffer, VkBool32 isPr
       }
    }
 
-   if (!radv_cmd_buffer_uses_mec(cmd_buffer)) {
+   if (!cmd_buffer->is_mec) {
       radeon_check_space(device->ws, cs->b, 2);
 
       ac_emit_cp_pfp_sync_me(cs->b, cmd_buffer->state.cond_render.enabled);
@@ -15171,7 +15176,7 @@ radv_emit_dispatch_packets(struct radv_cmd_buffer *cmd_buffer, const struct radv
          radeon_end();
       }
 
-      if (radv_cmd_buffer_uses_mec(cmd_buffer)) {
+      if (cmd_buffer->is_mec) {
          uint64_t indirect_va = info->indirect_va;
          const bool needs_align32_workaround = pdev->info.has_async_compute_align32_bug &&
                                                cmd_buffer->qf == RADV_QUEUE_COMPUTE &&
@@ -15435,12 +15440,13 @@ radv_after_dispatch(struct radv_cmd_buffer *cmd_buffer)
 {
    struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
    const struct radv_physical_device *pdev = radv_device_physical(device);
-   const bool has_prefetch = pdev->info.gfx_level >= GFX7;
+   /* CP DMA is not asynchronous on compute queues, so don't use it for prefetch. */
+   const bool use_prefetch = pdev->info.gfx_level >= GFX7 && cmd_buffer->qf == RADV_QUEUE_GENERAL;
 
    /* Start prefetches after the dispatch has been started. Both will run in parallel, but
     * starting the dispatch first is more important.
     */
-   if (has_prefetch)
+   if (use_prefetch)
       radv_emit_compute_prefetch(cmd_buffer);
 
    radv_cmd_buffer_after_draw(cmd_buffer, AC_BARRIER_SYNC_CS);
@@ -15500,12 +15506,13 @@ radv_after_trace_rays(struct radv_cmd_buffer *cmd_buffer)
 {
    const struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
    const struct radv_physical_device *pdev = radv_device_physical(device);
-   const bool has_prefetch = pdev->info.gfx_level >= GFX7;
+   /* CP DMA is not asynchronous on compute queues, so don't use it for prefetch. */
+   const bool use_prefetch = pdev->info.gfx_level >= GFX7 && cmd_buffer->qf == RADV_QUEUE_GENERAL;
 
    /* Start prefetches after the dispatch has been started. Both will run in parallel, but
     * starting the dispatch first is more important.
     */
-   if (has_prefetch)
+   if (use_prefetch)
       radv_emit_ray_tracing_prefetch(cmd_buffer);
 
    radv_cmd_buffer_after_draw(cmd_buffer, AC_BARRIER_SYNC_CS);
@@ -16267,13 +16274,6 @@ radv_handle_image_transition(struct radv_cmd_buffer *cmd_buffer, struct radv_ima
    radv_utrace_end_image_transition(cmd_buffer);
 }
 
-static void
-radv_cp_dma_wait_for_stages(struct radv_cmd_buffer *cmd_buffer, VkPipelineStageFlags2 stage_mask)
-{
-   if (stage_mask & radv_post_cp_dma_stage_mask)
-      radv_cp_dma_wait_for_idle(cmd_buffer);
-}
-
 void
 radv_emit_cache_flush(struct radv_cmd_buffer *cmd_buffer, bool pws_defer_allowed)
 {
@@ -16292,6 +16292,12 @@ radv_emit_cache_flush(struct radv_cmd_buffer *cmd_buffer, bool pws_defer_allowed
       cmd_buffer->state.pws_acquire_point = AC_PWS_ACQUIRE_POINT_NONE;
       radv_describe_barrier_end_delayed(cmd_buffer);
       return;
+   }
+
+   if (cmd_buffer->state.flush_bits & AC_BARRIER_SYNC_CP_DMA) {
+      radv_cp_dma_wait_for_idle(cmd_buffer);
+      cmd_buffer->state.flush_bits &= ~AC_BARRIER_SYNC_CP_DMA;
+      cmd_buffer->state.rgp_flush_bits |= AC_RGP_FLUSH_SYNC_CP_DMA;
    }
 
    /* Resolve the PWS acquire point: if no barrier destination stage contributed to the pending
@@ -16496,11 +16502,8 @@ radv_barrier(struct radv_cmd_buffer *cmd_buffer, uint32_t dep_count, const VkDep
        * so we can't rely on it fow now.
        */
       radv_sdma_emit_nop(device, cs);
-   } else {
-      const bool is_gfx_or_ace = cmd_buffer->qf == RADV_QUEUE_GENERAL || cmd_buffer->qf == RADV_QUEUE_COMPUTE;
-      if (is_gfx_or_ace) {
-         radv_cp_dma_wait_for_stages(cmd_buffer, radv_get_src_stage_flags2(src_stage_mask));
-      }
+   } else if (radv_get_src_stage_flags2(src_stage_mask) & radv_post_cp_dma_stage_mask) {
+      dst_flush_bits |= AC_BARRIER_SYNC_CP_DMA;
    }
 
    cmd_buffer->state.flush_bits |= dst_flush_bits;
@@ -16559,7 +16562,8 @@ write_event(struct radv_cmd_buffer *cmd_buffer, struct radv_event *event, VkPipe
 
    const VkPipelineStageFlags2 post_cs_flags = post_me_flags | radv_post_cs_stage_mask;
 
-   radv_cp_dma_wait_for_stages(cmd_buffer, stage_mask);
+   if (stage_mask & radv_post_cp_dma_stage_mask)
+      radv_cp_dma_wait_for_idle(cmd_buffer);
 
    if (!(stage_mask & ~post_pfp_flags) && cmd_buffer->qf != RADV_QUEUE_COMPUTE) {
       radv_cs_write_data(device, cmd_buffer->cs, V_371_PREFETCH_PARSER, va, 1, &value, false);

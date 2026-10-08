@@ -342,6 +342,7 @@ struct radv_cmd_state {
 
    /* Whether CP DMA is busy/idle. */
    bool dma_is_busy;
+   bool cp_dma_realignment_is_busy;
 
    /* Whether any images that are not L2 coherent are dirty from the CB. */
    bool rb_noncoherent_dirty;
@@ -480,6 +481,7 @@ struct radv_cmd_buffer {
    struct radv_cmd_stream *cs;
    struct radv_cmd_state state;
    enum radv_queue_family qf;
+   bool is_mec;
 
    uint8_t push_constants[MAX_PUSH_CONSTANTS_SIZE];
    VkShaderStageFlags push_constant_stages;
@@ -627,8 +629,6 @@ radv_get_num_pipeline_stat_queries(struct radv_cmd_buffer *cmd_buffer)
    return cmd_buffer->state.active_pipeline_queries + cmd_buffer->state.active_prims_gen_queries +
           cmd_buffer->state.active_prims_xfb_queries;
 }
-
-bool radv_cmd_buffer_uses_mec(struct radv_cmd_buffer *cmd_buffer);
 
 bool radv_cmd_buffer_upload_alloc_aligned(struct radv_cmd_buffer *cmd_buffer, unsigned size, unsigned alignment,
                                           unsigned *out_offset, void **ptr);

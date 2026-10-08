@@ -680,7 +680,7 @@ radv_begin_pipeline_stat_query(struct radv_cmd_buffer *cmd_buffer, struct radv_q
 
    radv_update_hw_pipelinestat(cmd_buffer);
 
-   if (radv_cmd_buffer_uses_mec(cmd_buffer)) {
+   if (cmd_buffer->is_mec) {
       uint32_t cs_invoc_offset =
          radv_get_pipelinestat_query_offset(VK_QUERY_PIPELINE_STATISTIC_COMPUTE_SHADER_INVOCATIONS_BIT);
       va += cs_invoc_offset;
@@ -758,7 +758,7 @@ radv_end_pipeline_stat_query(struct radv_cmd_buffer *cmd_buffer, struct radv_que
 
    va += pipelinestat_block_size;
 
-   if (radv_cmd_buffer_uses_mec(cmd_buffer)) {
+   if (cmd_buffer->is_mec) {
       uint32_t cs_invoc_offset =
          radv_get_pipelinestat_query_offset(VK_QUERY_PIPELINE_STATISTIC_COMPUTE_SHADER_INVOCATIONS_BIT);
       va += cs_invoc_offset;
@@ -2662,13 +2662,13 @@ radv_CmdResetQueryPool(VkCommandBuffer commandBuffer, VkQueryPool queryPool, uin
    radv_meta_begin(cmd_buffer);
 
    flush_bits |= radv_fill_buffer(cmd_buffer, pool->bo, radv_buffer_get_va(pool->bo) + firstQuery * pool->stride,
-                                  queryCount * pool->stride, value);
+                                  queryCount * pool->stride, value, true);
 
    if (pool->vk.query_type == VK_QUERY_TYPE_PIPELINE_STATISTICS ||
        (pool->vk.query_type == VK_QUERY_TYPE_MESH_PRIMITIVES_GENERATED_EXT && pdev->info.gfx_level >= GFX11)) {
-      flush_bits |=
-         radv_fill_buffer(cmd_buffer, pool->bo,
-                          radv_buffer_get_va(pool->bo) + pool->availability_offset + firstQuery * 4, queryCount * 4, 0);
+      flush_bits |= radv_fill_buffer(cmd_buffer, pool->bo,
+                                     radv_buffer_get_va(pool->bo) + pool->availability_offset + firstQuery * 4,
+                                     queryCount * 4, 0, true);
    }
 
    radv_meta_end(cmd_buffer);
