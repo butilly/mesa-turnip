@@ -1,0 +1,104 @@
+# Community Turnip build matrix. turnip.yml builds a row when you dispatch it with variant=<id>.
+# status: verified | documentation
+
+upstream: &upstream
+  repo: https://gitlab.freedesktop.org/mesa/mesa.git
+  ref: main
+
+variants:
+  - id: a6xx-a7xx
+    status: documentation
+    source: *upstream
+    patches:
+      - name: revert-d32s8-early-z-late-z-workaround
+        url: null
+        notes: >-
+          git revert a70d2af590db192f87b3af01f83a68b450edb4c3
+          ("tu/a6xx: Work around D32S8 EARLY_Z_LATE_Z hang", 2026-05-28).
+      - name: a7xx-gen1-no-early-preamble
+        url: null
+        notes: >-
+          Set has_early_preamble = False for the a7xx gen1 entry in
+          src/freedreno/common/freedreno_devices.py.
+    targets:
+      gpus: [A6xx, A7xx]
+      devices:
+        - A6xx and A7xx phones
+        - AYN Odin 2 (QCS8550, A740)
+        - AYN Thor (QCS8550, A740)
+        - Retroid Pocket devices with QCS8550 (A740)
+
+  - id: a7xx-oneui
+    status: documentation
+    source: *upstream
+    base: a6xx-a7xx
+    patches:
+      - name: revert-d32s8-early-z-late-z-workaround
+        url: null
+        notes: Same as a6xx-a7xx.
+      - name: a7xx-gen1-no-early-preamble
+        url: null
+        notes: Same as a6xx-a7xx.
+      - name: a740-tearing
+        url: null
+        notes: A740 tearing fix for Samsung One UI. Source patch not located yet.
+    targets:
+      gpus: [A740]
+      devices:
+        - Samsung Galaxy devices with Snapdragon 8 Gen 2 (One UI)
+
+  - id: a8xx-gen8
+    status: documentation
+    source:
+      repo: https://github.com/whitebelyash/mesa-unified
+      ref: turnip/gen8
+    patches: []
+    zips:
+      - name: a8xx-gen8
+        patches: []
+      - name: a8xx-gen8-sync
+        patches:
+          - name: kgsl-timeline-sync
+            url: https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/39751.patch
+            notes: Mesa MR 39751, KGSL timeline sync. The -sync zip only.
+    targets:
+      gpus: [A830]
+      devices:
+        - AYN Odin 3 (Snapdragon 8 Elite, SM8750)
+        - Other Snapdragon 8 Elite (SM8750) devices
+
+  - id: a8xx-winnative
+    status: documentation
+    source: *upstream
+    patch_set: https://github.com/WinNative-Emu/Drivers
+    patches:
+      - name: mesh-shader-emulation-on-compute
+        url: null
+      - name: a8xx-cube-map-sanitize
+        url: null
+      - name: bindless-invalidate
+        url: null
+      - name: kgsl-virtual-ib-fetch
+        url: null
+      - name: aimapper-gralloc
+        url: null
+      - name: ubwc-swapchain-usage
+        url: null
+    notes: Patch file names and order are in the WinNative-Emu/Drivers repository. Not copied here yet.
+    targets:
+      gpus: [A830]
+      devices:
+        - AYN Odin 3 (Snapdragon 8 Elite, SM8750)
+        - Other Snapdragon 8 Elite (SM8750) devices
+
+  - id: a840
+    status: documentation
+    source: *upstream
+    patches:
+      - name: tu8_kgsl
+        url: null
+        notes: tu8_kgsl.patch from https://github.com/whitebelyash/mesa-tu8. Exact file path and commit not recorded yet.
+    targets:
+      gpus: [A840]
+      devices:
+        - Snapdragon 8 Elite Gen 5 (SM8850) devices
