@@ -1999,6 +1999,10 @@ tu_init_dri_options(struct tu_instance *instance)
 
    turnip_parse_dri_options(&instance->drirc, &params);
 
+   if (instance->drirc.debug.gen8_cache_flush_diagnostic)
+      mesa_logi("TU-DIAG cache-flush-bisect requested: full clean/invalidate on "
+                "A8XX only; syncdraw unchanged");
+
    if (TU_DEBUG(NO_CONCURRENT_BINNING))
       instance->drirc.perf.allow_concurrent_binning = false;
    if (TU_DEBUG(FORCE_CONCURRENT_BINNING))

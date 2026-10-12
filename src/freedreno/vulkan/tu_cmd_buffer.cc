@@ -363,7 +363,12 @@ tu6_emit_flushes(struct tu_cmd_buffer *cmd_buffer,
    BITMASK_ENUM(tu_cmd_flush_bits) flushes = cache->flush_bits;
    cache->flush_bits = 0;
 
-   if (TU_DEBUG(FLUSHALL))
+   /* Keep the Gen8 cache-visibility bisect separate from SYNCDRAW so that
+    * it does not also force an idle wait at every flush point.
+    */
+   if (TU_DEBUG(FLUSHALL) ||
+       (CHIP == A8XX &&
+        cmd_buffer->device->instance->drirc.debug.gen8_cache_flush_diagnostic))
       flushes |= TU_CMD_FLAG_ALL_CLEAN | TU_CMD_FLAG_ALL_INVALIDATE;
 
    if (TU_DEBUG(SYNCDRAW))
