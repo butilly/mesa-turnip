@@ -3253,6 +3253,16 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
                      tu_trace_get_data,
                      tu_trace_delete_flush_data);
 
+   {
+      const char *profile_app = device->instance->vk.app_info.app_name;
+      const char *profile_process = util_get_process_name();
+      if ((profile_app && (!strcasecmp(profile_app, "DragNWash.exe") ||
+                           !strcasecmp(profile_app, "DragNWash"))) ||
+          (profile_process && !strcasecmp(profile_process, "DragNWash.exe"))) {
+         u_trace_context_enable_sampled_log(&device->trace_context);
+      }
+   }
+
    tu_breadcrumbs_init(device);
 
    if (FD_RD_DUMP(ENABLE)) {
