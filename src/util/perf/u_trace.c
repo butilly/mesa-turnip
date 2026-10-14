@@ -26,6 +26,8 @@
 #include <inttypes.h>
 
 #include "util/list.h"
+#include "util/log.h"
+#include "util/memstream.h"
 #include "util/u_call_once.h"
 #include "util/u_debug.h"
 #include "util/u_vector.h"
@@ -230,6 +232,78 @@ static struct u_trace_printer csv_printer = {
    .end_of_batch = &print_csv_end_of_batch,
    .event = &print_csv_event,
 };
+
+/* A small diagnostic capture goes into Android's normal log collection,
+ * without a Vulkan API trace or a file the app must separately retrieve.
+ * Keep absolute GPU timestamps: adjacent deltas are not necessarily the
+ * duration of a render pass when other ranges are nested inside it.
+ */
+static void
+print_sampled_event(struct u_trace_context *utctx,
+                    const struct u_trace_event *evt,
+                    uint64_t ns, int32_t delta, const void *indirect)
+{
+   if (utctx->frame_nr % 120)
+      return;
+
+   if (utctx->sampled_log_frame != utctx->frame_nr) {
+      utctx->sampled_log_frame = utctx->frame_nr;
+      utctx->sampled_log_events = 0;
+   }
+
+   if (utctx->sampled_log_events >= 128) {
+      if (utctx->sampled_log_events == 128) {
+         mesa_logi("GPU-PROFILE ctx=%p frame=%u truncated after 128 events",
+                   (void *)utctx, utctx->frame_nr);
+         utctx->sampled_log_events++;
+      }
+      return;
+   }
+   utctx->sampled_log_events++;
+
+   char *payload = NULL;
+   size_t size = 0;
+   struct u_memstream mem;
+   if (!u_memstream_open(&mem, &payload, &size))
+      return;
+   if (evt->tp->print)
+      evt->tp->print(u_memstream_get(&mem), evt->payload, indirect);
+   u_memstream_close(&mem);
+   if (payload) {
+      /* One log line per event, including bounded payload metadata. */
+      payload[strcspn(payload, "\r\n")] = '\0';
+      mesa_logi("GPU-PROFILE ctx=%p frame=%u batch=%u event=%u ns=%" PRIu64
+                " %s %.768s", (void *)utctx, utctx->frame_nr,
+                utctx->batch_nr, utctx->event_nr, ns, evt->tp->name, payload);
+   }
+   free(payload);
+}
+
+static struct u_trace_printer sampled_printer = {
+   .start = print_txt_start,
+   .end = print_txt_start,
+   .start_of_frame = print_txt_start,
+   .end_of_frame = print_txt_start,
+   .start_of_batch = print_txt_start,
+   .end_of_batch = print_txt_start,
+   .event = print_sampled_event,
+};
+
+void
+u_trace_context_enable_sampled_log(struct u_trace_context *utctx)
+{
+   /* queue_init runs during context initialization even without tracing. */
+   if (!utctx->queue.jobs)
+      return;
+   utctx->sampled_log_frame = UINT32_MAX;
+   utctx->sampled_log_events = 0;
+   utctx->out = stderr;
+   utctx->out_printer = &sampled_printer;
+   utctx->enabled_traces = U_TRACE_TYPE_PRINT;
+   mesa_logi("GPU-PROFILE enabled ctx=%p: GPU timestamps, every 120th frame, "
+             "128-event limit; diagnostic timings are not an unprofiled benchmark",
+             (void *)utctx);
+}
 
 static void
 print_json_start(struct u_trace_context *utctx)
