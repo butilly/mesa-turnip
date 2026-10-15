@@ -66,6 +66,9 @@ struct ir3_compiler {
 
    struct disk_cache *disk_cache;
 
+   /* Application-scoped diagnostic only; never changes code generation. */
+   bool gamenative_capture_hot_shaders;
+
    struct nir_shader_compiler_options nir_options;
 
    /*

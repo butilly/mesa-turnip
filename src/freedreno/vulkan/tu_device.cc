@@ -3253,6 +3253,30 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
                      tu_trace_get_data,
                      tu_trace_delete_flush_data);
 
+   {
+      const char *profile_app = device->instance->vk.app_info.app_name;
+      const char *profile_process = util_get_process_name();
+      /* Translators may supply a full Windows path, not just the basename. */
+      if (profile_app) {
+         const char *base = strrchr(profile_app, '\\');
+         if (base)
+            profile_app = base + 1;
+         base = strrchr(profile_app, '/');
+         if (base)
+            profile_app = base + 1;
+      }
+      mesa_logi("GPU-PROFILE capture-v4 selection app=%s process=%s",
+                profile_app ? profile_app : "(none)",
+                profile_process ? profile_process : "(none)");
+      if ((profile_app && (!strcasecmp(profile_app, "DragNWash.exe") ||
+                           !strcasecmp(profile_app, "DragNWash"))) ||
+          (profile_process && !strcasecmp(profile_process, "DragNWash.exe"))) {
+         device->compiler->gamenative_capture_hot_shaders = true;
+         tu_gpu_tracepoint |= TU_GPU_TRACEPOINT_DRAW;
+         u_trace_context_enable_sampled_log(&device->trace_context);
+      }
+   }
+
    tu_breadcrumbs_init(device);
 
    if (FD_RD_DUMP(ENABLE)) {

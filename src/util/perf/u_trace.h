@@ -250,6 +250,17 @@ struct u_trace_context {
    FILE *out;
    struct u_trace_printer *out_printer;
 
+   /* Bounded driver-requested logging, written only by the trace worker. */
+   int64_t sampled_start_ns;
+   uint64_t sampled_window;
+   uint32_t sampled_log_events;
+   FILE *sampled_file;
+   uint32_t sampled_file_events;
+   bool sampled_draw_pending;
+   uint64_t sampled_draw_ns;
+   uint32_t sampled_draw_event;
+   char sampled_draw_payload[769];
+
    /* Once u_trace_flush() is called u_trace_chunk's are queued up to
     * render tracepoints on a queue.  The per-chunk queue jobs block until
     * timestamps are available.
@@ -327,6 +338,9 @@ void u_trace_context_init(struct u_trace_context *utctx,
                           u_trace_get_data get_data,
                           u_trace_delete_flush_data delete_flush_data);
 void u_trace_context_fini(struct u_trace_context *utctx);
+
+/* Call before submitting any work. Does not enable indirect GPU readbacks. */
+void u_trace_context_enable_sampled_log(struct u_trace_context *utctx);
 
 /**
  * Flush (trigger processing) of traces previously flushed to the
