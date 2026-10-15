@@ -3271,6 +3271,7 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
       if ((profile_app && (!strcasecmp(profile_app, "DragNWash.exe") ||
                            !strcasecmp(profile_app, "DragNWash"))) ||
           (profile_process && !strcasecmp(profile_process, "DragNWash.exe"))) {
+         device->compiler->gamenative_capture_hot_shaders = true;
          tu_gpu_tracepoint |= TU_GPU_TRACEPOINT_DRAW;
          u_trace_context_enable_sampled_log(&device->trace_context);
       }
