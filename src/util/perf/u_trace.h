@@ -253,6 +253,8 @@ struct u_trace_context {
    /* Bounded driver-requested logging, written only by the trace worker. */
    uint32_t sampled_log_frame;
    uint32_t sampled_log_events;
+   FILE *sampled_file;
+   uint32_t sampled_file_events;
 
    /* Once u_trace_flush() is called u_trace_chunk's are queued up to
     * render tracepoints on a queue.  The per-chunk queue jobs block until

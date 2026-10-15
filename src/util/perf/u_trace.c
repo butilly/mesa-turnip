@@ -24,6 +24,10 @@
 #include "u_trace.h"
 
 #include <inttypes.h>
+#include "util/detect_os.h"
+#if DETECT_OS_POSIX
+#include <unistd.h>
+#endif
 
 #include "util/list.h"
 #include "util/log.h"
@@ -251,9 +255,15 @@ print_sampled_event(struct u_trace_context *utctx,
       utctx->sampled_log_events = 0;
    }
 
-   if (utctx->sampled_log_events >= 128) {
-      if (utctx->sampled_log_events == 128) {
-         mesa_logi("GPU-PROFILE ctx=%p frame=%u truncated after 128 events",
+   if (utctx->sampled_log_events >= 512) {
+      if (utctx->sampled_log_events == 512) {
+         if (utctx->sampled_file && utctx->sampled_file_events < 16384) {
+            fprintf(utctx->sampled_file,
+                    "GPU-PROFILE ctx=%p frame=%u truncated after 512 events\n",
+                    (void *)utctx, utctx->frame_nr);
+            fflush(utctx->sampled_file);
+         }
+         mesa_logi("GPU-PROFILE ctx=%p frame=%u truncated after 512 events",
                    (void *)utctx, utctx->frame_nr);
          utctx->sampled_log_events++;
       }
@@ -275,8 +285,23 @@ print_sampled_event(struct u_trace_context *utctx,
       mesa_logi("GPU-PROFILE ctx=%p frame=%u batch=%u event=%u ns=%" PRIu64
                 " %s %.768s", (void *)utctx, utctx->frame_nr,
                 utctx->batch_nr, utctx->event_nr, ns, evt->tp->name, payload);
+      if (utctx->sampled_file && utctx->sampled_file_events < 16384) {
+         fprintf(utctx->sampled_file,
+                 "GPU-PROFILE ctx=%p frame=%u batch=%u event=%u ns=%" PRIu64
+                 " %s %.768s\n", (void *)utctx, utctx->frame_nr,
+                 utctx->batch_nr, utctx->event_nr, ns, evt->tp->name, payload);
+         if (++utctx->sampled_file_events == 16384)
+            fprintf(utctx->sampled_file, "GPU-PROFILE capture limit reached\n");
+      }
    }
    free(payload);
+}
+
+static void
+flush_sampled_file(struct u_trace_context *utctx)
+{
+   if (utctx->sampled_file)
+      fflush(utctx->sampled_file);
 }
 
 static struct u_trace_printer sampled_printer = {
@@ -285,7 +310,7 @@ static struct u_trace_printer sampled_printer = {
    .start_of_frame = print_txt_start,
    .end_of_frame = print_txt_start,
    .start_of_batch = print_txt_start,
-   .end_of_batch = print_txt_start,
+   .end_of_batch = flush_sampled_file,
    .event = print_sampled_event,
 };
 
@@ -297,11 +322,35 @@ u_trace_context_enable_sampled_log(struct u_trace_context *utctx)
       return;
    utctx->sampled_log_frame = UINT32_MAX;
    utctx->sampled_log_events = 0;
+   utctx->sampled_file_events = 0;
+   /* Wine's temp directory is accessible through a read-only files card.
+    * Keep the capture independent of Android/Wine's bounded log buffers.
+    * A process-specific name avoids overwriting another process's capture.
+    */
+#if DETECT_OS_POSIX
+   const char *prefix = getenv("WINEPREFIX");
+   if (prefix && prefix[0]) {
+      char path[4096];
+      int len = snprintf(path, sizeof(path),
+                         "%s/drive_c/windows/temp/gamenative-gpu-profile-%ld.txt",
+                         prefix, (long)getpid());
+      if (len > 0 && (size_t)len < sizeof(path))
+         utctx->sampled_file = fopen(path, "a");
+   }
+   if (utctx->sampled_file) {
+      fprintf(utctx->sampled_file,
+              "GPU-PROFILE capture-v2 ctx=%p pid=%ld interval=120 max_events_per_frame=512 max_events=16384\n",
+              (void *)utctx, (long)getpid());
+      fflush(utctx->sampled_file);
+   } else {
+      mesa_loge("GPU-PROFILE capture-v2: could not open Wine temp capture; log output only");
+   }
+#endif
    utctx->out = stderr;
    utctx->out_printer = &sampled_printer;
    utctx->enabled_traces = U_TRACE_TYPE_PRINT;
    mesa_logi("GPU-PROFILE enabled ctx=%p: GPU timestamps, every 120th frame, "
-             "128-event limit; diagnostic timings are not an unprofiled benchmark",
+             "512-event limit; diagnostic timings are not an unprofiled benchmark",
              (void *)utctx);
 }
 
@@ -510,6 +559,7 @@ u_trace_context_init(struct u_trace_context *utctx,
    utctx->batch_nr = 0;
    utctx->event_nr = 0;
    utctx->start_of_frame = true;
+   utctx->sampled_file = NULL;
 
    utctx->dummy_indirect_data = calloc(1, max_indirect_size_bytes);
 
@@ -591,6 +641,8 @@ u_trace_context_fini(struct u_trace_context *utctx)
       return;
    util_queue_finish(&utctx->queue);
    util_queue_destroy(&utctx->queue);
+   if (utctx->sampled_file)
+      fclose(utctx->sampled_file);
    util_dynarray_foreach(&utctx->flushed_traces, struct u_trace_flush *, flush) {
       u_trace_flush_destroy(*flush);
    }
