@@ -3265,7 +3265,7 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
          if (base)
             profile_app = base + 1;
       }
-      mesa_logi("GPU-PROFILE capture-v2 selection app=%s process=%s",
+      mesa_logi("GPU-PROFILE capture-v3 selection app=%s process=%s",
                 profile_app ? profile_app : "(none)",
                 profile_process ? profile_process : "(none)");
       if ((profile_app && (!strcasecmp(profile_app, "DragNWash.exe") ||

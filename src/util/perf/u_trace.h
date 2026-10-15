@@ -251,7 +251,8 @@ struct u_trace_context {
    struct u_trace_printer *out_printer;
 
    /* Bounded driver-requested logging, written only by the trace worker. */
-   uint32_t sampled_log_frame;
+   int64_t sampled_start_ns;
+   uint64_t sampled_window;
    uint32_t sampled_log_events;
    FILE *sampled_file;
    uint32_t sampled_file_events;

@@ -32,6 +32,7 @@
 #include "util/list.h"
 #include "util/log.h"
 #include "util/memstream.h"
+#include "util/os_time.h"
 #include "util/u_call_once.h"
 #include "util/u_debug.h"
 #include "util/u_vector.h"
@@ -237,34 +238,36 @@ static struct u_trace_printer csv_printer = {
    .event = &print_csv_event,
 };
 
-/* A small diagnostic capture goes into Android's normal log collection,
- * without a Vulkan API trace or a file the app must separately retrieve.
- * Keep absolute GPU timestamps: adjacent deltas are not necessarily the
- * duration of a render pass when other ranges are nested inside it.
- */
+static void
+start_sampled_batch(struct u_trace_context *utctx)
+{
+   uint64_t window = (os_time_get_nano() - utctx->sampled_start_ns) /
+                     INT64_C(10000000000);
+   if (utctx->sampled_window != window) {
+      utctx->sampled_window = window;
+      utctx->sampled_log_events = 0;
+   }
+}
+
 static void
 print_sampled_event(struct u_trace_context *utctx,
                     const struct u_trace_event *evt,
                     uint64_t ns, int32_t delta, const void *indirect)
 {
-   if (utctx->frame_nr % 120)
+   if (utctx->sampled_file_events >= 65536)
       return;
 
-   if (utctx->sampled_log_frame != utctx->frame_nr) {
-      utctx->sampled_log_frame = utctx->frame_nr;
-      utctx->sampled_log_events = 0;
-   }
-
-   if (utctx->sampled_log_events >= 512) {
-      if (utctx->sampled_log_events == 512) {
-         if (utctx->sampled_file && utctx->sampled_file_events < 16384) {
+   if (utctx->sampled_log_events >= 2048) {
+      if (utctx->sampled_log_events == 2048) {
+         if (utctx->sampled_file) {
             fprintf(utctx->sampled_file,
-                    "GPU-PROFILE ctx=%p frame=%u truncated after 512 events\n",
-                    (void *)utctx, utctx->frame_nr);
+                    "GPU-PROFILE ctx=%p window=%" PRIu64 " truncated after 2048 events\n",
+                    (void *)utctx, utctx->sampled_window);
             fflush(utctx->sampled_file);
+         } else {
+            mesa_logi("GPU-PROFILE ctx=%p window=%" PRIu64 " truncated after 2048 events",
+                      (void *)utctx, utctx->sampled_window);
          }
-         mesa_logi("GPU-PROFILE ctx=%p frame=%u truncated after 512 events",
-                   (void *)utctx, utctx->frame_nr);
          utctx->sampled_log_events++;
       }
       return;
@@ -280,18 +283,19 @@ print_sampled_event(struct u_trace_context *utctx,
       evt->tp->print(u_memstream_get(&mem), evt->payload, indirect);
    u_memstream_close(&mem);
    if (payload) {
-      /* One log line per event, including bounded payload metadata. */
       payload[strcspn(payload, "\r\n")] = '\0';
-      mesa_logi("GPU-PROFILE ctx=%p frame=%u batch=%u event=%u ns=%" PRIu64
-                " %s %.768s", (void *)utctx, utctx->frame_nr,
-                utctx->batch_nr, utctx->event_nr, ns, evt->tp->name, payload);
-      if (utctx->sampled_file && utctx->sampled_file_events < 16384) {
+      utctx->sampled_file_events++;
+      if (utctx->sampled_file) {
          fprintf(utctx->sampled_file,
-                 "GPU-PROFILE ctx=%p frame=%u batch=%u event=%u ns=%" PRIu64
-                 " %s %.768s\n", (void *)utctx, utctx->frame_nr,
+                 "GPU-PROFILE ctx=%p window=%" PRIu64 " frame=%u batch=%u event=%u ns=%" PRIu64
+                 " %s %.768s\n", (void *)utctx, utctx->sampled_window, utctx->frame_nr,
                  utctx->batch_nr, utctx->event_nr, ns, evt->tp->name, payload);
-         if (++utctx->sampled_file_events == 16384)
+         if (utctx->sampled_file_events == 65536)
             fprintf(utctx->sampled_file, "GPU-PROFILE capture limit reached\n");
+      } else {
+         mesa_logi("GPU-PROFILE ctx=%p window=%" PRIu64 " frame=%u batch=%u event=%u ns=%" PRIu64
+                   " %s %.768s", (void *)utctx, utctx->sampled_window, utctx->frame_nr,
+                   utctx->batch_nr, utctx->event_nr, ns, evt->tp->name, payload);
       }
    }
    free(payload);
@@ -309,7 +313,7 @@ static struct u_trace_printer sampled_printer = {
    .end = print_txt_start,
    .start_of_frame = print_txt_start,
    .end_of_frame = print_txt_start,
-   .start_of_batch = print_txt_start,
+   .start_of_batch = start_sampled_batch,
    .end_of_batch = flush_sampled_file,
    .event = print_sampled_event,
 };
@@ -320,7 +324,8 @@ u_trace_context_enable_sampled_log(struct u_trace_context *utctx)
    /* queue_init runs during context initialization even without tracing. */
    if (!utctx->queue.jobs)
       return;
-   utctx->sampled_log_frame = UINT32_MAX;
+   utctx->sampled_start_ns = os_time_get_nano();
+   utctx->sampled_window = UINT64_MAX;
    utctx->sampled_log_events = 0;
    utctx->sampled_file_events = 0;
    /* Wine's temp directory is accessible through a read-only files card.
@@ -339,18 +344,18 @@ u_trace_context_enable_sampled_log(struct u_trace_context *utctx)
    }
    if (utctx->sampled_file) {
       fprintf(utctx->sampled_file,
-              "GPU-PROFILE capture-v2 ctx=%p pid=%ld interval=120 max_events_per_frame=512 max_events=16384\n",
+              "GPU-PROFILE capture-v3 ctx=%p pid=%ld interval_seconds=10 max_events_per_window=2048 max_events=65536\n",
               (void *)utctx, (long)getpid());
       fflush(utctx->sampled_file);
    } else {
-      mesa_loge("GPU-PROFILE capture-v2: could not open Wine temp capture; log output only");
+      mesa_loge("GPU-PROFILE capture-v3: could not open Wine temp capture; log output only");
    }
 #endif
    utctx->out = stderr;
    utctx->out_printer = &sampled_printer;
    utctx->enabled_traces = U_TRACE_TYPE_PRINT;
-   mesa_logi("GPU-PROFILE enabled ctx=%p: GPU timestamps, every 120th frame, "
-             "512-event limit; diagnostic timings are not an unprofiled benchmark",
+   mesa_logi("GPU-PROFILE enabled ctx=%p: GPU timestamps, 10-second windows, "
+             "2048-event window limit; diagnostic timings are not an unprofiled benchmark",
              (void *)utctx);
 }
 
