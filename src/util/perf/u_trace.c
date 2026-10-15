@@ -241,6 +241,8 @@ static struct u_trace_printer csv_printer = {
 static void
 start_sampled_batch(struct u_trace_context *utctx)
 {
+   /* Never pair an unfinished draw with an event from another submission. */
+   utctx->sampled_draw_pending = false;
    uint64_t window = (os_time_get_nano() - utctx->sampled_start_ns) /
                      INT64_C(10000000000);
    if (utctx->sampled_window != window) {
@@ -250,9 +252,8 @@ start_sampled_batch(struct u_trace_context *utctx)
 }
 
 static void
-print_sampled_event(struct u_trace_context *utctx,
-                    const struct u_trace_event *evt,
-                    uint64_t ns, int32_t delta, const void *indirect)
+write_sampled_event(struct u_trace_context *utctx, const char *name,
+                    uint32_t event, uint64_t ns, const char *payload)
 {
    if (utctx->sampled_file_events >= 65536)
       return;
@@ -273,6 +274,50 @@ print_sampled_event(struct u_trace_context *utctx,
       return;
    }
    utctx->sampled_log_events++;
+   utctx->sampled_file_events++;
+   if (utctx->sampled_file) {
+      fprintf(utctx->sampled_file,
+              "GPU-PROFILE ctx=%p window=%" PRIu64 " frame=%u batch=%u event=%u ns=%" PRIu64
+              " %s %.768s\n", (void *)utctx, utctx->sampled_window, utctx->frame_nr,
+              utctx->batch_nr, event, ns, name, payload);
+      if (utctx->sampled_file_events == 65536)
+         fprintf(utctx->sampled_file, "GPU-PROFILE capture limit reached\n");
+   } else {
+      mesa_logi("GPU-PROFILE ctx=%p window=%" PRIu64 " frame=%u batch=%u event=%u ns=%" PRIu64
+                " %s %.768s", (void *)utctx, utctx->sampled_window, utctx->frame_nr,
+                utctx->batch_nr, event, ns, name, payload);
+   }
+}
+
+static void
+print_sampled_event(struct u_trace_context *utctx,
+                    const struct u_trace_event *evt,
+                    uint64_t ns, int32_t delta, const void *indirect)
+{
+   if (utctx->sampled_file_events >= 65536)
+      return;
+
+   /* Preserve paired timestamps and shader IDs for slow draws only. Logging
+    * every draw would exhaust a window during the first large render pass.
+    * This filters output, not timestamp insertion: FPS remains diagnostic.
+    */
+   if (!strcmp(evt->tp->name, "end_draw")) {
+      if (utctx->sampled_draw_pending && ns >= utctx->sampled_draw_ns &&
+          ns - utctx->sampled_draw_ns >= UINT64_C(1000000) &&
+          utctx->sampled_log_events <= 2046 &&
+          utctx->sampled_file_events <= 65534) {
+         write_sampled_event(utctx, "start_draw", utctx->sampled_draw_event,
+                             utctx->sampled_draw_ns, utctx->sampled_draw_payload);
+         write_sampled_event(utctx, "end_draw", utctx->event_nr, ns, "");
+      }
+      utctx->sampled_draw_pending = false;
+      return;
+   }
+
+   /* Only adjacent begin/end draw records form a reliable pair. */
+   utctx->sampled_draw_pending = false;
+   if (utctx->sampled_log_events > 2048)
+      return;
 
    char *payload = NULL;
    size_t size = 0;
@@ -284,18 +329,14 @@ print_sampled_event(struct u_trace_context *utctx,
    u_memstream_close(&mem);
    if (payload) {
       payload[strcspn(payload, "\r\n")] = '\0';
-      utctx->sampled_file_events++;
-      if (utctx->sampled_file) {
-         fprintf(utctx->sampled_file,
-                 "GPU-PROFILE ctx=%p window=%" PRIu64 " frame=%u batch=%u event=%u ns=%" PRIu64
-                 " %s %.768s\n", (void *)utctx, utctx->sampled_window, utctx->frame_nr,
-                 utctx->batch_nr, utctx->event_nr, ns, evt->tp->name, payload);
-         if (utctx->sampled_file_events == 65536)
-            fprintf(utctx->sampled_file, "GPU-PROFILE capture limit reached\n");
+      if (!strcmp(evt->tp->name, "start_draw")) {
+         snprintf(utctx->sampled_draw_payload, sizeof(utctx->sampled_draw_payload),
+                  "%.768s", payload);
+         utctx->sampled_draw_ns = ns;
+         utctx->sampled_draw_event = utctx->event_nr;
+         utctx->sampled_draw_pending = true;
       } else {
-         mesa_logi("GPU-PROFILE ctx=%p window=%" PRIu64 " frame=%u batch=%u event=%u ns=%" PRIu64
-                   " %s %.768s", (void *)utctx, utctx->sampled_window, utctx->frame_nr,
-                   utctx->batch_nr, utctx->event_nr, ns, evt->tp->name, payload);
+         write_sampled_event(utctx, evt->tp->name, utctx->event_nr, ns, payload);
       }
    }
    free(payload);
@@ -328,6 +369,7 @@ u_trace_context_enable_sampled_log(struct u_trace_context *utctx)
    utctx->sampled_window = UINT64_MAX;
    utctx->sampled_log_events = 0;
    utctx->sampled_file_events = 0;
+   utctx->sampled_draw_pending = false;
    /* Wine's temp directory is accessible through a read-only files card.
     * Keep the capture independent of Android/Wine's bounded log buffers.
     * A process-specific name avoids overwriting another process's capture.
@@ -344,11 +386,11 @@ u_trace_context_enable_sampled_log(struct u_trace_context *utctx)
    }
    if (utctx->sampled_file) {
       fprintf(utctx->sampled_file,
-              "GPU-PROFILE capture-v3 ctx=%p pid=%ld interval_seconds=10 max_events_per_window=2048 max_events=65536\n",
+              "GPU-PROFILE capture-v4 ctx=%p pid=%ld interval_seconds=10 max_events_per_window=2048 max_events=65536 slow_draw_min_ns=1000000\n",
               (void *)utctx, (long)getpid());
       fflush(utctx->sampled_file);
    } else {
-      mesa_loge("GPU-PROFILE capture-v3: could not open Wine temp capture; log output only");
+      mesa_loge("GPU-PROFILE capture-v4: could not open Wine temp capture; log output only");
    }
 #endif
    utctx->out = stderr;

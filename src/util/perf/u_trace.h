@@ -256,6 +256,10 @@ struct u_trace_context {
    uint32_t sampled_log_events;
    FILE *sampled_file;
    uint32_t sampled_file_events;
+   bool sampled_draw_pending;
+   uint64_t sampled_draw_ns;
+   uint32_t sampled_draw_event;
+   char sampled_draw_payload[769];
 
    /* Once u_trace_flush() is called u_trace_chunk's are queued up to
     * render tracepoints on a queue.  The per-chunk queue jobs block until
