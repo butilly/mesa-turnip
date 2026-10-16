@@ -10,6 +10,8 @@
 #include "tu_queue.h"
 
 #include <inttypes.h>
+#include <unistd.h>
+#include "util/os_time.h"
 
 #include "vk_util.h"
 
@@ -412,6 +414,56 @@ out:
    return result;
 }
 
+/* Called under submit_mutex. Read cumulative, naturally aligned words without
+ * waiting for the GPU or resetting GPU-owned counters. A row may straddle an
+ * in-flight draw, so use multi-second deltas, not single-row exact ratios.
+ */
+static void
+gamenative_log_loops(struct tu_device *device)
+{
+   if (!device->gamenative_loop_iova || device->gamenative_loop_log_rows >= 180)
+      return;
+   int64_t now = os_time_get_nano();
+   if (now - device->gamenative_loop_log_time < 5000000000LL)
+      return;
+   device->gamenative_loop_log_time = now;
+   device->gamenative_loop_log_rows++;
+
+   FILE *out = NULL;
+   const char *prefix = getenv("WINEPREFIX");
+   if (prefix && prefix[0]) {
+      char path[4096];
+      int len = snprintf(path, sizeof(path),
+                         "%s/drive_c/windows/temp/gamenative-loops-%ld.txt",
+                         prefix, (long)getpid());
+      if (len > 0 && (size_t)len < sizeof(path))
+         out = fopen(path, "a");
+   }
+   if (out && device->gamenative_loop_log_rows == 1)
+      fputs("GPU-LOOPS v1 sample_hash_xy=1/4096 counters=cumulative_u32 "
+            "loop_order=preorder headers_include_terminating_test "
+            "resources=logical_prefinalization_block_entries "
+            "snapshots=asynchronous no_fps_comparison "
+            "shader0=FS_3da5c330 shader1=FS_f289c6b0\n", out);
+
+   for (unsigned s = 0; s < 2; s++) {
+      uint32_t c[9];
+      for (unsigned i = 0; i < 9; i++)
+         c[i] = device->global_bo_map->gamenative_loop_counts[s][i];
+      char row[512];
+      snprintf(row, sizeof(row),
+               "GPU-LOOPS ns=%" PRId64 " submit=%u shader=%u samples=%u "
+               "headers=%u,%u,%u,%u,%u ubo=%u ssbo=%u tex=%u\n",
+               now, device->submit_count, s, c[0], c[1], c[2], c[3], c[4],
+               c[5], c[6], c[7], c[8]);
+      mesa_logi("%s", row);
+      if (out)
+         fputs(row, out);
+   }
+   if (out)
+      fclose(out);
+}
+
 static VkResult
 queue_submit(struct vk_queue *_queue, struct vk_queue_submit *vk_submit)
 {
@@ -571,6 +623,7 @@ queue_submit(struct vk_queue *_queue, struct vk_queue_submit *vk_submit)
    }
 
    tu_debug_bos_print_stats(device);
+   gamenative_log_loops(device);
 
    if (u_trace_submission_data) {
       u_trace_submission_data->submission_id = device->submit_count;
@@ -671,4 +724,3 @@ tu_queue_finish(struct tu_queue *queue)
    if (!emulated)
       tu_drm_submitqueue_close(queue->device, queue);
 }
-

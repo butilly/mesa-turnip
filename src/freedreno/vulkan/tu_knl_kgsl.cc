@@ -1434,6 +1434,145 @@ kgsl_bind_finalize(struct tu_kgsl_queue_submit *submit)
    }
 }
 
+/* Countable IDs from a6xx_perfcntrs.xml, not portable to other generations.
+ * These are device-wide counters, NOT per-shader measurements. Cycle events
+ * can overlap and have different aggregation domains: do not add percentages.
+ */
+static const unsigned gamenative_sp_events[8] = {0, 1, 4, 5, 21, 24, 25, 52};
+
+static void
+kgsl_gamenative_record(struct tu_device *dev, const char *row, bool first = false)
+{
+   mesa_logi("%s", row);
+   const char *prefix = getenv("WINEPREFIX");
+   if (!prefix || !prefix[0])
+      return;
+   char path[4096];
+   int len = snprintf(path, sizeof(path),
+                      "%s/drive_c/windows/temp/gamenative-gpu-counters-%ld.txt",
+                      prefix, (long)getpid());
+   if (len <= 0 || (size_t)len >= sizeof(path))
+      return;
+   FILE *out = fopen(path, first ? "w" : "a");
+   if (!out) {
+      if (first)
+         mesa_logi("GPU-COUNTERS history unavailable errno=%d", errno);
+      return;
+   }
+   fprintf(out, "%s\n", row);
+   fclose(out);
+}
+
+static void
+kgsl_gamenative_release(struct tu_device *dev)
+{
+   for (unsigned i = 0; i < ARRAY_SIZE(gamenative_sp_events); i++) {
+      if (!(dev->gamenative_hw_mask & (1u << i)))
+         continue;
+      struct kgsl_perfcounter_put req = {
+         .groupid = KGSL_PERFCOUNTER_GROUP_SP,
+         .countable = gamenative_sp_events[i],
+      };
+      safe_ioctl(dev->fd, IOCTL_KGSL_PERFCOUNTER_PUT, &req);
+   }
+   dev->gamenative_hw_mask = 0;
+   dev->gamenative_hw_profile = false;
+}
+
+/* Called under submit_mutex. No GPU waits, register writes, shader edits or
+ * synthetic workloads. Kernel allocation failure is diagnostic data only.
+ */
+static void
+kgsl_gamenative_sample(struct tu_device *dev)
+{
+   if (!dev->gamenative_hw_profile)
+      return;
+   if (dev->gamenative_hw_rows >= 180) {
+      kgsl_gamenative_release(dev);
+      return;
+   }
+   int64_t now = os_time_get_nano();
+   if (dev->gamenative_hw_started &&
+       now - dev->gamenative_hw_time < 5000000000LL)
+      return;
+
+   if (!dev->gamenative_hw_started) {
+      dev->gamenative_hw_started = true;
+      kgsl_gamenative_record(dev,
+         "GPU-COUNTERS v1 scope=device-wide A6xx SP events=0,1,4,5,21,24,25,52 "
+         "names=busy,alu,tp_stall,uche_stall,fetch,long_sync,short_sync,icl1_miss "
+         "raw=u64 delta=since_previous_read unavailable=mask_bit_zero "
+         "overlapping_events_not_additive", true);
+      for (unsigned i = 0; i < ARRAY_SIZE(gamenative_sp_events); i++) {
+         struct kgsl_perfcounter_get req = {
+            .groupid = KGSL_PERFCOUNTER_GROUP_SP,
+            .countable = gamenative_sp_events[i],
+         };
+         if (safe_ioctl(dev->fd, IOCTL_KGSL_PERFCOUNTER_GET, &req) == 0) {
+            dev->gamenative_hw_mask |= 1u << i;
+         } else {
+            char row[128];
+            snprintf(row, sizeof(row), "GPU-COUNTERS unavailable event=%u errno=%d",
+                     gamenative_sp_events[i], errno);
+            kgsl_gamenative_record(dev, row);
+         }
+      }
+      if (!dev->gamenative_hw_mask) {
+         kgsl_gamenative_release(dev);
+         return;
+      }
+   }
+
+   struct kgsl_perfcounter_read_group reads[8] = {};
+   unsigned count = 0;
+   for (unsigned i = 0; i < ARRAY_SIZE(gamenative_sp_events); i++) {
+      if (!(dev->gamenative_hw_mask & (1u << i)))
+         continue;
+      reads[count].groupid = KGSL_PERFCOUNTER_GROUP_SP;
+      reads[count++].countable = gamenative_sp_events[i];
+   }
+   struct kgsl_perfcounter_read req = {.reads = reads, .count = count};
+   if (safe_ioctl(dev->fd, IOCTL_KGSL_PERFCOUNTER_READ, &req) != 0) {
+      char row[128];
+      snprintf(row, sizeof(row), "GPU-COUNTERS read unavailable errno=%d", errno);
+      kgsl_gamenative_record(dev, row);
+      kgsl_gamenative_release(dev);
+      return;
+   }
+
+   uint64_t raw[8] = {}, delta[8] = {};
+   uint32_t valid = 0;
+   count = 0;
+   for (unsigned i = 0; i < ARRAY_SIZE(gamenative_sp_events); i++) {
+      if (!(dev->gamenative_hw_mask & (1u << i)))
+         continue;
+      raw[i] = reads[count++].value;
+      /* Rebase on reset/nonmonotonic counters, never invent wrap deltas. */
+      if (dev->gamenative_hw_baseline && raw[i] >= dev->gamenative_hw_previous[i]) {
+         delta[i] = raw[i] - dev->gamenative_hw_previous[i];
+         valid |= 1u << i;
+      }
+      dev->gamenative_hw_previous[i] = raw[i];
+   }
+   char row[512];
+   snprintf(row, sizeof(row),
+            "GPU-COUNTERS ns=%" PRId64 " dt_ns=%" PRId64
+            " submit=%u mask=%02x valid=%02x delta=%" PRIu64 ",%" PRIu64
+            ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64,
+            now, dev->gamenative_hw_baseline ? now - dev->gamenative_hw_time : 0,
+            dev->submit_count, dev->gamenative_hw_mask, valid,
+            delta[0], delta[1], delta[2], delta[3], delta[4], delta[5], delta[6], delta[7]);
+   kgsl_gamenative_record(dev, row);
+   snprintf(row, sizeof(row),
+            "GPU-COUNTERS ns=%" PRId64 " raw=%" PRIu64 ",%" PRIu64
+            ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64,
+            now, raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7]);
+   kgsl_gamenative_record(dev, row);
+   dev->gamenative_hw_baseline = true;
+   dev->gamenative_hw_time = now;
+   dev->gamenative_hw_rows++;
+}
+
 static VkResult
 kgsl_queue_submit(struct tu_queue *queue, void *_submit,
                   struct vk_sync_wait *waits, uint32_t wait_count,
@@ -1442,6 +1581,8 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
 {
    struct tu_kgsl_queue_submit *submit =
       (struct tu_kgsl_queue_submit *)_submit;
+
+   kgsl_gamenative_sample(queue->device);
 
 #if HAVE_PERFETTO
    uint64_t start_ts = tu_perfetto_begin_submit();
@@ -1747,7 +1888,7 @@ kgsl_device_init(struct tu_device *dev)
 static void
 kgsl_device_finish(struct tu_device *dev)
 {
-   /* No-op */
+   kgsl_gamenative_release(dev);
 }
 
 static int
