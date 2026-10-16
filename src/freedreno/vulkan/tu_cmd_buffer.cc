@@ -8614,6 +8614,16 @@ tu6_draw_common(struct tu_cmd_buffer *cmd,
    const struct tu_program_state *program = &cmd->state.program;
    struct tu_render_pass_state *rp = &cmd->state.rp;
 
+   /* Emit state first, because it's needed for bandwidth calculations */
+   uint32_t dynamic_draw_state_dirty = 0;
+   if (!BITSET_IS_EMPTY(cmd->vk.dynamic_graphics_state.dirty) ||
+       (cmd->state.dirty & ~TU_CMD_DIRTY_COMPUTE_DESC_SETS)) {
+      dynamic_draw_state_dirty = tu_emit_draw_state<CHIP>(cmd);
+   }
+
+   /* State emission may select a new program. Attribute this draw to the
+    * resolved shaders, not the program left over from the previous draw.
+    */
    trace_start_draw(
       &cmd->rp_trace, &cmd->draw_cs, cmd, draw_count,
       cmd->state.program.stage_blake3[MESA_SHADER_VERTEX],
@@ -8621,13 +8631,6 @@ tu6_draw_common(struct tu_cmd_buffer *cmd,
       cmd->state.program.stage_blake3[MESA_SHADER_TESS_EVAL],
       cmd->state.program.stage_blake3[MESA_SHADER_GEOMETRY],
       cmd->state.program.stage_blake3[MESA_SHADER_FRAGMENT]);
-
-   /* Emit state first, because it's needed for bandwidth calculations */
-   uint32_t dynamic_draw_state_dirty = 0;
-   if (!BITSET_IS_EMPTY(cmd->vk.dynamic_graphics_state.dirty) ||
-       (cmd->state.dirty & ~TU_CMD_DIRTY_COMPUTE_DESC_SETS)) {
-      dynamic_draw_state_dirty = tu_emit_draw_state<CHIP>(cmd);
-   }
 
    /* Primitive restart value works in non-indexed draws, we have to disable
     * prim restart for such draws since we may read stale restart index.
