@@ -4173,6 +4173,102 @@ tu_cmd_render_sysmem(struct tu_cmd_buffer *cmd,
    tu_trace_end_render_pass<CHIP>(cmd, false, NULL);
 }
 
+/* Diagnostic only: identify recurring render-target shapes without changing
+ * render mode, synchronization, shaders or compression. Do not include image
+ * addresses or draw counts in the key: those would flood logs every frame.
+ */
+static void
+tu_silksong_render_diagnostic(struct tu_cmd_buffer *cmd, bool sysmem)
+{
+   const char *app = cmd->device->instance->vk.app_info.app_name;
+   if (!app || strcmp(app, "Hollow Knight Silksong.exe"))
+      return;
+
+   constexpr unsigned max_attachments = 16;
+   constexpr unsigned max_shapes = 96;
+   struct shape {
+      uint32_t header[12];
+      uint32_t attachments[max_attachments][10];
+   } key = {};
+   const auto *pass = cmd->state.pass;
+   const auto *fb = cmd->state.framebuffer;
+   const auto &area = cmd->state.render_areas[0];
+   key.header[0] = sysmem;
+   key.header[1] = fb->width;
+   key.header[2] = fb->height;
+   key.header[3] = fb->layers;
+   key.header[4] = area.offset.x;
+   key.header[5] = area.offset.y;
+   key.header[6] = area.extent.width;
+   key.header[7] = area.extent.height;
+   key.header[8] = pass->attachment_count;
+   key.header[9] = pass->subpass_count;
+   key.header[10] = pass->has_msrtss;
+   key.header[11] = cmd->state.lrz.valid;
+   unsigned count = MIN2(pass->attachment_count, max_attachments);
+   for (unsigned i = 0; i < count; i++) {
+      const auto &att = pass->attachments[i];
+      const auto *view = cmd->state.attachments[i];
+      auto *a = key.attachments[i];
+      a[0] = att.format;
+      a[1] = att.samples;
+      a[2] = att.load | (att.store << 1) | (att.load_stencil << 2) |
+             (att.store_stencil << 3);
+      a[3] = att.clear_mask;
+      a[4] = att.will_be_resolved;
+      a[5] = view != NULL;
+      if (view) {
+         a[6] = tu_image_view_fdl_view(view, false)->ubwc_enabled;
+         a[7] = view->vk.base_mip_level;
+         a[8] = view->image->vk.extent.width;
+         a[9] = view->image->vk.extent.height;
+      }
+   }
+
+   /* Command buffers may be recorded concurrently. Bound both memory and log
+    * output for the entire process, including multiple Vulkan devices.
+    */
+   static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+   static shape seen[max_shapes];
+   static unsigned seen_count;
+   pthread_mutex_lock(&mutex);
+   if (seen_count == 0)
+      mesa_logi("GN-TU-RP diagnostic-v1: recording-time shapes, not GPU completion; "
+                "no rendering overrides; sysmem_debug=%u gmem_debug=%u",
+                unsigned(TU_DEBUG(SYSMEM)), unsigned(TU_DEBUG(GMEM)));
+   for (unsigned i = 0; i < seen_count; i++) {
+      if (!memcmp(&key, &seen[i], sizeof(key))) {
+         pthread_mutex_unlock(&mutex);
+         return;
+      }
+   }
+   if (seen_count == max_shapes) {
+      pthread_mutex_unlock(&mutex);
+      return;
+   }
+   unsigned id = seen_count++;
+   seen[id] = key;
+   mesa_logi("GN-TU-RP shape=%u mode=%s fb=%ux%ux%u area=%d,%d+%ux%u "
+             "attachments=%u subpasses=%u msrtss=%u lrz=%u draws=%u reason=%s",
+             id, sysmem ? "sysmem" : "gmem", fb->width, fb->height, fb->layers,
+             area.offset.x, area.offset.y, area.extent.width, area.extent.height,
+             pass->attachment_count, pass->subpass_count, unsigned(pass->has_msrtss),
+             unsigned(cmd->state.lrz.valid), cmd->state.rp.drawcall_count,
+             cmd->state.rp.force_render_mode_reason ?
+                cmd->state.rp.force_render_mode_reason : "autotune");
+   for (unsigned i = 0; i < count; i++) {
+      const auto *a = key.attachments[i];
+      mesa_logi("GN-TU-RP shape=%u att=%u format=%u samples=%u load_store_bits=%x "
+                "clear=%x resolve=%u bound=%u ubwc=%u mip=%u image=%ux%u",
+                id, i, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9]);
+   }
+   if (pass->attachment_count > count)
+      mesa_logi("GN-TU-RP shape=%u attachment details truncated at %u", id, count);
+   if (seen_count == max_shapes)
+      mesa_logi("GN-TU-RP shape limit reached; further shapes omitted");
+   pthread_mutex_unlock(&mutex);
+}
+
 template <chip CHIP>
 void
 tu_cmd_render(struct tu_cmd_buffer *cmd_buffer,
@@ -4184,7 +4280,9 @@ tu_cmd_render(struct tu_cmd_buffer *cmd_buffer,
    tu_autotune::rp_key_opt rp_key = cmd_buffer->device->autotune->emit_preempt_latency_tracking_rp_hash(cmd_buffer);
 
    tu_autotune::rp_ctx_t rp_ctx = NULL;
-   if (use_sysmem_rendering(cmd_buffer, &rp_ctx, rp_key))
+   bool sysmem = use_sysmem_rendering(cmd_buffer, &rp_ctx, rp_key);
+   tu_silksong_render_diagnostic(cmd_buffer, sysmem);
+   if (sysmem)
       tu_cmd_render_sysmem<CHIP>(cmd_buffer, rp_ctx);
    else
       tu_cmd_render_tiles<CHIP>(cmd_buffer, rp_ctx, fdm_offsets);
