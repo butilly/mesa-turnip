@@ -28,6 +28,11 @@
 
 #include "disasm.h"
 
+#if DETECT_OS_POSIX
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
 bool
 ir3_const_ensure_imm_size(struct ir3_shader_variant *v, unsigned size)
 {
@@ -497,6 +502,85 @@ assemble_variant(struct ir3_shader_variant *v, bool internal)
    }
 }
 
+static void
+gamenative_capture_hot_shader(struct ir3_shader *shader,
+                             struct ir3_shader_variant *v)
+{
+#if DETECT_OS_POSIX
+   if (!shader->compiler->gamenative_capture_hot_shaders)
+      return;
+
+   /* Native-code BLAKE3 identifiers measured by the previous draw capture.
+    * Two fragment variants share this vertex program. Do not infer which
+    * stage is responsible for the draw's duration until inspecting all three.
+    */
+   static const char *const targets[] = {
+      "4700ff6a961b9f8a1765520e27a9efe60ea75496849528285b04babfb6ce806e",
+      "cd60a170e66ef1fb8448d7a60a42b09d9598f56da67fe343f82cd341d37e0081",
+      "4636bea1ddc83fae9e58c70922453b40175443e7e93cb2af08de93175b9c869d",
+   };
+   bool selected = false;
+   for (unsigned i = 0; i < ARRAY_SIZE(targets); i++)
+      selected |= !strcmp(v->blake3_str, targets[i]);
+   if (!selected)
+      return;
+
+   const char *prefix = getenv("WINEPREFIX");
+   if (!prefix || !prefix[0])
+      return;
+
+   char path[4096];
+   int len = snprintf(path, sizeof(path),
+                      "%s/drive_c/windows/temp/gamenative-shader-%ld-%s.txt",
+                      prefix, (long)getpid(), v->blake3_str);
+   if (len <= 0 || (size_t)len >= sizeof(path))
+      return;
+
+   /* Exclusive creation also deduplicates concurrent pipeline compilation.
+    * New builds have new pipeline/IR3 cache UUIDs, so the first run compiles
+    * these programs. Existing same-build caches are deliberately preserved.
+    */
+   int fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+   if (fd < 0)
+      return;
+   FILE *out = fdopen(fd, "w");
+   if (!out) {
+      close(fd);
+      unlink(path);
+      return;
+   }
+
+   char *data = NULL;
+   size_t size = 0;
+   FILE *stream = open_memstream(&data, &size);
+   if (!stream) {
+      fclose(out);
+      unlink(path);
+      return;
+   }
+   fprintf(stream, "GPU-SHADER capture-v1 stage=%s blake3=%s binning=%u\n",
+           ir3_shader_stage(v), v->blake3_str, v->binning_pass);
+   fputs("=== FINALIZED NIR ===\n", stream);
+   nir_print_shader(shader->nir, stream);
+   fputs("=== NATIVE CODE AND COMPILER STATISTICS ===\n", stream);
+   ir3_shader_disasm(v, v->bin, stream);
+   fclose(stream);
+
+   const size_t limit = 4 * 1024 * 1024;
+   bool ok = fwrite(data, 1, MIN2(size, limit), out) == MIN2(size, limit);
+   if (size > limit)
+      fputs("\nGPU-SHADER capture truncated at 4 MiB\n", out);
+   else
+      fputs("\nGPU-SHADER capture complete\n", out);
+   ok = !ferror(out) && ok;
+   if (fclose(out) != 0)
+      ok = false;
+   if (!ok)
+      unlink(path);
+   free(data);
+#endif
+}
+
 static bool
 compile_variant(struct ir3_shader *shader, struct ir3_shader_variant *v)
 {
@@ -529,6 +613,8 @@ compile_variant(struct ir3_shader *shader, struct ir3_shader_variant *v)
        */
       ralloc_free(rt_v);
    }
+
+   gamenative_capture_hot_shader(shader, v);
 
    /* no need to keep the ir around beyond this point: */
    ir3_destroy(v->ir);

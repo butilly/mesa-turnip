@@ -1547,6 +1547,7 @@ tu_hash_stage(blake3_hasher *ctx,
 
 static void
 tu_hash_shaders(unsigned char *hash,
+                uint64_t diagnostic_iova,
                 VkPipelineCreateFlags2KHR pipeline_flags,
                 const VkPipelineShaderStageCreateInfo **stages,
                 nir_shader *const *nir,
@@ -1557,6 +1558,11 @@ tu_hash_shaders(unsigned char *hash,
    blake3_hasher ctx;
 
    _mesa_blake3_init(&ctx);
+
+   /* Diagnostic programs embed this device-owned address. Never reuse a
+    * pipeline compiled for a different allocation, including imported caches.
+    */
+   _mesa_blake3_update(&ctx, &diagnostic_iova, sizeof(diagnostic_iova));
 
    if (layout)
       _mesa_blake3_update(&ctx, layout->blake3, sizeof(layout->blake3));
@@ -1949,7 +1955,8 @@ tu_pipeline_builder_compile_shaders(struct tu_pipeline_builder *builder,
    }
 
    unsigned char pipeline_blake3[BLAKE3_KEY_LEN];
-   tu_hash_shaders(pipeline_blake3, builder->create_flags, stage_infos, nir,
+   tu_hash_shaders(pipeline_blake3, builder->device->gamenative_loop_iova,
+                   builder->create_flags, stage_infos, nir,
                    &builder->layout, keys, builder->state);
 
    unsigned char nir_blake3[BLAKE3_KEY_LEN + 1];

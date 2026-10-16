@@ -6,6 +6,7 @@
 #include "tu_shader.h"
 
 #include <initializer_list>
+#include <vector>
 
 #include "nir/nir_xfb_info.h"
 #include "spirv/nir_spirv.h"
@@ -3578,6 +3579,100 @@ tu_lower_nir(struct tu_device *dev,
       lower_alpha_to_coverage(nir);
 }
 
+/* Count logical resource operations before backend optimization. These are
+ * not hardware transactions. Keep the original CFG sites before adding any
+ * sampling branches, so instrumentation cannot instrument itself.
+ */
+static void
+gamenative_instrument_loops(struct tu_device *dev, nir_shader *nir)
+{
+   if (!dev->gamenative_loop_iova ||
+       nir->info.stage != MESA_SHADER_FRAGMENT || !nir->info.name)
+      return;
+
+   static const char *const names[] = {
+      "FS_3da5c330d86a7c6c462ae3827954dccd9d00d638",
+      "FS_f289c6b0764f6280c4e91fbd9298560ebff39e94",
+   };
+   unsigned shader_id;
+   for (shader_id = 0; shader_id < ARRAY_SIZE(names); shader_id++)
+      if (!strcmp(nir->info.name, names[shader_id]))
+         break;
+   if (shader_id == ARRAY_SIZE(names))
+      return;
+
+   struct site {
+      nir_block *block;
+      unsigned count[9];
+   };
+   std::vector<site> sites;
+   nir_function_impl *impl = nir_shader_get_entrypoint(nir);
+   unsigned loops = 0;
+   nir_foreach_block(block, impl) {
+      site s = {};
+      s.block = block;
+      if (block == nir_start_block(impl))
+         s.count[0] = 1;
+      if (block->cf_node.parent->type == nir_cf_node_loop) {
+         nir_loop *loop = nir_cf_node_as_loop(block->cf_node.parent);
+         if (block == nir_loop_first_block(loop)) {
+            if (loops == 5)
+               return;
+            s.count[1 + loops++] = 1;
+         }
+      }
+      nir_foreach_instr(instr, block) {
+         if (instr->type == nir_instr_type_tex)
+            s.count[8]++;
+         if (instr->type != nir_instr_type_intrinsic)
+            continue;
+         switch (nir_instr_as_intrinsic(instr)->intrinsic) {
+         case nir_intrinsic_load_ubo: s.count[6]++; break;
+         case nir_intrinsic_load_ssbo: s.count[7]++; break;
+         default: break;
+         }
+      }
+      bool used = false;
+      for (unsigned c : s.count)
+         used |= c != 0;
+      if (used)
+         sites.push_back(s);
+   }
+   /* A changed shader shape must not silently acquire misleading loop IDs. */
+   if (loops != 5) {
+      mesa_logi("GPU-LOOPS skipped shader=%u loops=%u expected=5", shader_id, loops);
+      return;
+   }
+
+   nir_builder b = nir_builder_create(impl);
+   b.cursor = nir_before_impl(impl);
+   nir_def *xy = nir_f2u32(&b, nir_channels(&b, nir_load_frag_coord(&b), 3));
+   nir_def *hash = nir_ixor(&b, nir_imul_imm(&b, nir_channel(&b, xy, 0), 1973),
+                               nir_imul_imm(&b, nir_channel(&b, xy, 1), 9277));
+   nir_def *sample = nir_ieq_imm(&b, nir_iand_imm(&b, hash, 4095), 0);
+   nir_instr *sample_instr = nir_def_instr(sample);
+   for (const site &s : sites) {
+      b.cursor = s.block == nir_start_block(impl) ?
+         nir_after_instr(sample_instr) : nir_after_phis(s.block);
+      nir_push_if(&b, sample);
+      for (unsigned c = 0; c < 9; c++) {
+         if (!s.count[c])
+            continue;
+         uint64_t address = dev->gamenative_loop_iova +
+                            (shader_id * 9 + c) * sizeof(uint32_t);
+         nir_global_atomic(&b, 32, nir_imm_int64(&b, address),
+                           nir_imm_int(&b, s.count[c]),
+                           .atomic_op = nir_atomic_op_iadd);
+      }
+      nir_pop_if(&b, NULL);
+   }
+   nir_progress(true, impl, nir_metadata_none);
+   nir_shader_gather_info(nir, impl);
+   nir_validate_shader(nir, "GameNative sampled loop counters");
+   mesa_logi("GPU-LOOPS instrumented shader=%u loops=%u sites=%zu sample=1/4096",
+             shader_id, loops, sites.size());
+}
+
 VkResult
 tu_shader_create(struct tu_device *dev,
                  struct tu_shader **shader_out,
@@ -3620,6 +3715,7 @@ tu_shader_create(struct tu_device *dev,
             key->read_only_input_attachments, key->dynamic_renderpass,
             &const_allocs);
 
+   gamenative_instrument_loops(dev, nir);
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
 
    struct ir3_shader_nir_options nir_options;
