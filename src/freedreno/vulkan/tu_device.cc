@@ -3271,14 +3271,9 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
       if ((profile_app && (!strcasecmp(profile_app, "DragNWash.exe") ||
                            !strcasecmp(profile_app, "DragNWash"))) ||
           (profile_process && !strcasecmp(profile_process, "DragNWash.exe"))) {
-         device->compiler->gamenative_capture_hot_shaders = true;
-         device->gamenative_loop_iova = device->global_bo->iova +
-            gb_offset(gamenative_loop_counts);
-         for (unsigned s = 0; s < 2; s++)
-            for (unsigned c = 0; c < 9; c++)
-               global->gamenative_loop_counts[s][c] = 0;
-         tu_gpu_tracepoint |= TU_GPU_TRACEPOINT_DRAW;
-         u_trace_context_enable_sampled_log(&device->trace_context);
+         /* Leave loop atomics, shader capture and draw tracing disabled. */
+         device->gamenative_hw_profile =
+            fd_dev_gen(&physical_device->dev_id) == 6;
       }
    }
 
