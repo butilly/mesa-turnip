@@ -3711,11 +3711,11 @@ tu_shader_create(struct tu_device *dev,
    }
 
    struct ir3_const_allocations const_allocs = {};
-   gamenative_instrument_loops(dev, nir);
    NIR_PASS(_, nir, tu_lower_io, dev, shader, ir3_key, layout,
             key->read_only_input_attachments, key->dynamic_renderpass,
             &const_allocs);
 
+   gamenative_instrument_loops(dev, nir);
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
 
    struct ir3_shader_nir_options nir_options;
