@@ -3650,7 +3650,7 @@ gamenative_instrument_loops(struct tu_device *dev, nir_shader *nir)
    nir_def *hash = nir_ixor(&b, nir_imul_imm(&b, nir_channel(&b, xy, 0), 1973),
                                nir_imul_imm(&b, nir_channel(&b, xy, 1), 9277));
    nir_def *sample = nir_ieq_imm(&b, nir_iand_imm(&b, hash, 4095), 0);
-   nir_instr *sample_instr = sample->parent_instr;
+   nir_instr *sample_instr = nir_def_instr(sample);
    for (const site &s : sites) {
       b.cursor = s.block == nir_start_block(impl) ?
          nir_after_instr(sample_instr) : nir_after_phis(s.block);
