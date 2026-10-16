@@ -3272,6 +3272,11 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
                            !strcasecmp(profile_app, "DragNWash"))) ||
           (profile_process && !strcasecmp(profile_process, "DragNWash.exe"))) {
          device->compiler->gamenative_capture_hot_shaders = true;
+         device->gamenative_loop_iova = device->global_bo->iova +
+            gb_offset(gamenative_loop_counts);
+         for (unsigned s = 0; s < 2; s++)
+            for (unsigned c = 0; c < 9; c++)
+               global->gamenative_loop_counts[s][c] = 0;
          tu_gpu_tracepoint |= TU_GPU_TRACEPOINT_DRAW;
          u_trace_context_enable_sampled_log(&device->trace_context);
       }
