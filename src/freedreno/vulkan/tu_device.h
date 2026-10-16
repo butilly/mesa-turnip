@@ -292,6 +292,11 @@ struct tu6_global
    uint64_t preemption_latency_cmp_scratch;
    uint64_t zero_64b;
 
+   /* Sampled shader diagnostics: invocation, five loop headers, UBO, SSBO,
+    * texture operations. Cumulative modulo-2^32; never reset while running.
+    */
+   volatile uint32_t gamenative_loop_counts[2][9];
+
    struct bcolor_entry bcolor_builtin[TU_BORDER_COLOR_BUILTIN];
    struct bcolor_entry bcolor[];
 };
@@ -470,6 +475,9 @@ struct tu_device
 #endif
 
    uint32_t submit_count;
+   uint64_t gamenative_loop_iova;
+   int64_t gamenative_loop_log_time;
+   unsigned gamenative_loop_log_rows;
 
    /* Address space and global fault count for this local_fd with DRM backend */
    uint64_t fault_count;

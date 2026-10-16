@@ -313,5 +313,7 @@ utrace_generate(cpath=args.utrace_src,
                 hpath=args.utrace_hdr,
                 ctx_param='struct tu_device *dev',
                 trace_toggle_name='tu_gpu_tracepoint',
-                trace_toggle_defaults=tu_default_tps)
+                # Diagnostic package: avoid per-draw/per-tile timestamps.
+                trace_toggle_defaults=['cmd_buffer', 'render_pass', 'compute',
+                                       'compute_indirect'])
 utrace_generate_perfetto_utils(hpath=args.perfetto_hdr)
