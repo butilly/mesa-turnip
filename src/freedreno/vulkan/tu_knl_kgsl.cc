@@ -341,13 +341,41 @@ kgsl_bo_init(struct tu_device *dev,
    if (flags & TU_BO_ALLOC_NO_32B_ROLLOVER)
       req.flags |= KGSL_MEMFLAGS_FORCE_32BIT;
 
-   int ret;
-
-   ret = safe_ioctl(dev->physical_device->local_fd,
-                    IOCTL_KGSL_GPUMEM_ALLOC_ID, &req);
+   bool svm_fallback = false;
+   const uint32_t requested_flags = req.flags;
+   int ret = safe_ioctl(dev->physical_device->local_fd,
+                        IOCTL_KGSL_GPUMEM_ALLOC_ID, &req);
    if (ret) {
       tu_alloc_diag(dev, 1, "GPUMEM_ALLOC_ID", size, req.flags,
                     flags, ret, errno);
+      /* Older KGSL kernels can exhaust their normal GPU VA window well
+       * before the system-memory heap. Retry ordinary allocations in the
+       * CPU/GPU shared VA range, using the existing replayable-BO mapping
+       * lifetime. Do not relax firmware rollover or sparse/replay rules.
+       */
+      if (errno == ENOMEM && dev->gn_kgsl_svm_fallback && !lazy_vma &&
+          !client_iova &&
+          !(flags & (TU_BO_ALLOC_REPLAYABLE | TU_BO_ALLOC_NO_32B_ROLLOVER |
+                     TU_BO_ALLOC_INTERNAL_RESOURCE))) {
+         req = (struct kgsl_gpumem_alloc_id) {
+            .flags = requested_flags | KGSL_MEMFLAGS_USE_CPU_MAP,
+            .size = size,
+         };
+         ret = safe_ioctl(dev->physical_device->local_fd,
+                          IOCTL_KGSL_GPUMEM_ALLOC_ID, &req);
+         tu_alloc_diag(dev, 3, "GPUMEM_ALLOC_ID-SVM", size, req.flags,
+                       req.gpuaddr, ret, ret ? errno : 0);
+         if (!ret && !(req.flags & KGSL_MEMFLAGS_USE_CPU_MAP)) {
+            struct kgsl_gpumem_free_id free_req = { .id = req.id };
+            safe_ioctl(dev->physical_device->local_fd,
+                       IOCTL_KGSL_GPUMEM_FREE_ID, &free_req);
+            return vk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
+                             "KGSL stripped USE_CPU_MAP on SVM retry");
+         }
+         svm_fallback = !ret;
+      }
+   }
+   if (ret) {
       return vk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
                        "GPUMEM_ALLOC_ID failed (%s)", strerror(errno));
    }
@@ -374,8 +402,17 @@ kgsl_bo_init(struct tu_device *dev,
 
    if (lazy_vma) {
       result = kgsl_sparse_vma_map(dev, lazy_vma, bo, 0);
-   } else if (flags & TU_BO_ALLOC_REPLAYABLE) {
+   } else if ((flags & TU_BO_ALLOC_REPLAYABLE) || svm_fallback) {
       result = kgsl_bo_user_map(dev, bo, client_iova);
+      if (svm_fallback) {
+         tu_alloc_diag(dev, 3, "SVM-map", size, req.flags,
+                       result == VK_SUCCESS ? bo->iova : 0, result, 0);
+         if (result == VK_SUCCESS && align && (bo->iova & (align - 1))) {
+            kgsl_bo_finish(dev, bo);
+            return vk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
+                             "KGSL SVM retry did not preserve alignment");
+         }
+      }
    }
 
    if (result != VK_SUCCESS)
