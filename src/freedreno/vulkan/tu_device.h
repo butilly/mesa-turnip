@@ -320,6 +320,9 @@ struct tu_device
    uint32_t device_idx;
    int fd;
 
+   bool gn_alloc_diag;
+   uint32_t gn_alloc_diag_count[3];
+
    struct ir3_compiler *compiler;
 
    /* Backup in-memory cache to be used if the app doesn't provide one */
@@ -715,6 +718,13 @@ void
 tu_dump_bo_init(struct tu_device *dev, struct tu_bo *bo);
 void
 tu_dump_bo_del(struct tu_device *dev, struct tu_bo *bo);
+
+/* Bounded allocation tracing, independent of the Vulkan debug messenger.
+ * Categories: API failures, kernel failures, successful kernel allocations.
+ */
+void tu_alloc_diag(struct tu_device *dev, unsigned category, const char *op,
+                   uint64_t size, uint64_t flags, uint64_t detail,
+                   int result, int error);
 
 /* Use cached-coherent when available, for faster CPU readback.
  */
