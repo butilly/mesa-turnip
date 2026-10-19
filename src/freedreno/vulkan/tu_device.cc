@@ -9,6 +9,8 @@
 
 #include "tu_device.h"
 
+#include <errno.h>
+
 #include "drm-uapi/drm_fourcc.h"
 #include "git_sha1.h"
 #include "perfcntrs/freedreno_perfcntr.h"
@@ -2900,6 +2902,13 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
    device->physical_device = physical_device;
    device->device_idx = device->physical_device->device_count++;
 
+   device->gn_alloc_diag = device->instance->vk.app_info.app_name &&
+      !strcmp(device->instance->vk.app_info.app_name, "The Witch's Bakery.exe");
+   if (device->gn_alloc_diag)
+      mesa_loge("GN-TU-ALLOC diagnostic-v1 device=%u kgsl=%u heapBytes=%llu",
+                device->device_idx, is_kgsl(device->instance),
+                (unsigned long long) physical_device->heap.size);
+
    result = tu_drm_device_init(device);
    if (result != VK_SUCCESS) {
       vk_free(&device->vk.alloc, device);
@@ -3540,12 +3549,42 @@ vk_icdGetInstanceProcAddr(VkInstance instance, const char *pName)
    return tu_GetInstanceProcAddr(instance, pName);
 }
 
+void
+tu_alloc_diag(struct tu_device *dev, unsigned category, const char *op,
+              uint64_t size, uint64_t flags, uint64_t detail,
+              int result, int error)
+{
+   if (!dev->gn_alloc_diag)
+      return;
+
+   const unsigned limit = category == 2 ? 8 : 24;
+   if (p_atomic_read(&dev->gn_alloc_diag_count[category]) >= limit)
+      return;
+   unsigned record = p_atomic_inc_return(&dev->gn_alloc_diag_count[category]);
+   if (record > limit)
+      return;
+
+   /* Preserve errno for existing vk_errorf callers and cleanup paths. */
+   int saved_errno = errno;
+   mesa_loge("GN-TU-ALLOC device=%u category=%u record=%u op=%s "
+             "bytes=%llu flags=0x%llx detail=0x%llx result=%d errno=%d "
+             "heapUsedBytes=%llu heapBytes=%llu",
+             dev->device_idx, category, record, op,
+             (unsigned long long) size, (unsigned long long) flags,
+             (unsigned long long) detail, result, error,
+             (unsigned long long) p_atomic_read(&dev->physical_device->heap.used),
+             (unsigned long long) dev->physical_device->heap.size);
+   errno = saved_errno;
+}
+
 static VkResult
 tu_add_to_heap(struct tu_device *dev, struct tu_bo *bo)
 {
    struct tu_memory_heap *mem_heap = &dev->physical_device->heap;
    uint64_t mem_heap_used = p_atomic_add_return(&mem_heap->used, bo->size);
    if (mem_heap_used > mem_heap->size) {
+      tu_alloc_diag(dev, 0, "heap-account", bo->size, 0, mem_heap_used,
+                    VK_ERROR_OUT_OF_DEVICE_MEMORY, 0);
       p_atomic_add(&mem_heap->used, -bo->size);
       tu_bo_finish(dev, bo);
       return vk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
@@ -3709,8 +3748,12 @@ tu_AllocateMemory(VkDevice _device,
 
    struct tu_memory_heap *mem_heap = &device->physical_device->heap;
    uint64_t mem_heap_used = p_atomic_read(&mem_heap->used);
-   if (mem_heap_used > mem_heap->size)
+   if (mem_heap_used > mem_heap->size) {
+      tu_alloc_diag(device, 0, "heap-precheck", pAllocateInfo->allocationSize,
+                    0, pAllocateInfo->memoryTypeIndex,
+                    VK_ERROR_OUT_OF_DEVICE_MEMORY, 0);
       return vk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
+   }
 
    mem = (struct tu_device_memory *) vk_device_memory_create(
       &device->vk, pAllocateInfo, pAllocator, sizeof(*mem));
@@ -3815,6 +3858,9 @@ tu_AllocateMemory(VkDevice _device,
 
    if (result != VK_SUCCESS) {
       vk_device_memory_destroy(&device->vk, pAllocator, &mem->vk);
+      tu_alloc_diag(device, 0, "vkAllocateMemory", pAllocateInfo->allocationSize,
+                    flags_info ? flags_info->flags : 0,
+                    pAllocateInfo->memoryTypeIndex, result, 0);
       tu_memory_emit_report(device, /* mem */ NULL, pAllocateInfo, result);
       return result;
    }
