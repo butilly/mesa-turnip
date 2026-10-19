@@ -91,6 +91,8 @@ bo_init_new_dmaheap(struct tu_device *dev, struct tu_bo **out_bo, uint64_t size,
                     &alloc);
 
    if (ret) {
+      tu_alloc_diag(dev, 1, "DMA_HEAP_IOCTL_ALLOC", size, alloc.fd_flags,
+                    align, ret, errno);
       return vk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
                        "DMA_HEAP_IOCTL_ALLOC failed (%s)", strerror(errno));
    }
@@ -122,6 +124,8 @@ bo_init_new_ion(struct tu_device *dev, struct tu_bo **out_bo, uint64_t size,
    int ret;
    ret = safe_ioctl(dev->physical_device->kgsl_dma_fd, ION_IOC_NEW_ALLOC, &alloc);
    if (ret) {
+      tu_alloc_diag(dev, 1, "ION_IOC_NEW_ALLOC", size, alloc.flags,
+                    alloc.heap_id_mask, ret, errno);
       return vk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
                        "ION_IOC_NEW_ALLOC failed (%s)", strerror(errno));
    }
@@ -149,6 +153,8 @@ bo_init_new_ion_legacy(struct tu_device *dev, struct tu_bo **out_bo, uint64_t si
    int ret;
    ret = safe_ioctl(dev->physical_device->kgsl_dma_fd, ION_IOC_ALLOC, &alloc);
    if (ret) {
+      tu_alloc_diag(dev, 1, "ION_IOC_ALLOC", size, alloc.flags,
+                    alloc.heap_id_mask, ret, errno);
       return vk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
                        "ION_IOC_ALLOC failed (%s)", strerror(errno));
    }
@@ -160,6 +166,7 @@ bo_init_new_ion_legacy(struct tu_device *dev, struct tu_bo **out_bo, uint64_t si
 
    ret = safe_ioctl(dev->physical_device->kgsl_dma_fd, ION_IOC_SHARE, &share);
    if (ret) {
+      tu_alloc_diag(dev, 1, "ION_IOC_SHARE", size, alloc.flags, 0, ret, errno);
       struct ion_handle_data free = {
          .handle = alloc.handle,
       };
@@ -174,6 +181,7 @@ bo_init_new_ion_legacy(struct tu_device *dev, struct tu_bo **out_bo, uint64_t si
    };
    ret = safe_ioctl(dev->physical_device->kgsl_dma_fd, ION_IOC_FREE, &free);
    if (ret) {
+      tu_alloc_diag(dev, 1, "ION_IOC_FREE", size, alloc.flags, 0, ret, errno);
       close(share.fd);
       return vk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
                        "ION_IOC_FREE failed (%s)", strerror(errno));
@@ -194,6 +202,7 @@ kgsl_bo_user_map(struct tu_device *dev, struct tu_bo *bo, uint64_t client_iova)
    void *map = mmap((void *)client_iova, bo->size, PROT_READ | PROT_WRITE,
                     MAP_SHARED, dev->physical_device->local_fd, offset);
    if (map == MAP_FAILED) {
+      tu_alloc_diag(dev, 1, "mmap", bo->size, 0, client_iova, -1, errno);
       kgsl_bo_finish(dev, bo);
 
       return vk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
@@ -332,14 +341,47 @@ kgsl_bo_init(struct tu_device *dev,
    if (flags & TU_BO_ALLOC_NO_32B_ROLLOVER)
       req.flags |= KGSL_MEMFLAGS_FORCE_32BIT;
 
-   int ret;
-
-   ret = safe_ioctl(dev->physical_device->local_fd,
-                    IOCTL_KGSL_GPUMEM_ALLOC_ID, &req);
+   bool svm_fallback = false;
+   const uint32_t requested_flags = req.flags;
+   int ret = safe_ioctl(dev->physical_device->local_fd,
+                        IOCTL_KGSL_GPUMEM_ALLOC_ID, &req);
+   if (ret) {
+      tu_alloc_diag(dev, 1, "GPUMEM_ALLOC_ID", size, req.flags,
+                    flags, ret, errno);
+      /* Older KGSL kernels can exhaust their normal GPU VA window well
+       * before the system-memory heap. Retry ordinary allocations in the
+       * CPU/GPU shared VA range, using the existing replayable-BO mapping
+       * lifetime. Do not relax firmware rollover or sparse/replay rules.
+       */
+      if (errno == ENOMEM && dev->gn_kgsl_svm_fallback && !lazy_vma &&
+          !client_iova &&
+          !(flags & (TU_BO_ALLOC_REPLAYABLE | TU_BO_ALLOC_NO_32B_ROLLOVER |
+                     TU_BO_ALLOC_INTERNAL_RESOURCE))) {
+         req = (struct kgsl_gpumem_alloc_id) {
+            .flags = requested_flags | KGSL_MEMFLAGS_USE_CPU_MAP,
+            .size = size,
+         };
+         ret = safe_ioctl(dev->physical_device->local_fd,
+                          IOCTL_KGSL_GPUMEM_ALLOC_ID, &req);
+         tu_alloc_diag(dev, 3, "GPUMEM_ALLOC_ID-SVM", size, req.flags,
+                       req.gpuaddr, ret, ret ? errno : 0);
+         if (!ret && !(req.flags & KGSL_MEMFLAGS_USE_CPU_MAP)) {
+            struct kgsl_gpumem_free_id free_req = { .id = req.id };
+            safe_ioctl(dev->physical_device->local_fd,
+                       IOCTL_KGSL_GPUMEM_FREE_ID, &free_req);
+            return vk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
+                             "KGSL stripped USE_CPU_MAP on SVM retry");
+         }
+         svm_fallback = !ret;
+      }
+   }
    if (ret) {
       return vk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
                        "GPUMEM_ALLOC_ID failed (%s)", strerror(errno));
    }
+
+   tu_alloc_diag(dev, 2, "GPUMEM_ALLOC_ID", size, req.flags,
+                 req.gpuaddr, 0, 0);
 
    struct tu_bo* bo = tu_device_lookup_bo(dev, req.id);
    assert(bo && bo->gem_handle == 0);
@@ -360,8 +402,17 @@ kgsl_bo_init(struct tu_device *dev,
 
    if (lazy_vma) {
       result = kgsl_sparse_vma_map(dev, lazy_vma, bo, 0);
-   } else if (flags & TU_BO_ALLOC_REPLAYABLE) {
+   } else if ((flags & TU_BO_ALLOC_REPLAYABLE) || svm_fallback) {
       result = kgsl_bo_user_map(dev, bo, client_iova);
+      if (svm_fallback) {
+         tu_alloc_diag(dev, 3, "SVM-map", size, req.flags,
+                       result == VK_SUCCESS ? bo->iova : 0, result, 0);
+         if (result == VK_SUCCESS && align && (bo->iova & (align - 1))) {
+            kgsl_bo_finish(dev, bo);
+            return vk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
+                             "KGSL SVM retry did not preserve alignment");
+         }
+      }
    }
 
    if (result != VK_SUCCESS)
@@ -401,9 +452,12 @@ kgsl_bo_init_dmabuf(struct tu_device *dev,
 
    ret = safe_ioctl(dev->physical_device->local_fd,
                     IOCTL_KGSL_GPUOBJ_IMPORT, &req);
-   if (ret)
+   if (ret) {
+      tu_alloc_diag(dev, 1, "GPUOBJ_IMPORT", size, req.flags,
+                    flags, ret, errno);
       return vk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
                        "Failed to import dma-buf (%s)\n", strerror(errno));
+   }
 
    struct kgsl_gpuobj_info info_req = {
       .id = req.id,
@@ -412,6 +466,7 @@ kgsl_bo_init_dmabuf(struct tu_device *dev,
    ret = safe_ioctl(dev->physical_device->local_fd,
                     IOCTL_KGSL_GPUOBJ_INFO, &info_req);
    if (ret) {
+      tu_alloc_diag(dev, 1, "GPUOBJ_INFO", size, req.flags, 0, ret, errno);
       struct kgsl_gpumem_free_id free_req = {
          .id = req.id,
       };
@@ -421,6 +476,9 @@ kgsl_bo_init_dmabuf(struct tu_device *dev,
       return vk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
                        "Failed to get dma-buf info (%s)\n", strerror(errno));
    }
+
+   tu_alloc_diag(dev, 2, "GPUOBJ_IMPORT", info_req.size, req.flags,
+                 info_req.gpuaddr, 0, 0);
 
    struct tu_bo* bo = tu_device_lookup_bo(dev, req.id);
    assert(bo && bo->gem_handle == 0);
