@@ -37,6 +37,13 @@ def declare_options():
     ]
 
     misc_options = [
+        B("tu_flush_all_at_sync_points", False,
+          "On A6XX, clean and invalidate all caches at existing synchronization points, without adding flushes before otherwise unsynchronized draws",
+          c_name="flush_all_at_sync_points"),
+        B("tu_flush_non_ccu_at_draws", False,
+          "On A6XX, force UCHE clean/invalidate, descriptor invalidation and CP waits at every cache-flush emission point, including otherwise unsynchronized draws",
+          c_name="flush_non_ccu_at_draws"),
+
         # Conservative LRZ (default true) invalidates LRZ on draws with
         # blend and depth-write enabled, because this can lead to incorrect
         # rendering.  Driconf can be used to disable conservative LRZ for
