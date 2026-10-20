@@ -831,7 +831,7 @@ get_relative_ms(uint64_t abs_timeout_ns)
  * which could lead to waiting substantially longer than requested
  */
 static VkResult
-wait_timestamp_safe(int fd,
+wait_timestamp_safe(struct tu_device *device,
                     unsigned int context_id,
                     unsigned int timestamp,
                     uint64_t abs_timeout_ns)
@@ -847,7 +847,7 @@ wait_timestamp_safe(int fd,
    while (true) {
       /* Keep the caller's deadline, but report an otherwise silent long wait. */
       wait.timeout = MIN2(wait.timeout, 5000u);
-      int ret = ioctl(fd, IOCTL_KGSL_DEVICE_WAITTIMESTAMP_CTXTID, &wait);
+      int ret = ioctl(device->fd, IOCTL_KGSL_DEVICE_WAITTIMESTAMP_CTXTID, &wait);
       const int saved_errno = ret == -1 ? errno : 0;
       const uint64_t now_ns = os_time_get_nano();
       if (now_ns >= next_log_ns ||
@@ -874,9 +874,18 @@ wait_timestamp_safe(int fd,
             return VK_TIMEOUT;
 
          wait.timeout = timeout_ms;
-      } else if (ret == -1) {
-         assert(errno == ETIMEDOUT);
+      } else if (ret == -1 && saved_errno == ETIMEDOUT) {
          return VK_TIMEOUT;
+      } else if (ret == -1) {
+         /* A failed KGSL wait is not a timeout.  In particular, EPROTO must
+          * not leave Vulkan clients waiting on a faulted context as though
+          * the timestamp could still complete normally.
+          */
+         return vk_device_set_lost(&device->vk,
+                                   "KGSL wait failed: queue=%u timestamp=%u "
+                                   "errno=%d (%s)",
+                                   context_id, timestamp, saved_errno,
+                                   strerror(saved_errno));
       } else {
          return VK_SUCCESS;
       }
@@ -889,7 +898,7 @@ kgsl_queue_wait_fence(struct tu_queue *queue, uint32_t fence,
 {
    uint64_t abs_timeout_ns = os_time_get_nano() + timeout_ns;
 
-   return wait_timestamp_safe(queue->device->fd, queue->msm_queue_id,
+   return wait_timestamp_safe(queue->device, queue->msm_queue_id,
                               fence, abs_timeout_ns);
 }
 
@@ -938,7 +947,7 @@ kgsl_syncobj_wait(struct tu_device *device,
       return VK_TIMEOUT;
 
    case KGSL_SYNCOBJ_STATE_TS: {
-      return wait_timestamp_safe(device->fd, s->queue->msm_queue_id,
+      return wait_timestamp_safe(device, s->queue->msm_queue_id,
                                  s->timestamp, abs_timeout_ns);
    }
 
@@ -1036,7 +1045,7 @@ kgsl_syncobj_wait_any(struct tu_device* device, struct kgsl_syncobj **syncobjs, 
    }
 
    if (u_vector_length(&poll_fds) == 0) {
-      result = wait_timestamp_safe(device->fd, queue->msm_queue_id,
+      result = wait_timestamp_safe(device, queue->msm_queue_id,
                                    lowest_timestamp, MIN2(abs_timeout_ns, INT64_MAX));
    } else {
       int ret, i;
@@ -1786,7 +1795,7 @@ static VkResult
 kgsl_device_init(struct tu_device *dev)
 {
    dev->fd = dev->physical_device->local_fd;
-   mesa_logw("TU-DIAG KGSL submit/wait diagnostic active; rendering unchanged");
+   mesa_logw("TU-DIAG KGSL wait error propagation fix active; rendering unchanged");
    return VK_SUCCESS;
 }
 
