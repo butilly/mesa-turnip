@@ -565,6 +565,14 @@ queue_submit(struct vk_queue *_queue, struct vk_queue_submit *vk_submit)
                       vk_submit->signals, vk_submit->signal_count,
                       u_trace_submission_data);
 
+   if (result != VK_SUCCESS || (device->submit_count & 255) == 0) {
+      mesa_logw("TU-DIAG queue-submit queue=%u submit=%u command_buffers=%u"
+                " waits=%u signals=%u fence=%d result=%d",
+                queue->msm_queue_id, device->submit_count, cmdbuf_count,
+                vk_submit->wait_count, vk_submit->signal_count,
+                queue->fence, result);
+   }
+
    if (result != VK_SUCCESS) {
       pthread_mutex_unlock(&device->submit_mutex);
       goto out;
@@ -671,4 +679,3 @@ tu_queue_finish(struct tu_queue *queue)
    if (!emulated)
       tu_drm_submitqueue_close(queue->device, queue);
 }
-
