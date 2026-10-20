@@ -5,6 +5,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <linux/dma-heap.h>
 #include <poll.h>
 #include <stdint.h>
@@ -830,11 +831,13 @@ get_relative_ms(uint64_t abs_timeout_ns)
  * which could lead to waiting substantially longer than requested
  */
 static VkResult
-wait_timestamp_safe(int fd,
+wait_timestamp_safe(struct tu_device *device,
                     unsigned int context_id,
                     unsigned int timestamp,
                     uint64_t abs_timeout_ns)
 {
+   const uint64_t start_ns = os_time_get_nano();
+   uint64_t next_log_ns = start_ns + 5000000000ull;
    struct kgsl_device_waittimestamp_ctxtid wait = {
       .context_id = context_id,
       .timestamp = timestamp,
@@ -842,7 +845,26 @@ wait_timestamp_safe(int fd,
    };
 
    while (true) {
-      int ret = ioctl(fd, IOCTL_KGSL_DEVICE_WAITTIMESTAMP_CTXTID, &wait);
+      /* Keep the caller's deadline, but report an otherwise silent long wait. */
+      wait.timeout = MIN2(wait.timeout, 5000u);
+      int ret = ioctl(device->fd, IOCTL_KGSL_DEVICE_WAITTIMESTAMP_CTXTID, &wait);
+      const int saved_errno = ret == -1 ? errno : 0;
+      const uint64_t now_ns = os_time_get_nano();
+      if (now_ns >= next_log_ns ||
+          (ret == -1 && saved_errno != ETIMEDOUT &&
+           saved_errno != EINTR && saved_errno != EAGAIN)) {
+         mesa_logw("TU-DIAG wait queue=%u timestamp=%u elapsed_ms=%" PRIu64
+                   " ret=%d errno=%d (%s)", context_id, timestamp,
+                   (now_ns - start_ns) / 1000000, ret, saved_errno,
+                   strerror(saved_errno));
+         next_log_ns = now_ns + 5000000000ull;
+      }
+      if (ret == -1 && saved_errno == ETIMEDOUT &&
+          get_relative_ms(abs_timeout_ns) != 0) {
+         wait.timeout = get_relative_ms(abs_timeout_ns);
+         continue;
+      }
+      errno = saved_errno;
 
       if (ret == -1 && (errno == EINTR || errno == EAGAIN)) {
          int timeout_ms = get_relative_ms(abs_timeout_ns);
@@ -852,9 +874,18 @@ wait_timestamp_safe(int fd,
             return VK_TIMEOUT;
 
          wait.timeout = timeout_ms;
-      } else if (ret == -1) {
-         assert(errno == ETIMEDOUT);
+      } else if (ret == -1 && saved_errno == ETIMEDOUT) {
          return VK_TIMEOUT;
+      } else if (ret == -1) {
+         /* A failed KGSL wait is not a timeout.  In particular, EPROTO must
+          * not leave Vulkan clients waiting on a faulted context as though
+          * the timestamp could still complete normally.
+          */
+         return vk_device_set_lost(&device->vk,
+                                   "KGSL wait failed: queue=%u timestamp=%u "
+                                   "errno=%d (%s)",
+                                   context_id, timestamp, saved_errno,
+                                   strerror(saved_errno));
       } else {
          return VK_SUCCESS;
       }
@@ -867,7 +898,7 @@ kgsl_queue_wait_fence(struct tu_queue *queue, uint32_t fence,
 {
    uint64_t abs_timeout_ns = os_time_get_nano() + timeout_ns;
 
-   return wait_timestamp_safe(queue->device->fd, queue->msm_queue_id,
+   return wait_timestamp_safe(queue->device, queue->msm_queue_id,
                               fence, abs_timeout_ns);
 }
 
@@ -916,7 +947,7 @@ kgsl_syncobj_wait(struct tu_device *device,
       return VK_TIMEOUT;
 
    case KGSL_SYNCOBJ_STATE_TS: {
-      return wait_timestamp_safe(device->fd, s->queue->msm_queue_id,
+      return wait_timestamp_safe(device, s->queue->msm_queue_id,
                                  s->timestamp, abs_timeout_ns);
    }
 
@@ -1014,7 +1045,7 @@ kgsl_syncobj_wait_any(struct tu_device* device, struct kgsl_syncobj **syncobjs, 
    }
 
    if (u_vector_length(&poll_fds) == 0) {
-      result = wait_timestamp_safe(device->fd, queue->msm_queue_id,
+      result = wait_timestamp_safe(device, queue->msm_queue_id,
                                    lowest_timestamp, MIN2(abs_timeout_ns, INT64_MAX));
    } else {
       int ret, i;
@@ -1614,8 +1645,22 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
          req.numobjs = obj_idx;
       }
 
+      const uint64_t submit_start_ns = os_time_get_nano();
       ret = safe_ioctl(queue->device->physical_device->local_fd,
                        IOCTL_KGSL_GPU_COMMAND, &req);
+
+      const int saved_errno = ret ? errno : 0;
+      const uint64_t elapsed_ms =
+         (os_time_get_nano() - submit_start_ns) / 1000000;
+      if (ret || elapsed_ms >= 1000 || (queue->device->submit_count & 255) == 0) {
+         mesa_logw("TU-DIAG GPU_COMMAND queue=%u submit=%u ibs=%u waits=%u"
+                   " timestamp=%u previous=%d elapsed_ms=%" PRIu64
+                   " ret=%d errno=%d (%s)",
+                   queue->msm_queue_id, queue->device->submit_count,
+                   req.numcmds, req.numsyncs, req.timestamp, queue->fence,
+                   elapsed_ms, ret, saved_errno, strerror(saved_errno));
+      }
+      errno = saved_errno;
 
       timestamp = req.timestamp;
    } else {
@@ -1649,6 +1694,12 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
                           IOCTL_KGSL_GPU_AUX_COMMAND, &req);
 
          if (ret) {
+            const int saved_errno = errno;
+            mesa_loge("TU-DIAG GPU_AUX_COMMAND queue=%u submit=%u bind=%u"
+                      " timestamp=%u ret=%d errno=%d (%s)",
+                      queue->msm_queue_id, queue->device->submit_count, i,
+                      req.timestamp, ret, saved_errno, strerror(saved_errno));
+            errno = saved_errno;
             result = vk_device_set_lost(&queue->device->vk,
                                         "bind submit failed: %s\n",
                                         strerror(errno));
@@ -1702,8 +1753,11 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
    kgsl_syncobj_destroy(&wait_sync);
 
    if (ret) {
+      const int saved_errno = errno;
+      mesa_loge("TU-DIAG device-lost queue=%u submit=%u timestamp=%u ret=%d",
+                queue->msm_queue_id, queue->device->submit_count, timestamp, ret);
       result = vk_device_set_lost(&queue->device->vk, "submit failed: %s\n",
-                                  strerror(errno));
+                                  strerror(saved_errno));
       goto fail_submit;
    }
 
@@ -1741,6 +1795,7 @@ static VkResult
 kgsl_device_init(struct tu_device *dev)
 {
    dev->fd = dev->physical_device->local_fd;
+   mesa_logw("TU-DIAG KGSL wait error propagation fix active; rendering unchanged");
    return VK_SUCCESS;
 }
 
@@ -1783,11 +1838,18 @@ kgsl_device_check_status(struct tu_device *device)
          uint32_t value = device->queues[i][q].msm_queue_id;
          VkResult status = get_kgsl_prop(device->fd, KGSL_PROP_GPU_RESET_STAT,
                                        &value, sizeof(value));
-         if (status != VK_SUCCESS)
+         if (status != VK_SUCCESS) {
+            mesa_loge("TU-DIAG reset-query queue=%u fence=%d result=%d",
+                      device->queues[i][q].msm_queue_id,
+                      p_atomic_read(&device->queues[i][q].fence), status);
             return vk_device_set_lost(&device->vk, "Failed to get GPU reset status");
+         }
 
          if (value != KGSL_CTX_STAT_NO_ERROR &&
             value != KGSL_CTX_STAT_INNOCENT_CONTEXT_RESET_EXT) {
+            mesa_loge("TU-DIAG reset-status queue=%u fence=%d reset=%u",
+                      device->queues[i][q].msm_queue_id,
+                      p_atomic_read(&device->queues[i][q].fence), value);
             return vk_device_set_lost(&device->vk, "GPU faulted or hung");
          }
       }

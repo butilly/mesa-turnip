@@ -363,7 +363,15 @@ tu6_emit_flushes(struct tu_cmd_buffer *cmd_buffer,
    BITMASK_ENUM(tu_cmd_flush_bits) flushes = cache->flush_bits;
    cache->flush_bits = 0;
 
-   if (TU_DEBUG(FLUSHALL))
+   /* GRID survives longer with FLUSHALL, but flushing before every draw is
+    * expensive. Keep its conservative cache operations where synchronization
+    * was already requested, leaving draws with no flush bits untouched.
+    * This is a scoped workaround experiment, not an identified cache hazard.
+    * Preserve explicit FLUSHALL as the full-flush comparison path.
+    */
+   if (TU_DEBUG(FLUSHALL) ||
+       (CHIP == A6XX && flushes &&
+        cmd_buffer->device->instance->drirc.misc.flush_all_at_sync_points))
       flushes |= TU_CMD_FLAG_ALL_CLEAN | TU_CMD_FLAG_ALL_INVALIDATE;
 
    if (TU_DEBUG(SYNCDRAW))
