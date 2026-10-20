@@ -363,16 +363,25 @@ tu6_emit_flushes(struct tu_cmd_buffer *cmd_buffer,
    BITMASK_ENUM(tu_cmd_flush_bits) flushes = cache->flush_bits;
    cache->flush_bits = 0;
 
-   /* GRID survives longer with FLUSHALL, but flushing before every draw is
-    * expensive. Keep its conservative cache operations where synchronization
-    * was already requested, leaving draws with no flush bits untouched.
-    * This is a scoped workaround experiment, not an identified cache hazard.
-    * Preserve explicit FLUSHALL as the full-flush comparison path.
+   /* Keep the full-flush comparison path and the existing sync-point override.
+    * GRID still faults when zero-flush draws are left untouched. For the next
+    * scoped experiment, restore the non-CCU part of FLUSHALL at those points:
+    * UCHE clean/invalidate, descriptor invalidation and CP waits. Do not force
+    * color/depth CCU writeback between otherwise unsynchronized draws.
+    * The missing dependency is not yet identified.
     */
    if (TU_DEBUG(FLUSHALL) ||
        (CHIP == A6XX && flushes &&
         cmd_buffer->device->instance->drirc.misc.flush_all_at_sync_points))
       flushes |= TU_CMD_FLAG_ALL_CLEAN | TU_CMD_FLAG_ALL_INVALIDATE;
+
+   if (CHIP == A6XX &&
+       cmd_buffer->device->instance->drirc.misc.flush_non_ccu_at_draws)
+      flushes |= TU_CMD_FLAG_CACHE_CLEAN |
+                 TU_CMD_FLAG_CACHE_INVALIDATE |
+                 TU_CMD_FLAG_BINDLESS_DESCRIPTOR_INVALIDATE |
+                 TU_CMD_FLAG_WAIT_MEM_WRITES |
+                 TU_CMD_FLAG_WAIT_FOR_ME;
 
    if (TU_DEBUG(SYNCDRAW))
       flushes |= TU_CMD_FLAG_WAIT_MEM_WRITES |
@@ -633,7 +642,9 @@ void
 tu_emit_cache_flush_renderpass(struct tu_cmd_buffer *cmd_buffer)
 {
    if (!cmd_buffer->state.renderpass_cache.flush_bits &&
-       likely(!tu_env.debug))
+       likely(!tu_env.debug) &&
+       !(CHIP == A6XX &&
+         cmd_buffer->device->instance->drirc.misc.flush_non_ccu_at_draws))
       return;
 
    struct tu_cs *cs = &cmd_buffer->draw_cs;
