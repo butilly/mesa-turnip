@@ -341,45 +341,72 @@ kgsl_bo_init(struct tu_device *dev,
    if (flags & TU_BO_ALLOC_NO_32B_ROLLOVER)
       req.flags |= KGSL_MEMFLAGS_FORCE_32BIT;
 
-   bool svm_fallback = false;
    const uint32_t requested_flags = req.flags;
    int ret = safe_ioctl(dev->physical_device->local_fd,
                         IOCTL_KGSL_GPUMEM_ALLOC_ID, &req);
    if (ret) {
+      const int alloc_errno = errno;
       tu_alloc_diag(dev, 1, "GPUMEM_ALLOC_ID", size, req.flags,
-                    flags, ret, errno);
+                    flags, ret, alloc_errno);
       /* Older KGSL kernels can exhaust their normal GPU VA window well
-       * before the system-memory heap. Retry ordinary allocations in the
-       * CPU/GPU shared VA range, using the existing replayable-BO mapping
-       * lifetime. Do not relax firmware rollover or sparse/replay rules.
+       * before the system-memory heap. SVM also requires a CPU VA hole,
+       * which need not be available under Wine. Retry ordinary allocations
+       * in the low GPU VA window instead, keeping CPU mapping independent.
+       * FORCE_32BIT is bit 32: GPUMEM_ALLOC_ID's 32-bit flags cannot carry it.
+       * Do not change firmware rollover, internal, sparse or replay rules.
        */
-      if (errno == ENOMEM && dev->gn_kgsl_svm_fallback && !lazy_vma &&
+      if (alloc_errno == ENOMEM && dev->gn_kgsl_low_va_fallback && !lazy_vma &&
           !client_iova &&
           !(flags & (TU_BO_ALLOC_REPLAYABLE | TU_BO_ALLOC_NO_32B_ROLLOVER |
                      TU_BO_ALLOC_INTERNAL_RESOURCE))) {
-         req = (struct kgsl_gpumem_alloc_id) {
-            .flags = requested_flags | KGSL_MEMFLAGS_USE_CPU_MAP,
+         struct kgsl_gpuobj_alloc low_req = {
             .size = size,
+            .flags = requested_flags | KGSL_MEMFLAGS_FORCE_32BIT,
          };
          ret = safe_ioctl(dev->physical_device->local_fd,
-                          IOCTL_KGSL_GPUMEM_ALLOC_ID, &req);
-         tu_alloc_diag(dev, 3, "GPUMEM_ALLOC_ID-SVM", size, req.flags,
-                       req.gpuaddr, ret, ret ? errno : 0);
-         if (!ret && !(req.flags & KGSL_MEMFLAGS_USE_CPU_MAP)) {
-            struct kgsl_gpumem_free_id free_req = { .id = req.id };
+                          IOCTL_KGSL_GPUOBJ_ALLOC, &low_req);
+         const int low_errno = ret ? errno : 0;
+         tu_alloc_diag(dev, 3, "GPUOBJ_ALLOC-lowVA", size, low_req.flags,
+                       0, ret, low_errno);
+         if (ret)
+            return vk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
+                             "KGSL low VA allocation failed (%s)",
+                             strerror(low_errno));
+
+         struct kgsl_gpuobj_info info = { .id = low_req.id };
+         ret = safe_ioctl(dev->physical_device->local_fd,
+                          IOCTL_KGSL_GPUOBJ_INFO, &info);
+         const int info_errno = ret ? errno : 0;
+         const uint64_t low_va_end = 1ull << 32;
+         const uint64_t required_flags = KGSL_MEMFLAGS_FORCE_32BIT |
+            KGSL_MEMFLAGS_GPUREADONLY | KGSL_MEMFLAGS_IOCOHERENT |
+            KGSL_CACHEMODE_MASK | KGSL_MEMFLAGS_USE_CPU_MAP;
+         const bool valid = !ret && info.gpuaddr && info.size >= size &&
+            low_req.mmapsize >= info.size && info.gpuaddr < low_va_end &&
+            low_req.mmapsize <= low_va_end - info.gpuaddr &&
+            (!align || !(info.gpuaddr & (align - 1))) &&
+            (info.flags & required_flags) == (low_req.flags & required_flags) &&
+            (info.flags & required_flags) ==
+               ((requested_flags | KGSL_MEMFLAGS_FORCE_32BIT) & required_flags);
+         tu_alloc_diag(dev, 3, "GPUOBJ_INFO-lowVA", size, info.flags,
+                       info.gpuaddr, valid ? 0 : -1, info_errno);
+         if (!valid) {
+            struct kgsl_gpumem_free_id free_req = { .id = low_req.id };
             safe_ioctl(dev->physical_device->local_fd,
                        IOCTL_KGSL_GPUMEM_FREE_ID, &free_req);
             return vk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
-                             "KGSL stripped USE_CPU_MAP on SVM retry");
+                             "KGSL low VA allocation failed address/flag validation");
          }
-         svm_fallback = !ret;
+         req.id = low_req.id;
+         req.flags = (uint32_t) info.flags;
+         req.size = info.size;
+         req.mmapsize = low_req.mmapsize;
+         req.gpuaddr = info.gpuaddr;
+      } else {
+         return vk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
+                          "GPUMEM_ALLOC_ID failed (%s)", strerror(alloc_errno));
       }
    }
-   if (ret) {
-      return vk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
-                       "GPUMEM_ALLOC_ID failed (%s)", strerror(errno));
-   }
-
    tu_alloc_diag(dev, 2, "GPUMEM_ALLOC_ID", size, req.flags,
                  req.gpuaddr, 0, 0);
 
@@ -402,17 +429,8 @@ kgsl_bo_init(struct tu_device *dev,
 
    if (lazy_vma) {
       result = kgsl_sparse_vma_map(dev, lazy_vma, bo, 0);
-   } else if ((flags & TU_BO_ALLOC_REPLAYABLE) || svm_fallback) {
+   } else if (flags & TU_BO_ALLOC_REPLAYABLE) {
       result = kgsl_bo_user_map(dev, bo, client_iova);
-      if (svm_fallback) {
-         tu_alloc_diag(dev, 3, "SVM-map", size, req.flags,
-                       result == VK_SUCCESS ? bo->iova : 0, result, 0);
-         if (result == VK_SUCCESS && align && (bo->iova & (align - 1))) {
-            kgsl_bo_finish(dev, bo);
-            return vk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
-                             "KGSL SVM retry did not preserve alignment");
-         }
-      }
    }
 
    if (result != VK_SUCCESS)

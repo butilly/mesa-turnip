@@ -321,7 +321,7 @@ struct tu_device
    int fd;
 
    bool gn_alloc_diag;
-   bool gn_kgsl_svm_fallback;
+   bool gn_kgsl_low_va_fallback;
    uint32_t gn_alloc_diag_count[4];
 
    struct ir3_compiler *compiler;

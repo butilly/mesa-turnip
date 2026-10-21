@@ -2904,13 +2904,12 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
 
    device->gn_alloc_diag = device->instance->vk.app_info.app_name &&
       !strcmp(device->instance->vk.app_info.app_name, "The Witch's Bakery.exe");
-   device->gn_kgsl_svm_fallback = device->gn_alloc_diag &&
-      is_kgsl(device->instance) && physical_device->dev_id.gpu_id == 640 &&
-      physical_device->has_set_iova;
+   device->gn_kgsl_low_va_fallback = device->gn_alloc_diag &&
+      is_kgsl(device->instance) && physical_device->dev_id.gpu_id == 640;
    if (device->gn_alloc_diag)
-      mesa_loge("GN-TU-ALLOC svm-fallback-v1 device=%u kgsl=%u svmFallback=%u heapBytes=%llu",
+      mesa_loge("GN-TU-ALLOC low-va-fallback-v1 device=%u kgsl=%u lowVaFallback=%u heapBytes=%llu",
                 device->device_idx, is_kgsl(device->instance),
-                device->gn_kgsl_svm_fallback,
+                device->gn_kgsl_low_va_fallback,
                 (unsigned long long) physical_device->heap.size);
 
    result = tu_drm_device_init(device);
