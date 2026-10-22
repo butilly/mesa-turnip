@@ -22,6 +22,9 @@ def declare_options():
     EV = drirc_gen.DrircEnumValue
 
     debug_options = [
+        B("tu_gen8_cache_flush_diagnostic", False,
+          "Force full cache clean and invalidate on Gen8 to bisect GPU hangs",
+          c_name="gen8_cache_flush_diagnostic"),
         B("tu_dont_care_as_load", False,
           "Treat VK_ATTACHMENT_LOAD_OP_DONT_CARE as LOAD_OP_LOAD, workaround on tiler GPUs for games that confuse these two load ops",
           c_name="dont_care_as_load")
