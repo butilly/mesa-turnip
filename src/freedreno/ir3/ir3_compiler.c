@@ -128,8 +128,6 @@ static const nir_shader_compiler_options ir3_base_options = {
    .lower_isign = true,
    .lower_ifind_msb = true,
    .lower_ufind_msb = true,
-   .lower_uadd_carry = true,
-   .lower_usub_borrow = true,
    .lower_mul_high = true,
    .lower_mul_2x32_64 = true,
    .float_mul_add16 = nir_float_muladd_support_has_fmad | nir_float_muladd_support_fuse,
@@ -327,6 +325,15 @@ ir3_compiler_create(struct fd_device *dev, const struct fd_dev_id *dev_id,
       compiler->max_const_geom = 512;
       compiler->max_const_frag = 512;
       compiler->max_const_compute = 512;
+
+      /* a5xx maps the UAV descriptor table into the top 64 vec4 of every
+       * stage's constant window, so a stage can use only the 448 below it.
+       */
+      if (compiler->gen == 5) {
+         compiler->max_const_geom = 448;
+         compiler->max_const_frag = 448;
+         compiler->max_const_compute = 448;
+      }
 
       /* Note: this will have to change if/when we support tess+GS on
        * earlier gen's.

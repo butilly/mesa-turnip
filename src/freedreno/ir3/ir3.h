@@ -1108,6 +1108,8 @@ void ir3_instr_add_dep(struct ir3_instruction *instr,
                        struct ir3_instruction *dep);
 const char *ir3_instr_name(struct ir3_instruction *instr);
 void ir3_instr_remove(struct ir3_instruction *instr);
+struct ir3_instruction *ir3_instr_prev(struct ir3_instruction *instr);
+struct ir3_instruction *ir3_instr_next(struct ir3_instruction *instr);
 
 void ir3_instr_create_rpt(struct ir3_instruction **instrs, unsigned n);
 bool ir3_instr_is_rpt(const struct ir3_instruction *instr);
@@ -3171,11 +3173,14 @@ INSTR2NODST(STC)
 INSTR2NODST(STSC)
 INSTR2(SHFL)
 #ifndef GPU
+#elif GPU >= 500
+INSTR5(LDG_A);
+INSTR6NODST(STG_A);
+#endif
+#ifndef GPU
 #elif GPU >= 600
 INSTR4NODST(STIB);
 INSTR3(LDIB);
-INSTR5(LDG_A);
-INSTR6NODST(STG_A);
 INSTR2(ATOMIC_G_ADD)
 INSTR2(ATOMIC_G_SUB)
 INSTR2(ATOMIC_G_XCHG)

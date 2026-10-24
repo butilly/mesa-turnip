@@ -1062,6 +1062,26 @@ ir3_instr_remove(struct ir3_instruction *instr)
    }
 }
 
+struct ir3_instruction *
+ir3_instr_prev(struct ir3_instruction *instr)
+{
+   if (instr->node.prev == &instr->block->instr_list) {
+      return NULL;
+   }
+
+   return list_entry(instr->node.prev, struct ir3_instruction, node);
+}
+
+struct ir3_instruction *
+ir3_instr_next(struct ir3_instruction *instr)
+{
+   if (instr->node.next == &instr->block->instr_list) {
+      return NULL;
+   }
+
+   return list_entry(instr->node.next, struct ir3_instruction, node);
+}
+
 void
 ir3_instr_create_rpt(struct ir3_instruction **instrs, unsigned n)
 {
@@ -1941,11 +1961,15 @@ ir3_valid_flags(struct ir3_instruction *instr, unsigned n, unsigned flags)
             return false;
 
          /* disallow immediates in anything but the SSBO slot argument for
-          * cat6 instructions:
+          * cat6 instructions.  The a5xx global form is the exception: its
+          * last source is an immediate byte offset occupying a field that is
+          * a register everywhere else, so it has to reach the encoder as one.
           */
          if ((is_global_a3xx_atomic(instr->opc) ||
               is_bindless_atomic(instr->opc)) &&
-             (n != 0)) {
+             (n != 0) &&
+             !(n == 3 && is_global_a3xx_atomic(instr->opc) &&
+               !(instr->srcs[0]->flags & IR3_REG_IMMED))) {
             return false;
          }
 

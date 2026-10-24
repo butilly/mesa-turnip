@@ -325,7 +325,10 @@ struct radeon_info {
                              * the LLVM version doesn't work with multiparts shaders.
                              */
    bool has_smem_partial_oob_access_bug;
+   bool has_streamout_vgt_hang_bug;
+   bool has_draw_opaque_ge_bug;
    bool has_out_of_order_uncached_l2;
+   bool has_cp_dma_unaligned_copy_perf_issue;
 
    /* Display features. */
    /* There are 2 display DCC codepaths, because display expects unaligned DCC. */
@@ -355,6 +358,7 @@ struct radeon_info {
    bool r600_has_virtual_memory;
    uint32_t max_tcc_blocks;
    uint32_t tcc_cache_line_size;
+   uint32_t smem_cache_line_size;
    bool tcc_rb_non_coherent; /* whether L2 inv is needed for render->texture transitions */
    bool cp_sdma_ge_use_system_memory_scope;
    bool cp_dma_use_L2;
