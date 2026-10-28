@@ -3238,6 +3238,22 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
        !physical_device->instance->drirc.misc.enable_d24s8_border_color_workaround);
    device->use_lrz = !TU_DEBUG_START(NOLRZ);
 
+   /* Diagnostic package: keep the game's API/runtime unchanged and collect
+    * existing GPU timestamps even when the host environment is not forwarded.
+    */
+   {
+      const char *trace_app = device->instance->vk.app_info.app_name;
+      const bool trace_pumpkin = trace_app &&
+         !strcmp(trace_app, "PumpkinJack-Win64-Shipping.exe");
+      if (trace_pumpkin) {
+         setenv("MESA_GPU_TRACES", "print", 1);
+         setenv("TU_GPU_TRACEPOINT",
+                "-all,cmd_buffer,render_pass,compute,compute_indirect", 1);
+      }
+      mesa_logi("TU-PROFILE app=%s auto_enable=%u",
+                trace_app ? trace_app : "unknown", trace_pumpkin);
+   }
+
    tu_gpu_tracepoint_config_variable();
 
    device->submit_count = 0;
@@ -3252,6 +3268,10 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
                      tu_trace_capture_data,
                      tu_trace_get_data,
                      tu_trace_delete_flush_data);
+
+   mesa_logi("TU-PROFILE enabled=%u mask=0x%" PRIx64,
+             u_trace_should_process(&device->trace_context),
+             tu_gpu_tracepoint);
 
    tu_breadcrumbs_init(device);
 
