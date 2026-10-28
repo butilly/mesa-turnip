@@ -177,7 +177,8 @@ static struct u_trace_printer txt_printer = {
 
 #if DETECT_OS_ANDROID
 /* Diagnostic package: stdout from the native driver is not necessarily in
- * the report. Use Android logging and sample complete frames to bound output.
+ * the report. Use Android logging and sample complete batches to bound output.
+ * Wrapped presentation may never advance frame_nr, so sample batch_nr instead.
  * Timestamps remain absolute GPU nanoseconds, not CPU submission timings.
  */
 static void
@@ -185,7 +186,7 @@ print_logcat_event(struct u_trace_context *utctx,
                    const struct u_trace_event *evt,
                    uint64_t ns, int32_t delta, const void *indirect)
 {
-   if (utctx->frame_nr % 120 != 0)
+   if (utctx->batch_nr % 1024 != 0)
       return;
 
    char *payload = NULL;
