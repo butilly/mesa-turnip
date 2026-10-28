@@ -26,6 +26,8 @@
 #include <inttypes.h>
 
 #include "util/list.h"
+#include "util/log.h"
+#include "util/memstream.h"
 #include "util/u_call_once.h"
 #include "util/u_debug.h"
 #include "util/u_vector.h"
@@ -172,6 +174,45 @@ static struct u_trace_printer txt_printer = {
    .end_of_batch = &print_txt_end_of_batch,
    .event = &print_txt_event,
 };
+
+#if DETECT_OS_ANDROID
+/* Diagnostic package: stdout from the native driver is not necessarily in
+ * the report. Use Android logging and sample complete frames to bound output.
+ * Timestamps remain absolute GPU nanoseconds, not CPU submission timings.
+ */
+static void
+print_logcat_event(struct u_trace_context *utctx,
+                   const struct u_trace_event *evt,
+                   uint64_t ns, int32_t delta, const void *indirect)
+{
+   if (utctx->frame_nr % 120 != 0)
+      return;
+
+   char *payload = NULL;
+   size_t size = 0;
+   struct u_memstream stream;
+   if (evt->tp->print && u_memstream_open(&stream, &payload, &size)) {
+      evt->tp->print(u_memstream_get(&stream), evt->payload, indirect);
+      u_memstream_close(&stream);
+   }
+
+   mesa_logi("TU-PROFILE ctx=%p frame=%u batch=%u ns=%" PRIu64
+             " delta=%d %s %s", (void *)utctx, utctx->frame_nr,
+             utctx->batch_nr, ns, delta, evt->tp->name,
+             payload ? payload : "");
+   free(payload);
+}
+
+static struct u_trace_printer logcat_printer = {
+   .start = &print_txt_start,
+   .end = &print_txt_start,
+   .start_of_frame = &print_txt_start,
+   .end_of_frame = &print_txt_start,
+   .start_of_batch = &print_txt_start,
+   .end_of_batch = &print_txt_start,
+   .event = &print_logcat_event,
+};
+#endif
 
 static void
 print_csv_start(struct u_trace_context *utctx)
@@ -450,6 +491,9 @@ u_trace_context_init(struct u_trace_context *utctx,
          utctx->out_printer = &csv_printer;
       } else {
          utctx->out_printer = &txt_printer;
+#if DETECT_OS_ANDROID
+         utctx->out_printer = &logcat_printer;
+#endif
       }
    } else {
       utctx->out = NULL;
