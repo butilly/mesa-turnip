@@ -248,6 +248,7 @@ visit_intrinsic(nir_intrinsic_instr *instr, struct divergence_state *state)
    case nir_intrinsic_load_raw_vertex_offset:
    case nir_intrinsic_load_first_vertex:
    case nir_intrinsic_load_draw_id:
+   case nir_intrinsic_load_draw_id_offset_ir3:
    case nir_intrinsic_load_is_indexed_draw:
    case nir_intrinsic_load_viewport_scale:
    case nir_intrinsic_load_user_clip_plane:
@@ -734,6 +735,7 @@ visit_intrinsic(nir_intrinsic_instr *instr, struct divergence_state *state)
 
    case nir_intrinsic_image_load:
    case nir_intrinsic_image_deref_load:
+   case nir_intrinsic_image_deref_input_attachment_load:
    case nir_intrinsic_bindless_image_load:
    case nir_intrinsic_image_heap_load:
    case nir_intrinsic_image_sparse_load:
@@ -924,6 +926,7 @@ visit_intrinsic(nir_intrinsic_instr *instr, struct divergence_state *state)
    case nir_intrinsic_load_color1_amd:
    case nir_intrinsic_load_sample_id:
    case nir_intrinsic_load_sample_mask_in:
+   case nir_intrinsic_load_poly_line_smooth_coverage:
    case nir_intrinsic_load_interpolated_input:
    case nir_intrinsic_load_interpolated_input_amd:
    case nir_intrinsic_load_point_coord_maybe_flipped:
@@ -944,6 +947,8 @@ visit_intrinsic(nir_intrinsic_instr *instr, struct divergence_state *state)
    case nir_intrinsic_load_var_special_pan:
    case nir_intrinsic_load_persp_center_rhw_ir3:
    case nir_intrinsic_load_input_attachment_coord:
+   case nir_intrinsic_load_depth_input_attachment_coord:
+   case nir_intrinsic_load_stencil_input_attachment_coord:
    case nir_intrinsic_interp_deref_at_offset:
    case nir_intrinsic_interp_deref_at_sample:
    case nir_intrinsic_interp_deref_at_centroid:
@@ -958,7 +963,6 @@ visit_intrinsic(nir_intrinsic_instr *instr, struct divergence_state *state)
    case nir_intrinsic_load_frag_coord_w:
    case nir_intrinsic_load_frag_coord_w_rcp:
    case nir_intrinsic_load_frag_coord_unscaled_ir3:
-   case nir_intrinsic_load_frag_coord_gmem_ir3:
    case nir_intrinsic_load_pixel_coord:
    case nir_intrinsic_load_pixel_coord_intel:
    case nir_intrinsic_load_fully_covered:
@@ -1049,6 +1053,7 @@ visit_intrinsic(nir_intrinsic_instr *instr, struct divergence_state *state)
    case nir_intrinsic_elect:
    case nir_intrinsic_elect_any_ir3:
    case nir_intrinsic_load_tlb_color_brcm:
+   case nir_intrinsic_load_tlb_depth_stencil_brcm:
    case nir_intrinsic_load_tess_rel_patch_id_amd:
    case nir_intrinsic_load_gs_vertex_offset_amd:
    case nir_intrinsic_is_subgroup_invocation_lt_amd:
@@ -1143,6 +1148,7 @@ visit_intrinsic(nir_intrinsic_instr *instr, struct divergence_state *state)
    case nir_intrinsic_load_global_transpose_amd:
    case nir_intrinsic_load_deref_transpose_amd:
    case nir_intrinsic_load_global_tr_amd:
+   case nir_intrinsic_trace_ray_intel:
       is_divergent = true;
       break;
 

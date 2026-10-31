@@ -1776,9 +1776,16 @@ blorp_emit_hiz_op(struct blorp_batch *batch,
     *    D32_FLOAT, then +/-DENORM values are also allowed.
     *
     * Set the bounds to match our hardware limits.
+    *
+    * On GFX35+, it is possible to skip the viewport emission.
+    * (HSD 14022502615).
     */
-   if (params->depth.enabled && params->hiz_op == ISL_AUX_OP_FAST_CLEAR)
-      blorp_emit_cc_viewport(batch);
+   if (params->depth.enabled && params->hiz_op == ISL_AUX_OP_FAST_CLEAR) {
+      if (batch->flags & BLORP_BATCH_NO_HIZ_EMIT_DEPTH_CLEAR_VIEWPORT)
+         assert(batch->blorp->isl_dev->info->ver >= 35);
+      else
+         blorp_emit_cc_viewport(batch);
+   }
 
    /* Make sure to disable fragment shader, a previous draw might have enabled
     * a SIMD32 shader and we could be dispatching threads here with MSAA 16x
@@ -1998,8 +2005,9 @@ blorp_get_compute_push_const(struct blorp_batch *batch,
           cs_prog_data->push.per_thread.size == sizeof(params->wm_inputs));
 
 #if GFX_VERx10 >= 350
+   const bool use_efficient_64bit = params->use_efficient_64bit;
    uint32_t io_align, io_size, push_offset, sampler_offset;
-   if (params->use_efficient_64bit) {
+   if (use_efficient_64bit) {
       blorp_get_efficient_64bit_io_size(batch, params, &io_align, &io_size,
                                         &sampler_offset,
                                         &push_offset);
@@ -2052,7 +2060,7 @@ blorp_get_compute_push_const(struct blorp_batch *batch,
    *state_size = push_const_size;
 
 #if GFX_VERx10 >= 350
-   if (params->use_efficient_64bit) {
+   if (use_efficient_64bit) {
       *state_surfaces_offset = push_const_size - io_size;
       *state_sampler_offset = push_const_size - io_size + sampler_offset;
    }
@@ -2254,8 +2262,8 @@ blorp_exec_compute(struct blorp_batch *batch, const struct blorp_params *params)
    assert(cs_prog_data->local_size[2] == 1);
    uint32_t push_const_offset;
    uint32_t push_const_size;
-   uint32_t surfaces_offset;
-   uint32_t sampler_offset;
+   uint32_t surfaces_offset = 0;
+   uint32_t sampler_offset = 0;
 
    UNUSED void *push_const_ptr =
       blorp_get_compute_push_const(batch, params, dispatch.threads,

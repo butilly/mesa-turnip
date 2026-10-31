@@ -54,7 +54,8 @@ if get_option('b_lto')
 endif
 
 with_llvm = get_option('llvm')
-amd_with_llvm = with_llvm.allowed() and get_option('amd-use-llvm')
+amd_options = get_option('amd-options')
+amd_with_llvm = with_llvm.allowed() and amd_options.contains('use-llvm')
 
 with_mesa_debug = get_option('buildtype') == 'debug'
 
@@ -111,7 +112,6 @@ with_vulkan_overlay_layer = get_option('vulkan-layers').contains('overlay')
 with_vulkan_device_select_layer = get_option('vulkan-layers').contains('device-select')
 with_vulkan_screenshot_layer = get_option('vulkan-layers').contains('screenshot')
 with_vulkan_vram_report_limit_layer = get_option('vulkan-layers').contains('vram-report-limit')
-with_vulkan_anti_lag_layer = get_option('vulkan-layers').contains('anti-lag')
 with_tools = get_option('tools')
 if with_tools.contains('all')
   with_tools = [
@@ -210,7 +210,8 @@ elif gallium_drivers.contains('all')
    ]
 endif
 
-with_amdgpu_virtio = get_option('amdgpu-virtio')
+with_amdgpu_virtio = amd_options.contains('virtio')
+with_panfrost_vdrm = get_option('panfrost-virtio')
 
 with_gallium_radeonsi = gallium_drivers.contains('radeonsi')
 with_gallium_r300 = gallium_drivers.contains('r300')
@@ -355,6 +356,7 @@ with_vdrm = [
   with_amdgpu_virtio,
   freedreno_kmds.contains('virtio'),
   with_gallium_asahi,
+  with_panfrost_vdrm,
   with_asahi_vk,
   with_intel_virtio,
 ].contains(true)
@@ -397,6 +399,11 @@ with_any_intel = [
   with_intel_vk,
 ].contains(true)
 with_any_nouveau = with_gallium_nouveau or with_nouveau_vk
+with_any_panfrost = [
+  with_gallium_panfrost,
+  with_panfrost_vk,
+  with_tools.contains('panfrost'),
+].contains(true)
 
 # needed in the loader
 if with_nouveau_vk
@@ -432,8 +439,8 @@ elif system_has_kms_drm
 elif host_machine.system() == 'gnu' or (freedreno_kmds.contains('kgsl') and with_gallium_zink)
   with_dri_platform = 'pseudo-drm'
 else
-  # FIXME: haiku doesn't use dri, and xlib doesn't use dri, probably should
-  # assert here that one of those cases has been met.
+  # FIXME: haiku doesn't use dri, probably should
+  # assert here that this case has been met.
   # FIXME: illumos ends up here as well
   with_dri_platform = 'none'
 endif
@@ -531,10 +538,6 @@ if with_glx == 'auto'
   elif with_gallium
     # Even when building just gallium drivers the user probably wants dri
     with_glx = 'dri'
-  elif with_platform_x11 and with_any_opengl and not with_any_vk
-    # The automatic behavior should not be to turn on xlib based glx when
-    # building only vulkan drivers
-    with_glx = 'xlib'
   else
     with_glx = 'disabled'
   endif
@@ -567,7 +570,6 @@ with_xlib_lease = get_option('xlib-lease') \
 
 with_egl = get_option('egl') \
   .require(with_platform_windows or with_platform_haiku or with_dri or with_platform_android, error_message : 'EGL requires DRI, Haiku, Windows or Android') \
-  .require(with_glx != 'xlib', error_message :'EGL requires DRI, but GLX is being built with xlib support') \
   .disable_auto_if(with_platform_haiku) \
   .allowed()
 
@@ -675,22 +677,12 @@ endif
 if with_glx != 'disabled'
   if not (with_platform_x11 and with_any_opengl)
     error('Cannot build GLX support without X11 platform support and at least one OpenGL API')
-  elif with_glx == 'xlib'
-    if not with_gallium
-      error('xlib based GLX requires at least one gallium driver')
-    elif not with_gallium_swrast
-      error('xlib based GLX requires softpipe or llvmpipe.')
-    elif with_dri
-      error('xlib conflicts with any dri driver')
-    endif
   endif
 endif
 
 _glvnd = get_option('glvnd') \
   .require(not with_platform_windows,
            error_message: 'glvnd cannot be used on Windows') \
-  .require(with_glx != 'xlib',
-           error_message: 'Cannot build glvnd support for GLX that is not DRI based.') \
   .require(with_glx != 'disabled' or with_egl,
            error_message: 'glvnd requires DRI based GLX and/or EGL') \
   .require(get_option('egl-lib-suffix') == '',
@@ -852,12 +844,13 @@ _va_drivers = [
   with_gallium_r600,
   with_gallium_radeonsi,
   with_gallium_virgl,
+  with_gallium_zink,
 ]
 
 allow_fallback_for_libva = get_option('allow-fallback-for').contains('libva')
 _va = get_option('gallium-va') \
   .require(_va_drivers.contains(true),
-           error_message : 'VA state tracker requires at least one of the following gallium drivers: r600, radeonsi, nouveau, d3d12 (with option gallium-d3d12-video), virgl.')
+           error_message : 'VA state tracker requires at least one of the following gallium drivers: r600, radeonsi, nouveau, zink, d3d12 (with option gallium-d3d12-video), virgl.')
 _dep_va_name = host_machine.system() == 'windows' ? 'libva-win32' : 'libva'
 dep_va = dependency(
   _dep_va_name, version : '>= 1.8.0',
@@ -926,7 +919,7 @@ endif
 
 _rtti = get_option('cpp_rtti')
 
-with_panfrost_rust = (with_gallium_panfrost or with_panfrost_vk) and get_option('panfrost-rust')
+with_panfrost_rust = with_any_panfrost and get_option('panfrost-rust')
 
 with_gallium_rusticl = get_option('gallium-rusticl')
 if with_gallium_rusticl
@@ -1082,21 +1075,17 @@ endif
 gl_pkgconfig_c_flags = []
 with_glx_indirect_rendering = false
 if with_platform_x11
-  if with_glx == 'xlib'
-    pre_args += '-DUSE_XSHM'
-  else
-    with_glx_indirect_rendering = true
-    pre_args += '-DGLX_INDIRECT_RENDERING'
-    if with_glx_direct
-      pre_args += '-DGLX_DIRECT_RENDERING'
-    endif
-    if with_dri_platform == 'drm'
-      pre_args += '-DGLX_USE_DRM'
-    elif with_dri_platform == 'apple'
-      pre_args += '-DGLX_USE_APPLEGL'
-    elif with_dri_platform == 'windows'
-      pre_args += '-DGLX_USE_WINDOWSGL'
-    endif
+  with_glx_indirect_rendering = true
+  pre_args += '-DGLX_INDIRECT_RENDERING'
+  if with_glx_direct
+    pre_args += '-DGLX_DIRECT_RENDERING'
+  endif
+  if with_dri_platform == 'drm'
+    pre_args += '-DGLX_USE_DRM'
+  elif with_dri_platform == 'apple'
+    pre_args += '-DGLX_USE_APPLEGL'
+  elif with_dri_platform == 'windows'
+    pre_args += '-DGLX_USE_WINDOWSGL'
   endif
 endif
 
@@ -1238,7 +1227,7 @@ with_split_debug = get_option('split-debug') \
     error_message : 'split-debug requires the linker argument -Wl,--gdb-index')
 
 if with_split_debug.allowed() and get_option('debug')
-  add_project_arguments('-gsplit-dwarf', language : ['c', 'cpp'])
+  add_global_arguments('-gsplit-dwarf', language : ['c', 'cpp'])
   add_project_link_arguments('-Wl,--gdb-index', language : ['c', 'cpp'])
 endif
 
@@ -1313,9 +1302,6 @@ if cc.compiles('__uint128_t foo(void) { return 0; }',
   pre_args += '-DHAVE_UINT128'
 endif
 
-if cc.has_function('reallocarray')
-   pre_args += '-DHAVE_REALLOCARRAY'
-endif
 if cc.has_function('fmemopen')
    pre_args += '-DHAVE_FMEMOPEN'
 endif
@@ -1688,7 +1674,7 @@ endif
 
 foreach h : ['xlocale.h', 'linux/futex.h', 'endian.h', 'dlfcn.h', 'sys/shm.h',
              'cet.h', 'pthread_np.h', 'poll.h', 'sys/inotify.h',
-             'linux/udmabuf.h']
+             'linux/udmabuf.h', 'fenv.h']
   if cc.check_header(h)
     pre_args += '-DHAVE_@0@'.format(h.to_upper().underscorify())
   endif
@@ -1720,6 +1706,8 @@ if cc.has_header_symbol('unistd.h', '_SC_PHYS_PAGES')
   pre_args += '-DHAVE_SC_PHYS_PAGES'
 endif
 
+# Meson adds -fpermissive to GCC C++ checks, which would allow GNU qsort_r to
+# compile against a BSD prototype (not good)
 if cpp.links('''
     #define _GNU_SOURCE
     #include <stdlib.h>
@@ -1732,7 +1720,7 @@ if cpp.links('''
       qsort_r((void*)&arr[0], 1, 1, dcomp, t);
       return (0);
     }''',
-    args : pre_args,
+    args : pre_args + cpp.get_supported_arguments('-fno-permissive'),
     name : 'GNU qsort_r')
   pre_args += '-DHAVE_GNU_QSORT_R'
 elif cpp.links('''
@@ -1970,7 +1958,7 @@ if dep_libudev.found()
   pre_args += '-DHAVE_LIBUDEV'
 endif
 
-llvm_modules = ['bitwriter', 'engine', 'mcdisassembler', 'mcjit', 'core', 'executionengine', 'scalaropts', 'transformutils', 'instcombine']
+llvm_modules = ['bitwriter', 'engine', 'mcdisassembler', 'core', 'executionengine', 'scalaropts', 'transformutils', 'instcombine']
 llvm_optional_modules = ['coroutines']
 if with_amd_vk or with_gallium_radeonsi
   llvm_modules += ['amdgpu', 'bitreader', 'ipo']
@@ -1999,6 +1987,12 @@ endif
 # ORCJIT for llvmpipe functionality.
 llvm_has_mcjit = host_machine.cpu_family() in ['aarch64', 'arm', 'mips', 'mips64', 'ppc', 'ppc64', 's390x', 'x86', 'x86_64']
 llvm_with_orcjit = get_option('llvm-orcjit') or not llvm_has_mcjit
+
+if llvm_with_orcjit
+  llvm_modules += ['orcjit']
+else
+  llvm_modules += ['mcjit']
+endif
 
 if (with_amd_vk or with_gallium_radeonsi) and amd_with_llvm
   _llvm_version = '>= 18.0.0'
@@ -2256,6 +2250,7 @@ endif
 
 with_wayland_bind_display = with_platform_wayland and get_option('legacy-wayland').contains('bind-wayland-display')
 if with_platform_wayland
+  dep_wl_protocols = dependency('wayland-protocols', version : '>= 1.49', default_options: [ 'tests=false' ])
   dep_wayland_client = dependency('wayland-client', version : '>=1.18')
   dep_wayland_server = dependency('wayland-server', version : '>=1.18')
   if with_egl
@@ -2318,10 +2313,7 @@ with_xcb_keysyms = false
 if with_platform_x11
   dep_xcb = dependency('xcb')
   dep_xcb_xrandr = dependency('xcb-randr')
-  if with_glx == 'xlib'
-    dep_x11 = dependency('x11', version : dep_xlib_version)
-    dep_xext = dependency('xext')
-  elif with_glx == 'dri'
+  if with_glx == 'dri'
     dep_x11 = dependency('x11', version : dep_xlib_version)
     dep_xext = dependency('xext')
     dep_xcb_glx = dependency('xcb-glx', version : dep_xcb_glx_version)
@@ -2357,10 +2349,8 @@ if with_platform_x11
     dep_xshmfence = dependency('xshmfence', version : dep_xshmfence_version)
     pre_args += '-DHAVE_X11_DRM'
   endif
-  if with_glx == 'dri' or with_glx == 'xlib'
-    dep_glproto = dependency('glproto', version : dep_glproto_version)
-  endif
   if with_glx == 'dri'
+    dep_glproto = dependency('glproto', version : dep_glproto_version)
     if with_dri_platform == 'drm' or with_dri_platform == 'pseudo-drm'
       if with_glx_direct
         dep_xxf86vm = dependency('xxf86vm')
@@ -2442,7 +2432,7 @@ with_teflon = get_option('teflon')
 
 with_torx = get_option('torx')
 dep_executorch = null_dep
-dep_executorch_portable_ops = null_dep
+dep_executorch_cpu_ops = null_dep
 dep_executorch_quantized_ops = null_dep
 if with_torx
   py_mod = import('python')
@@ -2451,8 +2441,12 @@ if with_torx
   _et_libdir = dep_executorch.get_variable(pkgconfig : 'libdir', default_value : '')
   # The Torx test suite needs the operators registered by these libraries, but libexecutorch
   # doesn't link to them, so Torx needs to link to them explicitly.
-  dep_executorch_portable_ops = cc.find_library('executorch_portable_ops',
-    dirs : _et_libdir)
+  dep_executorch_cpu_ops = cc.find_library('executorch_kernels_optimized',
+    dirs : _et_libdir, required : false)
+  if not dep_executorch_cpu_ops.found()
+    dep_executorch_cpu_ops = cc.find_library('executorch_portable_ops',
+      dirs : _et_libdir)
+  endif
   dep_executorch_quantized_ops = cc.find_library('executorch_kernels_quantized',
     dirs : _et_libdir, required : false)
   if not dep_executorch_quantized_ops.found()
@@ -2483,9 +2477,7 @@ add_project_arguments(cpp_args, language : ['cpp'])
 
 gl_priv_reqs = []
 
-if with_glx == 'xlib'
-  gl_priv_reqs += ['x11', 'xext', 'xcb']
-elif with_glx == 'dri'
+if with_glx == 'dri'
   gl_priv_reqs += [
     'x11', 'xext', 'xfixes', 'x11-xcb', 'xcb',
     'xcb-glx >= 1.8.1']

@@ -17,7 +17,10 @@ fn move_src_to_tmp(b: &mut impl SSABuilder, src: &mut Src, bytes: u8) {
     debug_assert!(bytes > 0 && bytes <= 8);
     let tmp = b.alloc_ref((bytes * 8).into());
     let src_ref = std::mem::replace(&mut src.src_ref, tmp.clone().into());
-    b.copy_to(tmp.into(), DataType::i(bytes * 8), src_ref.into());
+
+    // Make sure the Src replicates since zero and imms assume Swizzle::NONE
+    let src = Src::from(src_ref).swizzle(Swizzle::replicate_scalar(bytes * 8));
+    b.copy_to(tmp.into(), DataType::i(bytes * 8), src);
 }
 
 /// Legalizes immediate sources by ensuring the following:
@@ -264,6 +267,11 @@ impl LegalizeFAU<'_> {
 
     fn extract_srcs(&mut self, model: &dyn Model, op: &Op) {
         for (src_idx, src) in op.srcs().iter().enumerate() {
+            // Fake sources don't count towards FAU bounds
+            if model.op_src_is_fake(op, src) {
+                continue;
+            }
+
             if matches!(src.src_ref, SrcRef::Zero) {
                 self.reads_k0 = true;
             }
@@ -271,10 +279,17 @@ impl LegalizeFAU<'_> {
                 continue;
             };
 
+            // The hardware doesn't make a distinction between a 64-bit FAU
+            // source with a swizzle which only reads a subset of the bytes
+            // and a source which reads the whole 64-bit FAU.  If it uses
+            // SourceEncoding64 and isn't a small constant, it's 64-bit.
+            let is64 = fau.page != FAUPage::SmallConst
+                && model.op_src_is_64bit(&op, src);
+
             let idx64 = fau.idx >> 1;
             let word = fau.idx & 1;
 
-            if word == 1 && model.op_src_is_64bit(&op, src) {
+            if is64 && word == 1 {
                 self.src64_w1.insert(src_idx);
 
                 // We can't handle .w1 in most 64-bit ops.  If we can't compose
@@ -304,11 +319,7 @@ impl LegalizeFAU<'_> {
             };
 
             slot.use_count += 1;
-            slot.words_used |= if fau.load64 {
-                0b11
-            } else {
-                1 << (fau.idx & 0b1)
-            };
+            slot.words_used |= if is64 { 0b11 } else { 1 << word };
         }
     }
 
@@ -492,6 +503,11 @@ fn legalize_fau_srcs(
     if !ctx.slots.is_empty() {
         if b.model().op_is_message(op) {
             ctx.legalize_message();
+            // BLEND and ATEST act either as ALU or as message instructions
+            // depending on state so we have to legalize both ways.
+            if matches!(op, Op::Blend(_) | Op::BlendCall(_) | Op::ATest(_)) {
+                ctx.legalize_execution_unit();
+            }
         } else {
             ctx.legalize_execution_unit();
         }

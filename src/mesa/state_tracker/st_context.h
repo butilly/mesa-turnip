@@ -296,6 +296,12 @@ struct st_context
     */
    bool fp_stipple_polygon;
 
+   /* _NEW_LIGHT_STATE dependent parts of the fragment shader key */
+   bool fp_lower_flatshade;
+   bool fp_lower_two_sided_color;
+   /* ctx->Light._ClampVertexColor at the last validation of each stage */
+   bool vert_color_clamped[MESA_SHADER_GEOMETRY + 1];
+
    /** for glDraw/CopyPixels */
    struct {
       void *zs_shaders[6];
@@ -368,6 +374,10 @@ struct st_context
    void *winsys_drawable_handle;
 
    bool uses_user_vertex_buffers;
+   /* Whether the current vertex elements have a format that u_vbuf must
+    * translate. Only updated if cso_context::vertex_format_fallbacks is set.
+    */
+   bool vertex_formats_need_vbuf;
 
    unsigned last_used_atomic_bindings[MESA_SHADER_MESH_STAGES];
    unsigned last_num_ssbos[MESA_SHADER_MESH_STAGES];

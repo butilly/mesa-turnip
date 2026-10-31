@@ -658,7 +658,7 @@ can_use_opsel(amd_gfx_level gfx_level, aco_opcode op, int idx)
 }
 
 bool
-can_write_m0(const aco_ptr<Instruction>& instr)
+can_write_m0(const Instruction* instr)
 {
    if (instr->isSALU())
       return true;
@@ -1248,13 +1248,6 @@ get_vcmpx(aco_opcode op)
    return get_cmp_info(op, &info) ? info.vcmpx : aco_opcode::num_opcodes;
 }
 
-bool
-is_cmpx(aco_opcode op)
-{
-   CmpInfo info;
-   return !get_cmp_info(op, &info);
-}
-
 aco_opcode
 get_swapped_opcode(aco_opcode opcode, unsigned idx0, unsigned idx1)
 {
@@ -1806,9 +1799,7 @@ parse_depctr_wait(const Instruction* instr)
          res.sa_sdst = 0;
          break;
       case aco_opcode::s_cbranch_scc0:
-      case aco_opcode::s_cbranch_scc1:
-         res.sa_sdst = 0;
-         break;
+      case aco_opcode::s_cbranch_scc1: res.sa_sdst = 0; break;
       default: break;
       }
    } else if (instr->isSALU()) {

@@ -35,6 +35,7 @@
 #include "main/shaderobj.h"
 #include "main/state.h"
 #include "main/version.h"
+#include "main/varray.h"
 #include "main/hash.h"
 #include "program/prog_cache.h"
 #include "vbo/vbo.h"
@@ -119,8 +120,12 @@ st_invalidate_state(struct gl_context *ctx)
       ST_SET_STATE(ctx->NewDriverState, ST_NEW_RASTERIZER);
 
    if ((new_state & _NEW_LIGHT_STATE) &&
-       (!st->screen->caps.flatshade || !st->screen->caps.two_sided_color))
-      ST_SET_STATE(ctx->NewDriverState, ST_NEW_FS_STATE);
+       (!st->screen->caps.flatshade || !st->screen->caps.two_sided_color)) {
+      /* materials, light parameters, and enables are not in the fs key */
+      if (st_fp_lower_flatshade(st) != st->fp_lower_flatshade ||
+          st_fp_lower_two_sided_color(st) != st->fp_lower_two_sided_color)
+         ST_SET_STATE(ctx->NewDriverState, ST_NEW_FS_STATE);
+   }
 
    if (new_state & _NEW_PROJECTION &&
        st_user_clip_planes_enabled(ctx))
@@ -137,9 +142,17 @@ st_invalidate_state(struct gl_context *ctx)
 
    /* Update the vertex shader if ctx->Light._ClampVertexColor was changed. */
    if (st->clamp_vert_color_in_shader && (new_state & _NEW_LIGHT_STATE)) {
-      ST_SET_STATE(ctx->NewDriverState, ST_NEW_VS_STATE);
+      const bool clamp = ctx->Light._ClampVertexColor;
+
+      if (st->vert_color_clamped[MESA_SHADER_VERTEX] != clamp)
+         ST_SET_STATE(ctx->NewDriverState, ST_NEW_VS_STATE);
+
       if (_mesa_is_desktop_gl_compat(st->ctx) && ctx->Version >= 32) {
-         ST_SET_STATE2(ctx->NewDriverState, ST_NEW_GS_STATE, ST_NEW_TES_STATE);
+         if (st->vert_color_clamped[MESA_SHADER_GEOMETRY] != clamp)
+            ST_SET_STATE(ctx->NewDriverState, ST_NEW_GS_STATE);
+
+         if (st->vert_color_clamped[MESA_SHADER_TESS_EVAL] != clamp)
+            ST_SET_STATE(ctx->NewDriverState, ST_NEW_TES_STATE);
       }
    }
 
@@ -501,6 +514,13 @@ st_create_context_priv(struct gl_context *ctx, struct pipe_context *pipe,
    st->cso_context = cso_create_context(pipe, cso_flags);
    ctx->cso_context = st->cso_context;
 
+   for (unsigned i = 0; i < PIPE_FORMAT_COUNT; i++) {
+      if (cso_vertex_format_needs_vbuf(st->cso_context, (enum pipe_format)i))
+         BITSET_SET(ctx->Array.VertexFormatFallbacks, i);
+   }
+   _mesa_update_vao_format_fallbacks(ctx, &ctx->Array.DefaultVAOState);
+   _mesa_update_vao_format_fallbacks(ctx, ctx->Array.DefaultVAO);
+
 #define ST_STATE(FLAG, st_update) st->update_functions[FLAG] = st_update;
 #include "st_atom_list.h"
 #undef ST_STATE
@@ -779,14 +799,7 @@ st_init_driver_functions(struct pipe_screen *screen,
    st_init_draw_functions(screen, functions);
 
    functions->NewProgram = _mesa_new_program;
-   st_init_flush_functions(screen, functions);
-
-   /* GL_ARB_get_program_binary */
    functions->ShaderCacheSerializeDriverBlob =  st_serialise_nir_program;
-   functions->ProgramBinarySerializeDriverBlob =
-      st_serialise_nir_program_binary;
-   functions->ProgramBinaryDeserializeDriverBlob =
-      st_deserialise_nir_program;
 }
 
 

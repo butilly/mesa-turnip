@@ -658,8 +658,6 @@ static const struct nir_shader_compiler_options draw_nir_options = {
    .lower_extract_word = true,
    .lower_insert_byte = true,
    .lower_insert_word = true,
-   .lower_uadd_carry = true,
-   .lower_usub_borrow = true,
    .lower_mul_2x32_64 = true,
    .lower_ifind_msb = true,
    .lower_int64_options = nir_lower_imul_2x32_64,
@@ -704,6 +702,38 @@ get_nir_shader(struct st_context *st, struct gl_program *prog, bool is_draw)
       blob_reader_init(&blob_reader, prog->serialized_nir, prog->serialized_nir_size);
    }
    return nir_deserialize(NULL, options, &blob_reader);
+}
+
+static bool
+drop_clip_dist_store(nir_builder *b, nir_intrinsic_instr *intr, void *data)
+{
+   if (intr->intrinsic != nir_intrinsic_store_output &&
+       intr->intrinsic != nir_intrinsic_store_per_vertex_output)
+      return false;
+
+   nir_io_semantics sem = nir_intrinsic_io_semantics(intr);
+   if (sem.location != VARYING_SLOT_CLIP_DIST0 &&
+       sem.location != VARYING_SLOT_CLIP_DIST1)
+      return false;
+
+   nir_instr_remove(&intr->instr);
+   return true;
+}
+
+static bool
+drop_clip_dist(nir_shader *nir)
+{
+   assert(nir->info.io_lowered);
+
+   bool progress = nir_shader_intrinsics_pass(nir, drop_clip_dist_store,
+                                              nir_metadata_control_flow, NULL);
+   if (progress) {
+      nir->info.outputs_written &=
+         ~(VARYING_BIT_CLIP_DIST0 | VARYING_BIT_CLIP_DIST1);
+      nir->info.clip_distance_array_size = 0;
+   }
+
+   return progress;
 }
 
 static void
@@ -857,12 +887,18 @@ st_create_common_variant(struct st_context *st,
       finalize = true;
    }
 
+   if (key->drop_clip_dist) {
+      assert(!options->unify_interfaces);
+      NIR_PASS(finalize, state.ir.nir, drop_clip_dist);
+   }
+
    if (!st->screen->caps.gl_clamp &&
          (key->gl_clamp[0] || key->gl_clamp[1] || key->gl_clamp[2])) {
       nir_lower_tex_options tex_opts = {0};
       tex_opts.saturate_s = key->gl_clamp[0];
       tex_opts.saturate_t = key->gl_clamp[1];
       tex_opts.saturate_r = key->gl_clamp[2];
+      tex_opts.saturate_lod_zero = key->gl_clamp[3];
       NIR_PASS(finalize, state.ir.nir, nir_lower_tex, &tex_opts);
    }
 
@@ -971,12 +1007,13 @@ st_get_common_variant(struct st_context *st,
    if (!v) {
       if (prog->variants != NULL) {
          _mesa_perf_debug(st->ctx, MESA_DEBUG_SEVERITY_MEDIUM,
-                          "Compiling %s shader variant (%s%s%s%s%s%s)",
+                          "Compiling %s shader variant (%s%s%s%s%s%s%s)",
                           _mesa_shader_stage_to_string(prog->info.stage),
                           key->passthrough_edgeflags ? "edgeflags," : "",
                           key->clamp_color ? "clamp_color," : "",
                           key->export_point_size ? "point_size," : "",
                           key->lower_ucp ? "ucp," : "",
+                          key->drop_clip_dist ? "drop_clip_dist," : "",
                           key->is_draw_shader ? "draw," : "",
                           key->gl_clamp[0] || key->gl_clamp[1] || key->gl_clamp[2] ? "GL_CLAMP," : "");
       }
@@ -1150,6 +1187,7 @@ st_create_fp_variant(struct st_context *st,
       tex_opts.saturate_s = key->gl_clamp[0];
       tex_opts.saturate_t = key->gl_clamp[1];
       tex_opts.saturate_r = key->gl_clamp[2];
+      tex_opts.saturate_lod_zero = key->gl_clamp[3];
       NIR_PASS(finalize, state.ir.nir, nir_lower_tex, &tex_opts);
    }
 

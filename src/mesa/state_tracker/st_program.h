@@ -291,7 +291,7 @@ struct st_fp_variant_key
    struct st_external_sampler_key external;
 
    /* bitmask of sampler units; pipe_caps.gl_clamp */
-   uint32_t gl_clamp[3];
+   uint32_t gl_clamp[4];
 
    /* bitmask of shadow samplers with depth textures in them for ARB programs; */
    GLbitfield depth_textures;
@@ -354,13 +354,16 @@ struct st_common_variant_key
    /* for user-defined clip-planes */
    uint8_t lower_ucp;
 
+   /* remove clip distance outputs when no clip plane is enabled */
+   bool drop_clip_dist;
+
    /* Whether st_variant::driver_shader is for the draw module,
     * not for the driver.
     */
    bool is_draw_shader;
 
    /* bitmask of sampler units; pipe_caps.gl_clamp */
-   uint32_t gl_clamp[3];
+   uint32_t gl_clamp[4];
 };
 
 

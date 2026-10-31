@@ -225,6 +225,7 @@ brw_opcode_to_gen(enum opcode op)
    case BRW_OPCODE_SEND:     return GEN_OP_SEND;
    case BRW_OPCODE_SENDC:    return GEN_OP_SENDC;
    case BRW_OPCODE_SENDG:    return GEN_OP_SENDG;
+   case BRW_OPCODE_SENDGC:   return GEN_OP_SENDGC;
    case BRW_OPCODE_SENDS:    return GEN_OP_SENDS;
    case BRW_OPCODE_SENDSC:   return GEN_OP_SENDSC;
    case BRW_OPCODE_SHL:      return GEN_OP_SHL;
@@ -448,6 +449,7 @@ brw_generator::generate_send(brw_send_inst *inst,
    if (send->check_tdr) {
       if      (gen->opcode == GEN_OP_SEND)  gen->opcode = GEN_OP_SENDC;
       else if (gen->opcode == GEN_OP_SENDS) gen->opcode = GEN_OP_SENDSC;
+      else if (gen->opcode == GEN_OP_SENDG) gen->opcode = GEN_OP_SENDGC;
    }
 
    /* Serialize messages if needed */
@@ -2102,10 +2104,8 @@ brw_generator::generate_code(const brw_shader &s,
             gen.src[1].region = { 0, 1, 0 };
 
       }
-      if ((gen.dst.file == GEN_GRF || gen.dst.file == GEN_ARF) &&
-           gen.dst.region.hstride == 0) {
+      if (gen.dst.region.hstride == 0)
          gen.dst.region.hstride = 1;
-      }
    }
 
    /* Translate any pre-filled IMM branch sources from absolute indices
@@ -2128,7 +2128,14 @@ brw_generator::generate_code(const brw_shader &s,
     * shared function use.  Otherwise, subtle changes to scheduling or
     * register allocation could cause it to fluctuate wildly - and that
     * effect is already counted in spill/fill counts.
+    *
+    * If brw_opt_fill_and_spill forgets to update the spill count or fill
+    * count, send_count may count fewer total SENDs than the total spills and
+    * fills. This will cause some wild results in the SEND count shader stats.
     */
+   assert((unsigned)send_count >= (shader_stats.spill_count +
+                                   shader_stats.fill_count));
+
    send_count -= shader_stats.spill_count;
    send_count -= shader_stats.fill_count;
 
@@ -2612,7 +2619,7 @@ brw_generator::append_reloc(const intel_shader_reloc &r)
 static uint64_t
 brw_bsr(const struct intel_device_info *devinfo,
         uint32_t offset, uint8_t simd_size, uint8_t local_arg_offset,
-        uint8_t grf_used)
+        unsigned grf_used)
 {
    assert(offset % 64 == 0);
    assert(simd_size == 8 || simd_size == 16);

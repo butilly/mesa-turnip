@@ -141,6 +141,7 @@ libradv_files = files(
   'radv_acceleration_structure.c',
   'radv_android.c',
   'radv_android.h',
+  'radv_anti_lag.c',
   'radv_buffer.c',
   'radv_buffer.h',
   'radv_buffer_view.c',
@@ -229,7 +230,9 @@ if not with_platform_windows
   )
 endif
 
-if amd_with_llvm
+radv_with_llvm_backend = amd_with_llvm and not with_mesa_ndebug
+
+if radv_with_llvm_backend
   libradv_files += files(
     'radv_llvm_helper.cpp',
     'radv_llvm_helper.h',
@@ -244,6 +247,7 @@ subdir('layers')
 
 radv_deps = []
 radv_flags = cc.get_supported_arguments(['-Wimplicit-fallthrough', '-Wshadow'])
+radv_flags += '-DRADV_LLVM_BACKEND=@0@'.format(radv_with_llvm_backend.to_int())
 
 if with_amdgpu_virtio
   radv_flags += '-DHAVE_AMDGPU_VIRTIO'

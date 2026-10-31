@@ -233,6 +233,7 @@ kk_get_device_features(
       .dualSrcBlend = true,
       .fragmentStoresAndAtomics = true,
       .fullDrawIndexUint32 = true,
+      .geometryShader = true,
       .imageCubeArray = true,
       .independentBlend = true,
       .inheritedQueries = true,
@@ -268,11 +269,7 @@ kk_get_device_features(
       .samplerYcbcrConversion = true,
       .shaderDrawParameters = true,
       .storageBuffer16BitAccess = true,
-      /* TODO KOSMICKRISP
-       * Disabled due to failing tests (TCS/TES patch I/O):
-       * dEQP-VK.tessellation.tess_io.max_in_out.with_f16.*.tcs_patch_*reads*
-       */
-      .storageInputOutput16 = false,
+      .storageInputOutput16 = true,
       .storagePushConstant16 = true,
       .uniformAndStorageBuffer16BitAccess = true,
       .variablePointers = true,
