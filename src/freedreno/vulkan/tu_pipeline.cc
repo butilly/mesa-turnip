@@ -5131,10 +5131,12 @@ tu_CreateComputePipelines(VkDevice device,
       VkPipelineCreateFlags2KHR flags =
          vk_compute_pipeline_create_flags(&pCreateInfos[i]);
 
+      tu_shader_diag_stage(&pCreateInfos[i].stage, "pipeline-begin", VK_SUCCESS);
       VkResult result =
          tu_compute_pipeline_create<CHIP>(device, pipelineCache,
                                           &pCreateInfos[i], flags,
                                           pAllocator, &pPipelines[i]);
+      tu_shader_diag_stage(&pCreateInfos[i].stage, "pipeline-end", result);
       if (result != VK_SUCCESS) {
          final_result = result;
          pPipelines[i] = VK_NULL_HANDLE;
