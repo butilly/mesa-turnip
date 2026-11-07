@@ -74,6 +74,54 @@ load_buffer_sparse(nir_builder *b, const ac_cs_clear_copy_buffer_key *const key,
 }
 
 static nir_def *
+load_buffer_sparse_split(nir_builder *b, const ac_cs_clear_copy_buffer_key *const key,
+                         const unsigned num_vec_components, const unsigned num_removed_components,
+                         const unsigned num_load_components, const unsigned bit_size, nir_def *buf,
+                         nir_def *offset, const enum gl_access_qualifier access, const unsigned align_mul,
+                         const unsigned align_offset, const bool sparse)
+{
+   nir_def *values[16] = {0};
+   unsigned num_values = 0;
+
+   assert(nir_num_components_valid(num_vec_components));
+   assert(num_removed_components < num_vec_components);
+   assert(num_load_components <= num_vec_components);
+
+   const unsigned num_pad_components =
+      (num_removed_components + num_load_components) > num_vec_components ? 0 :
+      (num_vec_components - num_removed_components - num_load_components);
+   assert(num_pad_components < num_vec_components);
+
+   /* Fill the "removed" components at the beginning with undef. */
+   if (num_removed_components) {
+      for (unsigned i = 0; i < num_removed_components; ++i)
+         values[num_values++] = nir_undef(b, 1, bit_size);
+   }
+
+   /* Split the load into multiple instructions because NIR doesn't support arbitrary vector sizes. */
+   for (unsigned remaining = num_load_components; remaining; ) {
+      const unsigned comps = MIN2(16, util_is_power_of_two_nonzero(remaining) ? remaining : (util_next_power_of_two(remaining) / 2));
+      const unsigned byte_offset = (num_load_components - remaining) * bit_size / 8;
+      assert(nir_num_components_valid(comps));
+      remaining -= comps;
+      values[num_values++] = load_buffer_sparse(b, key, comps, bit_size, buf,
+                                                nir_iadd_imm(b, offset, byte_offset),
+                                                ACCESS_RESTRICT, 4, (align_offset + byte_offset) % 4,
+                                                key->src_scalarize_for_sparse);
+   }
+
+   /* Fill the "padding" components at the end with undef. */
+   if (num_pad_components) {
+      for (unsigned i = 0; i < num_pad_components; ++i)
+         values[num_values++] = nir_undef(b, 1, bit_size);
+   }
+
+   assert(num_values <= ARRAY_SIZE(values));
+
+   return nir_extract_bits(b, values, num_values, 0, num_vec_components, bit_size);
+}
+
+static nir_def *
 load_buffer_addr_from_user_data(nir_builder *b,
                 nir_def *user_data, const unsigned user_data_index)
 {
@@ -216,8 +264,11 @@ ac_create_clear_copy_buffer_cs(const ac_cs_clear_copy_buffer_options *const opti
                            (unsigned)realign_offset % 2 == 0 ? 2 : 1;
       unsigned bit_size = alignment * 8;
       unsigned num_comps = key->dwords_per_thread * 4 / alignment;
+      const unsigned last_thread_num_comps = DIV_ROUND_UP(key->dst_last_thread_bytes, alignment);
       nir_if *if_first_thread = NULL;
+      nir_if *if_last_thread = NULL;
       nir_def *value0 = NULL;
+      nir_def *value_last = NULL;
       nir_def *src_buf;
 
       if (key->addr_user_data)
@@ -234,32 +285,59 @@ ac_create_clear_copy_buffer_cs(const ac_cs_clear_copy_buffer_options *const opti
           */
          if_first_thread = nir_push_if(&b, nir_ieq_imm(&b, thread_id, 0));
          {
-            unsigned num_removed_comps = -realign_offset / alignment;
-            unsigned num_inbounds_comps = num_comps - num_removed_comps;
+            const unsigned num_removed_comps = -realign_offset / alignment;
 
-            /* Only 8 and 16 component vectors are valid after 5 in NIR. */
-            while (!nir_num_components_valid(num_inbounds_comps))
-               num_inbounds_comps = util_next_power_of_two(num_inbounds_comps);
+            nir_if *if_first_last_thread = NULL;
+            nir_def *value0_last = NULL;
 
-            value0 = load_buffer_sparse(&b, key, num_inbounds_comps, bit_size, src_buf, offset,
-                                        ACCESS_RESTRICT, 4, 0, key->src_scalarize_for_sparse);
-
-            /* Add the components that we didn't load as undef. */
-            nir_def *comps[16];
-            assert(num_comps <= ARRAY_SIZE(comps));
-            for (unsigned i = 0; i < num_comps; i++) {
-               if (i < num_removed_comps)
-                  comps[i] = nir_undef(&b, 1, bit_size);
-               else
-                  comps[i] = nir_channel(&b, value0, i - num_removed_comps);
+            if (key->dst_last_thread_bytes && key->addr_user_data && last_thread_num_comps != num_comps) {
+               /* Emit a separate load when the first thread is the last to prevent out of bounds reads. */
+               nir_def *last_thread_id = nir_channel(&b, user_data, last_thread_user_data_index);
+               if_first_last_thread = nir_push_if(&b, nir_ieq(&b, thread_id, last_thread_id));
+               {
+                  assert(nir_num_components_valid(num_comps));
+                  if (last_thread_num_comps <= num_removed_comps)
+                     value0_last = nir_undef(&b, num_comps, bit_size);
+                  else
+                     value0_last = load_buffer_sparse_split(&b, key, num_comps, num_removed_comps, last_thread_num_comps - num_removed_comps,
+                                                            bit_size, src_buf, offset, ACCESS_RESTRICT, 4, 0,
+                                                            key->src_scalarize_for_sparse);
+               }
+               nir_push_else(&b, if_first_last_thread);
             }
-            value0 = nir_vec(&b, comps, num_comps);
+
+            value0 = load_buffer_sparse_split(&b, key, num_comps, num_removed_comps, num_comps - num_removed_comps,
+                                              bit_size, src_buf, offset, ACCESS_RESTRICT, 4, 0,
+                                              key->src_scalarize_for_sparse);
+
+            if (if_first_last_thread) {
+               nir_pop_if(&b, if_first_last_thread);
+               value0 = nir_if_phi(&b, value0_last, value0);
+            }
          }
          nir_push_else(&b, if_first_thread);
       }
 
+      if (key->dst_last_thread_bytes && key->addr_user_data && last_thread_num_comps != num_comps) {
+         nir_def *last_thread_id = nir_channel(&b, user_data, last_thread_user_data_index);
+         if_last_thread = nir_push_if(&b, nir_ieq(&b, thread_id, last_thread_id));
+         {
+            /* Emit a separate load for the last thread to make sure it doesn't load out of bounds. */
+            value_last = load_buffer_sparse_split(&b, key, num_comps, 0, last_thread_num_comps, bit_size,
+                                                  src_buf, nir_iadd_imm(&b, offset, realign_offset),
+                                                  ACCESS_RESTRICT, 4, (unsigned)(realign_offset) % 4,
+                                                  key->src_scalarize_for_sparse);
+         }
+         nir_push_else(&b, if_last_thread);
+      }
+
       value = load_buffer_sparse(&b, key, num_comps, bit_size, src_buf, nir_iadd_imm(&b, offset, realign_offset),
                                  ACCESS_RESTRICT, 4, (unsigned)realign_offset % 4, key->src_scalarize_for_sparse);
+
+      if (if_last_thread) {
+         nir_pop_if(&b, if_last_thread);
+         value = nir_if_phi(&b, value_last, value);
+      }
 
       if (if_first_thread) {
          nir_pop_if(&b, if_first_thread);
@@ -434,10 +512,13 @@ ac_clear_copy_should_use_compute(const ac_cs_clear_copy_buffer_options *options,
    if (!can_use_cp_dma)
       return true;
 
-   if (info->size < options->prefer_cp_dma_threshold)
-      return false;
-
    if (!options->fail_if_slow)
+      return true;
+
+   /* CP DMA doesn't execute asynchronously on compute queues, meaning that every CP DMA packet
+    * implicitly waits for CP DMA to finish, which slows down command buffer execution.
+    */
+   if (options->is_compute_queue)
       return true;
 
    switch (options->info->gfx_level) {
@@ -513,9 +594,6 @@ ac_clear_copy_calc_dwords_per_thread(const ac_cs_clear_copy_buffer_options *opti
                                      const ac_cs_clear_copy_buffer_info *info,
                                      const int clear_value_size)
 {
-   if (info->dwords_per_thread)
-      return info->dwords_per_thread;
-
    const bool is_copy = clear_value_size == 0;
 
    /* Determine optimal dwords_per_thread for performance.
@@ -600,31 +678,39 @@ ac_clear_copy_calc_dwords_per_thread(const ac_cs_clear_copy_buffer_options *opti
    if (!is_copy)
       dwords_per_thread = MAX2(dwords_per_thread, clear_value_size / 4);
 
-   if (info->dst_is_sparse) {
-      /* If dst is sparse, stores mustn't straddle a page boundary, which means the store size must
-       * be 2^n. It can only be a non-power-of-two and 3 with GL buffer clears because VK doesn't
-       * have 12-byte clear values.
-       */
-      if (dwords_per_thread == 3)
-         dwords_per_thread = 4;
+   /* If dst is sparse, stores mustn't straddle a page boundary, which means the store size must
+    * be 2^n. It can only be a non-power-of-two and 3 with GL buffer clears because VK doesn't
+    * have 12-byte clear values.
+    */
+   if (info->dst_is_sparse && dwords_per_thread == 3)
+      dwords_per_thread = 4;
 
-      assert(util_is_power_of_two_nonzero(dwords_per_thread));
-   }
+   /* Override dwords per thread before validating the value. */
+   if (info->dwords_per_thread)
+      dwords_per_thread = info->dwords_per_thread;
 
    /* Validate dwords_per_thread. */
+   if (info->dst_is_sparse && !util_is_power_of_two_nonzero(dwords_per_thread)) {
+      fprintf(stderr, "ac_nir_meta_cs_clear_copy_buffer: dwords_per_thread must be a power of two "
+                      "for a sparse destination\n");
+      exit(1);
+   }
+
    if (dwords_per_thread > 4) {
-      assert(!"dwords_per_thread must be <= 4");
-      return 0; /* invalid value */
+      fprintf(stderr, "ac_nir_meta_cs_clear_copy_buffer: dwords_per_thread must be <= 4\n");
+      exit(1);
    }
 
    if (clear_value_size > dwords_per_thread * 4) {
-      assert(!"clear_value_size must be <= dwords_per_thread");
-      return 0; /* invalid value */
+      fprintf(stderr, "ac_nir_meta_cs_clear_copy_buffer: clear_value_size must be <= "
+                      "dwords_per_thread\n");
+      exit(1);
    }
 
    if (clear_value_size == 12 && info->dst_offset % 4) {
-      assert(!"if clear_value_size == 12, dst_offset must be aligned to 4");
-      return 0; /* invalid value */
+      fprintf(stderr, "ac_nir_meta_cs_clear_copy_buffer: if clear_value_size == 12, dst_offset "
+                      "must be aligned to 4\n");
+      exit(1);
    }
 
    return dwords_per_thread;
@@ -669,6 +755,7 @@ ac_prepare_clear_value_user_data(const int clear_value_size,
    return num_clear_user_data_terms;
 }
 
+/* This returns false if CP DMA should be used. */
 bool
 ac_prepare_cs_clear_copy_buffer(const ac_cs_clear_copy_buffer_options *options,
                                 const ac_cs_clear_copy_buffer_info *info,
@@ -677,6 +764,7 @@ ac_prepare_cs_clear_copy_buffer(const ac_cs_clear_copy_buffer_options *options,
    bool is_copy = info->clear_value_size == 0;
 
    memset(out, 0, sizeof(*out));
+   out->cpdma_supported = ac_clear_copy_can_use_cp_dma(options, info);
 
    /* Expand 1-byte and 2-byte clear values to a dword. */
    int clear_value_size = info->clear_value_size;
@@ -731,7 +819,7 @@ ac_prepare_cs_clear_copy_buffer(const ac_cs_clear_copy_buffer_options *options,
       /* Each invocation must increment the offset by 2^n. */
       (!util_is_power_of_two_nonzero(dwords_per_thread) ||
        /* The buffer range bounds must be divisible by the copy size per invocation. */
-       ((info->src_offset - src_align_offset) % (dwords_per_thread * 4) != 0 ||
+       ((info->src_offset - dst_align_offset) % (dwords_per_thread * 4) != 0 ||
         (info->src_offset + info->size) % (dwords_per_thread * 4) != 0));
    out->shader_key.src_align_offset = src_align_offset;
    out->shader_key.dst_align_offset = dst_align_offset;

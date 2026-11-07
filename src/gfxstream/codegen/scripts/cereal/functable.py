@@ -18,8 +18,12 @@ RESOURCE_TRACKER_ENTRIES = [
     "vkGetImageMemoryRequirements",
     "vkGetImageMemoryRequirements2",
     "vkGetImageDrmFormatModifierPropertiesEXT",
+    "vkGetImageSubresourceLayout",
     "vkBindImageMemory",
     "vkBindImageMemory2",
+    "vkBindImageMemory2KHR",
+    "vkBindBufferMemory2",
+    "vkBindBufferMemory2KHR",
     "vkCreateBuffer",
     "vkDestroyBuffer",
     "vkGetBufferMemoryRequirements",
@@ -46,7 +50,17 @@ RESOURCE_TRACKER_ENTRIES = [
     "vkCreateSamplerYcbcrConversion",
     "vkDestroySamplerYcbcrConversion",
     "vkUpdateDescriptorSetWithTemplate",
+    "vkUpdateDescriptorSetWithTemplateKHR",
+    "vkCmdPushDescriptorSet",
+    "vkCmdPushDescriptorSetKHR",
+    "vkCmdPushDescriptorSetWithTemplate",
+    "vkCmdPushDescriptorSetWithTemplateKHR",
+    "vkCmdPushDescriptorSet2",
+    "vkCmdPushDescriptorSet2KHR",
+    "vkCmdPushDescriptorSetWithTemplate2",
+    "vkCmdPushDescriptorSetWithTemplate2KHR",
     "vkGetPhysicalDeviceFormatProperties2",
+    "vkGetPhysicalDeviceFormatProperties2KHR",
     "vkGetPhysicalDeviceImageFormatProperties2",
     "vkBeginCommandBuffer",
     "vkEndCommandBuffer",
@@ -69,6 +83,8 @@ RESOURCE_TRACKER_ENTRIES = [
     "vkCreateDescriptorSetLayout",
     "vkCmdExecuteCommands",
     "vkCmdBindDescriptorSets",
+    "vkCmdBindDescriptorSets2",
+    "vkCmdBindDescriptorSets2KHR",
     "vkDestroyDescriptorSetLayout",
     "vkAllocateCommandBuffers",
     "vkQueueSignalReleaseImageANDROID",
@@ -86,9 +102,9 @@ RESOURCE_TRACKER_ENTRIES = [
     "vkSetBufferCollectionBufferConstraintsFUCHSIA",
     "vkGetBufferCollectionPropertiesFUCHSIA",
     "vkSetPrivateData",
-    "vkSetPrivateDataKHR",
+    "vkSetPrivateDataEXT",
     "vkGetPrivateData",
-    "vkGetPrivateDataKHR",
+    "vkGetPrivateDataEXT",
     "vkCreatePrivateDataSlot",
     "vkCreatePrivateDataSlotEXT",
     "vkDestroyPrivateDataSlot",
@@ -113,6 +129,7 @@ NON_AUTOGEN_ENTRYPOINTS = [
     "vkGetDeviceProcAddr",
     "vkEnumeratePhysicalDevices",
     "vkEnumeratePhysicalDeviceGroups",
+    "vkEnumeratePhysicalDeviceGroupsKHR",
     "vkCreateDevice",
     "vkDestroyDevice",
     # Manual alloc/free + vk_*_init/free() call w/ special params
@@ -122,7 +139,6 @@ NON_AUTOGEN_ENTRYPOINTS = [
     "vkAllocateCommandBuffers",
     "vkResetCommandPool",
     "vkFreeCommandBuffers",
-    "vkResetCommandPool",
     # Transform feedback
     "vkCmdBeginTransformFeedbackEXT",
     # Special cases to handle struct translations in the pNext chain
@@ -582,10 +598,10 @@ class VulkanFuncTable(VulkanWrapperGenerator):
             # Make encoder/resource-tracker call
             if retVar and createdObject:
                 cgen.beginIf("%s == %s" % (SUCCESS_VAL[retTypeName][0], retVar))
+                genEncoderOrResourceTrackerCall()
+                cgen.endIf()
             else:
-                cgen.beginBlock()
-            genEncoderOrResourceTrackerCall()
-            cgen.endBlock()
+                genEncoderOrResourceTrackerCall()
             # Destroy gfxstream objects
             genDestroyGfxstreamObjects()
             # Set output / return variables

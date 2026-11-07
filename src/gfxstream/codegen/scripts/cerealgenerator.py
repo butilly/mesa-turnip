@@ -68,14 +68,14 @@ SUPPORTED_MODULES = {
     "VK_KHR_win32_surface": ["goldfish_vk_dispatch"],
     "VK_EXT_metal_surface": ["goldfish_vk_dispatch"],
     "VK_EXT_metal_objects": ["goldfish_vk_dispatch"],
-    "VK_EXT_external_memory_metal": ["goldfish_vk_dispatch"],
+    "VK_EXT_external_memory_metal": ["goldfish_vk_dispatch", "goldfish_vk_supported_extensions"],
     "VK_KHR_external_semaphore_win32" : ["goldfish_vk_dispatch"],
-    "VK_KHR_external_memory_win32" : ["goldfish_vk_dispatch"],
+    "VK_KHR_external_memory_win32" : ["goldfish_vk_dispatch", "goldfish_vk_supported_extensions"],
     "VK_MVK_macos_surface" : ["goldfish_vk_dispatch"],
     # Host dispatch for Linux hosts + and entrypoint for guests
-    "VK_KHR_external_memory_fd": ["goldfish_vk_dispatch", "func_table"],
+    "VK_KHR_external_memory_fd": ["goldfish_vk_dispatch", "func_table", "goldfish_vk_supported_extensions"],
     "VK_QNX_screen_surface": ["goldfish_vk_dispatch"],
-    "VK_QNX_external_memory_screen_buffer": ["goldfish_vk_dispatch"],
+    "VK_QNX_external_memory_screen_buffer": ["goldfish_vk_dispatch", "goldfish_vk_supported_extensions"],
     "VK_ANDROID_external_memory_android_hardware_buffer": ["goldfish_vk_dispatch", "func_table"],
     "VK_KHR_android_surface": ["func_table"],
     "VK_EXT_swapchain_maintenance1" : HOST_MODULES,
@@ -83,7 +83,6 @@ SUPPORTED_MODULES = {
     "VK_KHR_swapchain" : HOST_MODULES,
     "VK_NV_device_diagnostic_checkpoints": ["goldfish_vk_dispatch"],
     "VK_KHR_ray_tracing_pipeline": ["goldfish_vk_dispatch"],
-    "VK_KHR_pipeline_library": HOST_MODULES,
 }
 
 # These modules will be used when the feature is not supported.

@@ -875,7 +875,7 @@ VkResult anv_CreateDevice(
                                                 true);
       override_initial_entrypoints = false;
    }
-#if DETECT_OS_ANDROID
+#ifdef VK_USE_PLATFORM_ANDROID_KHR
    vk_device_dispatch_table_from_entrypoints(&dispatch_table,
                                              &anv_android_device_entrypoints,
                                              true);
@@ -1907,7 +1907,7 @@ VkResult anv_AllocateMemory(
           * wait for render complete.
           */
          if (pdevice->drirc.debug.external_memory_implicit_sync &&
-             (image->vk.usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT))
+             (image->vk.usage & VK_IMAGE_USAGE_2_COLOR_ATTACHMENT_BIT_KHR))
             alloc_flags |= ANV_BO_ALLOC_IMPLICIT_WRITE;
       }
    }
