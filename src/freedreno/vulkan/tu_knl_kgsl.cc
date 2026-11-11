@@ -1617,6 +1617,17 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
       ret = safe_ioctl(queue->device->physical_device->local_fd,
                        IOCTL_KGSL_GPU_COMMAND, &req);
 
+      if (ret) {
+         const int submit_errno = errno;
+         mesa_loge("TU_LOSS: GPU_COMMAND device=%u queue=%u submit=%u "
+                   "ibs=%u waits=%u signals=%u previous_ts=%d ret=%d errno=%d (%s)",
+                   queue->device->device_idx, queue->msm_queue_id,
+                   queue->device->submit_count, req.numcmds, wait_count,
+                   signal_count, queue->fence, ret, submit_errno,
+                   strerror(submit_errno));
+         errno = submit_errno;
+      }
+
       timestamp = req.timestamp;
    } else {
       /* kgsl doesn't support multiple bind commands at once */
@@ -1649,6 +1660,13 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
                           IOCTL_KGSL_GPU_AUX_COMMAND, &req);
 
          if (ret) {
+            const int submit_errno = errno;
+            mesa_loge("TU_LOSS: GPU_AUX_COMMAND device=%u queue=%u submit=%u "
+                      "bind=%u waits=%u signals=%u ret=%d errno=%d (%s)",
+                      queue->device->device_idx, queue->msm_queue_id,
+                      queue->device->submit_count, i, wait_count, signal_count,
+                      ret, submit_errno, strerror(submit_errno));
+            errno = submit_errno;
             result = vk_device_set_lost(&queue->device->vk,
                                         "bind submit failed: %s\n",
                                         strerror(errno));
@@ -1783,11 +1801,22 @@ kgsl_device_check_status(struct tu_device *device)
          uint32_t value = device->queues[i][q].msm_queue_id;
          VkResult status = get_kgsl_prop(device->fd, KGSL_PROP_GPU_RESET_STAT,
                                        &value, sizeof(value));
-         if (status != VK_SUCCESS)
+         if (status != VK_SUCCESS) {
+            const int status_errno = errno;
+            mesa_loge("TU_LOSS: GPU_RESET_STAT device=%u queue=%u "
+                      "result=%d errno=%d (%s)", device->device_idx,
+                      device->queues[i][q].msm_queue_id, status,
+                      status_errno, strerror(status_errno));
+            errno = status_errno;
             return vk_device_set_lost(&device->vk, "Failed to get GPU reset status");
+         }
 
          if (value != KGSL_CTX_STAT_NO_ERROR &&
             value != KGSL_CTX_STAT_INNOCENT_CONTEXT_RESET_EXT) {
+            mesa_loge("TU_LOSS: GPU_RESET_STAT device=%u queue=%u reset=%u "
+                      "last_ts=%d", device->device_idx,
+                      device->queues[i][q].msm_queue_id, value,
+                      device->queues[i][q].fence);
             return vk_device_set_lost(&device->vk, "GPU faulted or hung");
          }
       }

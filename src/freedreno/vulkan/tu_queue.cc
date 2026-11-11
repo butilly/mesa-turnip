@@ -566,6 +566,11 @@ queue_submit(struct vk_queue *_queue, struct vk_queue_submit *vk_submit)
                       u_trace_submission_data);
 
    if (result != VK_SUCCESS) {
+      mesa_loge("TU_LOSS: queue_submit device=%u queue=%u submit=%u "
+                "command_buffers=%u expanded_buffers=%u waits=%u signals=%u result=%d",
+                device->device_idx, queue->msm_queue_id, device->submit_count,
+                vk_submit->command_buffer_count, cmdbuf_count,
+                vk_submit->wait_count, vk_submit->signal_count, result);
       pthread_mutex_unlock(&device->submit_mutex);
       goto out;
    }
@@ -671,4 +676,3 @@ tu_queue_finish(struct tu_queue *queue)
    if (!emulated)
       tu_drm_submitqueue_close(queue->device, queue);
 }
-
