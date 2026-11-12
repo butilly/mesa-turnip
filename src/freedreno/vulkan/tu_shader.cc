@@ -14,6 +14,7 @@
 #include "vk_nir.h"
 #include "vk_nir_convert_ycbcr.h"
 #include "vk_pipeline.h"
+#include "vk_shader_module.h"
 #include "vk_util.h"
 
 #include "ir3/ir3_compiler.h"
@@ -193,6 +194,53 @@ tu_nir_lower_softfloat64(struct tu_device *dev, nir_shader *nir)
    ir3_optimize_loop(dev->compiler, &optimize_options, nir);
 }
 
+const char *
+tu_shader_diag_name(const VkPipelineShaderStageCreateInfo *stage)
+{
+   if (stage->stage != VK_SHADER_STAGE_COMPUTE_BIT)
+      return NULL;
+   VK_FROM_HANDLE(vk_shader_module, module, stage->module);
+   const VkShaderModuleCreateInfo *inline_module =
+      vk_find_struct_const(stage->pNext, SHADER_MODULE_CREATE_INFO);
+   if (module && module->nir)
+      return NULL;
+   const uint32_t *code = module ? (const uint32_t *)module->data :
+      inline_module ? inline_module->pCode : NULL;
+   size_t bytes = module ? module->size :
+      inline_module ? inline_module->codeSize : 0;
+   if (!code || bytes < 20 || bytes % 4 || code[0] != 0x07230203)
+      return NULL;
+   const char *names[] = {"c0038ebf1ebe2cf2.dxil", "27a10d07e7fdb08d.dxil"};
+   for (size_t i = 5; i < bytes / 4;) {
+      unsigned words = code[i] >> 16;
+      if (!words || words > bytes / 4 - i)
+         return NULL;
+      /* OpString's result id precedes its null-terminated filename. */
+      if ((code[i] & 0xffff) == 7 && words >= 3) {
+         for (const char *name : names) {
+            size_t len = strlen(name) + 1;
+            if ((words - 2) * 4 >= len && !memcmp(code + i + 2, name, len))
+               return name;
+         }
+      }
+      i += words;
+   }
+   return NULL;
+}
+
+void
+tu_shader_diag_stage(const VkPipelineShaderStageCreateInfo *stage,
+                     const char *phase, VkResult result)
+{
+   static unsigned lines;
+   const char *name = tu_shader_diag_name(stage);
+   if (!name || __atomic_fetch_add(&lines, 1, __ATOMIC_RELAXED) >= 128)
+      return;
+   fprintf(stderr, "[TU_CS_DIAG] shader=%s stage=%p phase=%s result=%d\n",
+           name, (const void *)stage, phase, result);
+   fflush(stderr);
+}
+
 nir_shader *
 tu_spirv_to_nir(struct tu_device *dev,
                 void *mem_ctx,
@@ -205,12 +253,19 @@ tu_spirv_to_nir(struct tu_device *dev,
       ir3_get_compiler_options(dev->compiler);
 
    nir_shader *nir;
+   tu_shader_diag_stage(stage_info, "spirv-to-nir-begin", VK_SUCCESS);
    VkResult result =
       vk_pipeline_shader_stage_to_nir(&dev->vk, pipeline_flags, stage_info,
                                       &tu_spirv_options, nir_options,
                                       mem_ctx, &nir);
+   tu_shader_diag_stage(stage_info, "spirv-to-nir-end", result);
    if (result != VK_SUCCESS)
       return NULL;
+
+   const char *diag_name = tu_shader_diag_name(stage_info);
+   if (diag_name)
+      nir->info.label = ralloc_strdup(nir, diag_name);
+   ir3_shader_diag(nir, "nir-lowering-begin");
 
    /* ir3 uses num_ubos and num_ssbos to track the number of *bindful*
     * UBOs/SSBOs, but spirv_to_nir sets them to the total number of objects
@@ -290,6 +345,7 @@ tu_spirv_to_nir(struct tu_device *dev,
       tu_nir_lower_softfloat64(dev, nir);
    }
 
+   ir3_shader_diag(nir, "nir-lowering-end");
    return nir;
 }
 
@@ -3594,6 +3650,7 @@ tu_shader_create(struct tu_device *dev,
       }
    }
 
+   ir3_shader_diag(nir, "io-lowering-begin");
    struct ir3_const_allocations const_allocs = {};
    NIR_PASS(_, nir, tu_lower_io, dev, shader, layout,
             key->read_only_input_attachments, key->dynamic_renderpass,
@@ -3604,7 +3661,9 @@ tu_shader_create(struct tu_device *dev,
    struct ir3_shader_nir_options nir_options;
    init_ir3_nir_options(&nir_options, key);
 
+   ir3_shader_diag(nir, "finalize-nir-begin");
    ir3_finalize_nir(dev->compiler, &nir_options, nir);
+   ir3_shader_diag(nir, "finalize-nir-end");
 
    /* This has to happen after finalizing, so that we know the final bitsize
     * after vectorizing.
@@ -3639,6 +3698,7 @@ tu_shader_create(struct tu_device *dev,
       .nir_options = nir_options,
    };
 
+   ir3_shader_diag(nir, "variant-begin");
    struct ir3_shader *ir3_shader =
       ir3_shader_from_nir(dev->compiler, nir, &options);
 
@@ -3653,6 +3713,7 @@ tu_shader_create(struct tu_device *dev,
                                    executable_info);
    }
 
+   ir3_shader_diag(nir, "variant-end");
    ir3_shader_destroy(ir3_shader);
 
    shader->view_mask = key->multiview_mask;

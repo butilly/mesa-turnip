@@ -21,6 +21,9 @@
 
 BEGINC;
 
+/* Temporary, bounded compiler breadcrumbs for captured compute shaders. */
+void ir3_shader_diag(const nir_shader *nir, const char *phase);
+
 #define dword_offsetof(type, name) DIV_ROUND_UP(offsetof(type, name), 4)
 #define dword_sizeof(type)         DIV_ROUND_UP(sizeof(type), 4)
 

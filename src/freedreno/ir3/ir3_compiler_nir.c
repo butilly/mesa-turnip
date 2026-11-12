@@ -5805,7 +5805,9 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
 
    assert(!so->ir);
 
+   ir3_shader_diag(shader->nir, "context-begin");
    ctx = ir3_context_init(compiler, shader, so);
+   ir3_shader_diag(shader->nir, "context-end");
    if (!ctx) {
       DBG("INIT failed!");
       ret = -1;
@@ -5814,7 +5816,9 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
 
    bool is_preamble_speculatable = ir3_nir_is_preamble_speculatable(ctx->s);
 
+   ir3_shader_diag(shader->nir, "emit-begin");
    emit_instructions(ctx);
+   ir3_shader_diag(shader->nir, "emit-end");
 
    if (ctx->error) {
       DBG("EMIT failed!");
@@ -6036,6 +6040,7 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
    ir3_debug_print(ir, "AFTER: nir->ir3");
    ir3_validate(ir);
 
+   ir3_shader_diag(shader->nir, "ir3-opt-begin");
    IR3_PASS(ir, ir3_remove_unreachable);
 
    IR3_PASS(ir, ir3_array_to_ssa);
@@ -6081,7 +6086,9 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
    /* At this point, all the dead code should be long gone: */
    assert(!IR3_PASS(ir, ir3_dce, so));
 
+   ir3_shader_diag(shader->nir, "schedule-begin");
    ret = ir3_sched(ir);
+   ir3_shader_diag(shader->nir, "schedule-end");
    if (ret) {
       DBG("SCHED failed!");
       goto out;
@@ -6125,7 +6132,9 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
    }
 
    IR3_PASS(ir, ir3_cleanup_rpt, so);
+   ir3_shader_diag(shader->nir, "register-allocation-begin");
    ret = ir3_ra(so);
+   ir3_shader_diag(shader->nir, "register-allocation-end");
 
    if (ret) {
       mesa_loge("ir3_ra() failed!");
@@ -6137,7 +6146,9 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
    IR3_PASS(ir, ir3_merge_rpt, so);
 
    IR3_PASS(ir, ir3_legalize_relative);
+   ir3_shader_diag(shader->nir, "subgroups-begin");
    IR3_PASS(ir, ir3_lower_subgroups);
+   ir3_shader_diag(shader->nir, "subgroups-end");
 
    /* This isn't valid to do when transform feedback is done in HW, which is
     * a4xx onward, because the VS may use components not read by the FS for
@@ -6202,7 +6213,9 @@ ir3_compile_shader_nir(struct ir3_compiler *compiler,
    /* We need to do legalize after (for frag shader's) the "bary.f"
     * offsets (inloc) have been assigned.
     */
+   ir3_shader_diag(shader->nir, "legalize-begin");
    IR3_PASS(ir, ir3_legalize, so, &max_bary, is_preamble_speculatable);
+   ir3_shader_diag(shader->nir, "legalize-end");
 
    if (ctx->compiler->info->props.cs_lock_unlock_quirk && ir3_shader_compute(so)) {
       struct ir3_instruction *end = ir3_find_end(so->ir);

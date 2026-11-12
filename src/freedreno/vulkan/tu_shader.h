@@ -171,6 +171,13 @@ tu_nir_lower_ray_queries(nir_shader *nir);
 bool
 tu_nir_lower_demote_samples(nir_shader *nir);
 
+const char *
+tu_shader_diag_name(const VkPipelineShaderStageCreateInfo *stage);
+
+void
+tu_shader_diag_stage(const VkPipelineShaderStageCreateInfo *stage,
+                     const char *phase, VkResult result);
+
 nir_shader *
 tu_spirv_to_nir(struct tu_device *dev,
                 void *mem_ctx,
