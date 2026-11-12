@@ -41,6 +41,8 @@
 #include "vk_sync_dummy.h"
 #include "vk_sync_timeline.h"
 #include "vk_util.h"
+#include "vk_enum_to_str.h"
+#include "util/log.h"
 
 static VkResult
 vk_queue_start_submit_thread(struct vk_queue *queue);
@@ -130,6 +132,8 @@ _vk_queue_set_lost(struct vk_queue *queue,
    va_start(ap, msg);
    vsnprintf(queue->_lost.error_msg, sizeof(queue->_lost.error_msg), msg, ap);
    va_end(ap);
+
+   mesa_loge("%s:%d: queue lost: %s", file, line, queue->_lost.error_msg);
 
    p_atomic_inc(&queue->base.device->_lost.lost);
 
@@ -702,14 +706,14 @@ vk_queue_flush(struct vk_queue *queue, uint32_t *submit_count_out)
             result = VK_SUCCESS;
             goto done;
          } else if (result != VK_SUCCESS) {
-            result = vk_queue_set_lost(queue, "Wait for time points failed");
+            result = vk_queue_set_lost(queue, "Wait for time points failed: %s", vk_Result_to_str(result));
             goto done;
          }
       }
 
       result = vk_queue_submit_final(queue, submit);
       if (unlikely(result != VK_SUCCESS)) {
-         result = vk_queue_set_lost(queue, "queue::driver_submit failed");
+         result = vk_queue_set_lost(queue, "queue::driver_submit failed: %s", vk_Result_to_str(result));
          goto done;
       }
 
@@ -762,13 +766,13 @@ vk_queue_submit_thread_func(void *_data)
                                  submit->wait_count, submit->waits,
                                  VK_SYNC_WAIT_PENDING, UINT64_MAX);
       if (unlikely(result != VK_SUCCESS)) {
-         vk_queue_set_lost(queue, "Wait for time points failed");
+         vk_queue_set_lost(queue, "Wait for time points failed: %s", vk_Result_to_str(result));
          return 1;
       }
 
       result = vk_queue_submit_final(queue, submit);
       if (unlikely(result != VK_SUCCESS)) {
-         vk_queue_set_lost(queue, "queue::driver_submit failed");
+         vk_queue_set_lost(queue, "queue::driver_submit failed: %s", vk_Result_to_str(result));
          return 1;
       }
 

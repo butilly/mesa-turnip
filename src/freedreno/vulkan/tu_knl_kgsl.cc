@@ -1688,8 +1688,27 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
    kgsl_syncobj_destroy(&wait_sync);
 
    if (ret) {
-      result = vk_device_set_lost(&queue->device->vk, "submit failed: %s\n",
-                                  strerror(errno));
+      const int submit_errno = errno;
+      uint32_t reset_status = queue->msm_queue_id;
+      VkResult reset_result =
+         get_kgsl_prop(queue->device->fd, KGSL_PROP_GPU_RESET_STAT,
+                       &reset_status, sizeof(reset_status));
+
+      if (reset_result == VK_SUCCESS) {
+         result = vk_device_set_lost(
+            &queue->device->vk,
+            "submit failed: %s (KGSL reset status %u, context %u, "
+            "submit %u, previous fence %d, returned fence %u)\n",
+            strerror(submit_errno), reset_status, queue->msm_queue_id,
+            queue->device->submit_count, queue->fence, timestamp);
+      } else {
+         result = vk_device_set_lost(
+            &queue->device->vk,
+            "submit failed: %s (context %u, submit %u, previous fence %d, "
+            "returned fence %u; failed to query KGSL reset status)\n",
+            strerror(submit_errno), queue->msm_queue_id,
+            queue->device->submit_count, queue->fence, timestamp);
+      }
       goto fail_submit;
    }
 
@@ -1756,25 +1775,36 @@ kgsl_device_check_status(struct tu_device *device)
 {
    for (unsigned i = 0; i < TU_MAX_QUEUE_FAMILIES; i++) {
       for (unsigned q = 0; q < device->queue_count[i]; q++) {
+         struct tu_queue *queue = &device->queues[i][q];
+
          /* Emulated queues share the real queue's context and have no
           * kernel submitqueue of their own, so skip them.
           */
-         if (vk_queue_is_emulated(&device->queues[i][q].vk))
+         if (vk_queue_is_emulated(&queue->vk))
             continue;
 
          /* KGSL's KGSL_PROP_GPU_RESET_STAT takes the u32 msm_queue_id and returns a
          * KGSL_CTX_STAT_* for the worst reset that happened since the last time it
          * was queried on that queue.
          */
-         uint32_t value = device->queues[i][q].msm_queue_id;
+         uint32_t value = queue->msm_queue_id;
          VkResult status = get_kgsl_prop(device->fd, KGSL_PROP_GPU_RESET_STAT,
                                        &value, sizeof(value));
          if (status != VK_SUCCESS)
-            return vk_device_set_lost(&device->vk, "Failed to get GPU reset status");
+            return vk_device_set_lost(
+               &device->vk,
+               "Failed to get GPU reset status (queue family %u, queue %u, "
+               "context %u, submit %u, fence %d)",
+               i, q, queue->msm_queue_id, device->submit_count, queue->fence);
 
          if (value != KGSL_CTX_STAT_NO_ERROR &&
             value != KGSL_CTX_STAT_INNOCENT_CONTEXT_RESET_EXT) {
-            return vk_device_set_lost(&device->vk, "GPU faulted or hung");
+            return vk_device_set_lost(
+               &device->vk,
+               "GPU faulted or hung (KGSL reset status %u, queue family %u, "
+               "queue %u, context %u, submit %u, fence %d)",
+               value, i, q, queue->msm_queue_id, device->submit_count,
+               queue->fence);
          }
       }
    }
