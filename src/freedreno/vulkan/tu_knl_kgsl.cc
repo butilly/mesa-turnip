@@ -1784,11 +1784,25 @@ kgsl_device_check_status(struct tu_device *device)
          VkResult status = get_kgsl_prop(device->fd, KGSL_PROP_GPU_RESET_STAT,
                                        &value, sizeof(value));
          if (status != VK_SUCCESS)
-            return vk_device_set_lost(&device->vk, "Failed to get GPU reset status");
+            return vk_device_set_lost(&device->vk,
+                                      "Failed to get GPU reset status for queue family %u, queue %u, KGSL context %u (submit %u, fence %u)",
+                                      i, q, device->queues[i][q].msm_queue_id,
+                                      device->submit_count,
+                                      p_atomic_read(&device->queues[i][q].fence));
 
          if (value != KGSL_CTX_STAT_NO_ERROR &&
             value != KGSL_CTX_STAT_INNOCENT_CONTEXT_RESET_EXT) {
-            return vk_device_set_lost(&device->vk, "GPU faulted or hung");
+            const char *reset_status =
+               value == KGSL_CTX_STAT_GUILTY_CONTEXT_RESET_EXT ? "guilty" :
+               value == KGSL_CTX_STAT_UNKNOWN_CONTEXT_RESET_EXT ? "unknown" :
+               "unrecognized";
+
+            return vk_device_set_lost(&device->vk,
+                                      "GPU faulted or hung: KGSL reset status %s (0x%x), queue family %u, queue %u, context %u, submit %u, fence %u",
+                                      reset_status, value, i, q,
+                                      device->queues[i][q].msm_queue_id,
+                                      device->submit_count,
+                                      p_atomic_read(&device->queues[i][q].fence));
          }
       }
    }
