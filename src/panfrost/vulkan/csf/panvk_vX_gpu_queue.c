@@ -18,6 +18,8 @@
 
 #include "pan_trace.h"
 
+#include "kmod/pan_kmod.h"
+
 #include "util/bitscan.h"
 #include "util/log.h"
 #include "vk_drm_syncobj.h"
@@ -99,6 +101,9 @@ init_render_desc_ringbuf(struct panvk_gpu_queue *queue)
    if (!ringbuf->bo)
       return panvk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
                           "Failed to create a descriptor ring buffer context");
+
+   pan_kmod_set_bo_label(dev->kmod.dev, ringbuf->bo,
+                         "Render descriptor ring buffer");
 
    if (!(flags & PAN_KMOD_BO_FLAG_NO_MMAP)) {
       ringbuf->addr.host = pan_kmod_bo_mmap(ringbuf->bo, PROT_READ | PROT_WRITE,
@@ -258,6 +263,8 @@ init_subqueue_tracing(struct panvk_gpu_queue *queue,
    if (!subq->tracebuf.bo)
       return panvk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
                           "Failed to create a CS tracebuf");
+
+   pan_kmod_set_bo_label(dev->kmod.dev, subq->tracebuf.bo, "CS trace buffer");
 
    subq->tracebuf.addr.host = pan_kmod_bo_mmap(
       subq->tracebuf.bo, PROT_READ | PROT_WRITE, MAP_SHARED, NULL);
@@ -558,13 +565,13 @@ init_subqueue(struct panvk_gpu_queue *queue, enum panvk_subqueue_id subqueue)
       return panvk_errorf(dev->vk.physical, VK_ERROR_INITIALIZATION_FAILED,
                           "Failed to initialized subqueue: %m");
 
-   ret = drmSyncobjWait(dev->drm_fd, &queue->syncobj_handle, 1, INT64_MAX, 0,
-                        NULL);
+   ret = pan_kmod_sync_wait(dev->kmod.dev, &queue->syncobj_handle, 1, INT64_MAX, 0,
+                            NULL);
    if (ret)
       return panvk_errorf(dev->vk.physical, VK_ERROR_INITIALIZATION_FAILED,
                           "SyncobjWait failed: %m");
 
-   drmSyncobjReset(dev->drm_fd, &queue->syncobj_handle, 1);
+   pan_kmod_sync_reset(dev->kmod.dev, &queue->syncobj_handle, 1);
 
    if (PANVK_DEBUG(TRACE)) {
       pandecode_user_msg(dev->debug.decode_ctx, "Init subqueue %d binary\n\n",
@@ -1245,9 +1252,9 @@ panvk_queue_submit_process_signals(struct panvk_queue_submit *submit,
 
    if (submit->force_sync) {
       uint64_t point = util_bitcount(submit->signal_queue_mask);
-      ret = drmSyncobjTimelineWait(dev->drm_fd, &queue->syncobj_handle,
-                                   &point, 1, INT64_MAX,
-                                   DRM_SYNCOBJ_WAIT_FLAGS_WAIT_ALL, NULL);
+      ret = pan_kmod_sync_timeline_wait(dev->kmod.dev, &queue->syncobj_handle,
+                                        &point, 1, INT64_MAX,
+                                        DRM_SYNCOBJ_WAIT_FLAGS_WAIT_ALL, NULL);
       assert(!ret);
    }
 
@@ -1257,23 +1264,23 @@ panvk_queue_submit_process_signals(struct panvk_queue_submit *submit,
          vk_sync_as_drm_syncobj(signal->sync);
       assert(syncobj);
 
-      drmSyncobjTransfer(dev->drm_fd, syncobj->syncobj, signal->signal_value,
-                         queue->syncobj_handle, 0, 0);
+      pan_kmod_sync_transfer(dev->kmod.dev, syncobj->syncobj,
+                             signal->signal_value, queue->syncobj_handle, 0, 0);
    }
 
    if (submit->utrace.queue_mask) {
       const struct vk_drm_syncobj *syncobj =
          vk_sync_as_drm_syncobj(queue->utrace.sync);
 
-      drmSyncobjTransfer(dev->drm_fd, syncobj->syncobj,
-                         queue->utrace.next_value++, queue->syncobj_handle, 0,
-                         0);
+      pan_kmod_sync_transfer(dev->kmod.dev, syncobj->syncobj,
+                             queue->utrace.next_value++, queue->syncobj_handle,
+                             0, 0);
 
       /* process flushed events after the syncobj is set up */
       u_trace_context_process(&dev->utrace.utctx, false);
    }
 
-   drmSyncobjReset(dev->drm_fd, &queue->syncobj_handle, 1);
+   pan_kmod_sync_reset(dev->kmod.dev, &queue->syncobj_handle, 1);
 }
 
 static void
@@ -1428,7 +1435,7 @@ panvk_per_arch(create_gpu_queue)(struct panvk_device *dev,
    if (result != VK_SUCCESS)
       goto err_free_queue;
 
-   int ret = drmSyncobjCreate(dev->drm_fd, 0, &queue->syncobj_handle);
+   int ret = pan_kmod_sync_create(dev->kmod.dev, 0, &queue->syncobj_handle);
    if (ret) {
       result = panvk_errorf(dev, VK_ERROR_INITIALIZATION_FAILED,
                             "Failed to create our internal sync object");
@@ -1463,7 +1470,7 @@ err_cleanup_tiler:
    cleanup_tiler(queue);
 
 err_destroy_syncobj:
-   drmSyncobjDestroy(dev->drm_fd, queue->syncobj_handle);
+   pan_kmod_sync_destroy(dev->kmod.dev, queue->syncobj_handle);
 
 err_finish_queue:
    vk_queue_finish(&queue->vk);
@@ -1482,7 +1489,7 @@ panvk_per_arch(destroy_gpu_queue)(struct vk_queue *vk_queue)
    cleanup_queue(queue);
    destroy_group(queue);
    cleanup_tiler(queue);
-   drmSyncobjDestroy(dev->drm_fd, queue->syncobj_handle);
+   pan_kmod_sync_destroy(dev->kmod.dev, queue->syncobj_handle);
    vk_queue_finish(&queue->vk);
    vk_free(&dev->vk.alloc, queue);
 }

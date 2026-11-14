@@ -115,6 +115,8 @@ struct tu_cs
    struct tu_device *device;
    enum tu_cs_mode mode;
    bool writeable;
+   /* Whether entries of this CS may be submitted to the kernel as IB1s. */
+   bool ib1;
    uint32_t next_bo_size;
    VkResult status;
 
@@ -242,6 +244,10 @@ tu_cs_init(struct tu_cs *cs,
            struct tu_device *device,
            enum tu_cs_mode mode,
            uint32_t initial_size, const char *name);
+
+void
+tu_cs_init_ib1(
+   struct tu_cs *cs, struct tu_device *device, enum tu_cs_mode mode, uint32_t initial_size, const char *name);
 
 void
 tu_cs_init_external(struct tu_cs *cs, struct tu_device *device,
@@ -923,9 +929,6 @@ struct tu_crb : public tu_pkt {
       return *this;
    }
 
-   /* for with_crb() */
-   bool first = true;
-
 private:
    /* Disallow copy constructor to prevent mistakes with using tu_crb instead
     * of tu_crb& as function param:
@@ -934,9 +937,14 @@ private:
 };
 
 
-#define with_crb(...) \
-   for (tu_crb crb(__VA_ARGS__); crb.first; crb.first = false)
+#define __with_crb(_label, ...)                                      \
+   for (tu_crb crb(__VA_ARGS__); true; ({ goto _label; }))           \
+      if (false) {                                                   \
+_label:                                                              \
+         break;                                                      \
+      } else
 
+#define with_crb(...) __with_crb(CONCAT2(_label, __COUNTER__), __VA_ARGS__)
 
 /**
  * A builder for an arbitrary PKT7 (for CRB, use fd_crb instead)

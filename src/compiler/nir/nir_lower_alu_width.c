@@ -235,6 +235,8 @@ lower_alu_instr_width(nir_builder *b, nir_instr *instr, void *_data)
    case nir_op_vec3:
    case nir_op_vec2:
    case nir_op_cube_amd:
+   case nir_op_uadd_with_carry_out:
+   case nir_op_usub_with_borrow_out:
       /* We don't need to scalarize these ops, they're the ones generated to
        * group up outputs into a value that can be SSAed.
        */
@@ -269,30 +271,6 @@ lower_alu_instr_width(nir_builder *b, nir_instr *instr, void *_data)
       return nir_vec2(b,
                       nir_f2f32(b, nir_channel(b, unpacked, 0)),
                       nir_f2f32(b, nir_channel(b, unpacked, 1)));
-   }
-
-   case nir_op_pack_uvec2_to_uint: {
-      assert(b->shader->options->lower_pack_snorm_2x16 ||
-             b->shader->options->lower_pack_unorm_2x16);
-
-      nir_def *word = nir_extract_u16(b, nir_ssa_for_alu_src(b, alu, 0),
-                                      nir_imm_int(b, 0));
-      return nir_ior(b, nir_ishl(b, nir_channel(b, word, 1), nir_imm_int(b, 16)),
-                     nir_channel(b, word, 0));
-   }
-
-   case nir_op_pack_uvec4_to_uint: {
-      assert(b->shader->options->lower_pack_snorm_4x8 ||
-             b->shader->options->lower_pack_unorm_4x8);
-
-      if (b->shader->options->has_pack_32_4x8)
-         return nir_pack_32_4x8(b, nir_u2u8(b, nir_ssa_for_alu_src(b, alu, 0)));
-
-      nir_def *byte = nir_extract_u8(b, nir_ssa_for_alu_src(b, alu, 0),
-                                     nir_imm_int(b, 0));
-      return nir_ior(b, nir_ior(b, nir_ishl(b, nir_channel(b, byte, 3), nir_imm_int(b, 24)), nir_ishl(b, nir_channel(b, byte, 2), nir_imm_int(b, 16))),
-                     nir_ior(b, nir_ishl(b, nir_channel(b, byte, 1), nir_imm_int(b, 8)),
-                             nir_channel(b, byte, 0)));
    }
 
    case nir_op_fdph: {

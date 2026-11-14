@@ -13,7 +13,80 @@
 
 #include "util/u_math.h"
 
+static const uint32_t ac_sdma_t2t_alignment_2d_and_planar[][3] = {
+   {16, 16, 1}, /* 1 bpp */
+   {16, 8, 1},  /* 2 bpp */
+   {8, 8, 1},   /* 4 bpp */
+   {8, 4, 1},   /* 8 bpp */
+   {4, 4, 1},   /* 16 bpp */
+};
+
+static const uint32_t ac_sdma_t2t_alignment_3d[][3] = {
+   {8, 4, 8}, /* 1 bpp */
+   {4, 4, 8}, /* 2 bpp */
+   {4, 4, 4}, /* 4 bpp */
+   {4, 2, 4}, /* 8 bpp */
+   {2, 2, 4}, /* 16 bpp */
+};
+
+static const uint32_t ac_sdma_t2t_thick_z_alignment_sdma2[] = {
+   1, /* LINEAR_GENERAL */
+   1, /* LINEAR_ALIGNED */
+   1, /* 1D_TILED_THIN1 */
+   4, /* 1D_TILED_THICK */
+   1, /* 2D_TILED_THIN1 */
+   1, /* PRT_TILED_THIN1 */
+   1, /* PRT_2D_TILED_THIN1 */
+   4, /* 2D_TILED_THICK */
+   8, /* 2D_TILED_XTHICK */
+   4, /* PRT_TILED_THICK */
+   4, /* PRT_2D_TILED_THICK */
+   1, /* PRT_3D_TILED_THIN1 */
+   1, /* 3D_TILED_THIN1 */
+   4, /* 3D_TILED_THICK */
+   8, /* 3D_TILED_XTHICK */
+   4, /* PRT_3D_TILED_THICK */
+};
+
+static bool
+ac_sdma_5_2_uses_cpv(enum sdma_version sdma_ip_version)
+{
+   return sdma_ip_version >= SDMA_5_2 && sdma_ip_version < SDMA_7_0;
+}
+
 static uint32_t
+ac_sdma_5_2_get_cache_policy_rd(enum sdma_version sdma_ip_version)
+{
+   /* Same cache policy as the kernel. */
+   if (ac_sdma_5_2_uses_cpv(sdma_ip_version))
+      return SDMA_5_2_CP_GL2_NOA | SDMA_5_2_CP_LLC_NOALLOC;
+
+   return 0;
+}
+
+static uint32_t
+ac_sdma_5_2_get_cache_policy_wr(enum sdma_version sdma_ip_version)
+{
+   /* Same cache policy as the kernel. */
+   if (ac_sdma_5_2_uses_cpv(sdma_ip_version))
+      return SDMA_5_2_CP_GL2_BYPASS | SDMA_5_2_CP_LLC_NOALLOC;
+
+   return 0;
+}
+
+static uint32_t
+ac_sdma_7_0_get_mall_policy(enum sdma_version sdma_ip_version, bool is_copy)
+{
+   /* Use Non-Temporal policy for all copies because re-use isn't expected and
+    * it's supposedly better.
+    */
+   if (sdma_ip_version == SDMA_7_0)
+      return is_copy ? SDMA_7_0_MALL_POLICY_NT : SDMA_7_0_MALL_POLICY_RT;
+
+   return 0;
+}
+
+uint32_t
 ac_sdma_max_img_extent(const enum sdma_version ver)
 {
    if (ver >= SDMA_7_0)
@@ -34,10 +107,15 @@ ac_emit_sdma_nop(struct ac_cmdbuf *cs)
 }
 
 void
-ac_emit_sdma_write_timestamp(struct ac_cmdbuf *cs, uint64_t va)
+ac_emit_sdma_write_timestamp(struct ac_cmdbuf *cs, enum sdma_version sdma_ip_version, uint64_t va)
 {
+   const bool cpv = ac_sdma_5_2_uses_cpv(sdma_ip_version);
+   const uint32_t cp = ac_sdma_5_2_get_cache_policy_wr(sdma_ip_version);
+   const uint32_t mp = ac_sdma_7_0_get_mall_policy(sdma_ip_version, false);
+
    ac_cmdbuf_begin(cs);
-   ac_cmdbuf_emit(SDMA_PACKET(SDMA_OPCODE_TIMESTAMP, SDMA_TS_SUB_OPCODE_GET_GLOBAL_TIMESTAMP, 0));
+   ac_cmdbuf_emit(SDMA_PACKET(SDMA_OPCODE_TIMESTAMP, SDMA_TS_SUB_OPCODE_GET_GLOBAL_TIMESTAMP, 0) |
+                  SDMA_5_2_TIMESTAMP_CPV(cpv) | SDMA_5_2_TIMESTAMP_CP(cp) | SDMA_7_0_TIMESTAMP_MALL_POLICY(mp));
    ac_cmdbuf_emit(va);
    ac_cmdbuf_emit(va >> 32);
    ac_cmdbuf_end();
@@ -48,6 +126,10 @@ ac_emit_sdma_fence(struct ac_cmdbuf *const cs,
                    const enum sdma_version sdma_ip_version,
                    const uint64_t va, const uint32_t fence)
 {
+   const bool cpv = ac_sdma_5_2_uses_cpv(sdma_ip_version);
+   const uint32_t cp = ac_sdma_5_2_get_cache_policy_wr(sdma_ip_version);
+   const uint32_t mp = ac_sdma_7_0_get_mall_policy(sdma_ip_version, false);
+
    ac_cmdbuf_begin(cs);
 
    /* Use NOP before FENCE on SDMA 2.4-3.1 to prevent hangs.
@@ -57,7 +139,8 @@ ac_emit_sdma_fence(struct ac_cmdbuf *const cs,
    if (sdma_ip_version >= SDMA_2_4 && sdma_ip_version <= SDMA_3_1)
       ac_cmdbuf_emit(SDMA_PACKET(SDMA_OPCODE_NOP, 0, 0));
 
-   ac_cmdbuf_emit(SDMA_PACKET(SDMA_OPCODE_FENCE, 0, SDMA_FENCE_MTYPE_UC));
+   ac_cmdbuf_emit(SDMA_PACKET(SDMA_OPCODE_FENCE, 0, SDMA_FENCE_MTYPE_UC) |
+                  SDMA_5_2_FENCE_CPV(cpv) | SDMA_5_2_FENCE_CP(cp) | SDMA_7_0_FENCE_MALL_POLICY(mp));
    ac_cmdbuf_emit(va);
    ac_cmdbuf_emit(va >> 32);
    ac_cmdbuf_emit(fence);
@@ -71,6 +154,10 @@ ac_emit_sdma_wait_mem(struct ac_cmdbuf *const cs,
                       const uint32_t op, const uint64_t va,
                       const uint32_t ref, const uint32_t mask)
 {
+   const bool cpv = ac_sdma_5_2_uses_cpv(sdma_ip_version);
+   const uint32_t cp = ac_sdma_5_2_get_cache_policy_rd(sdma_ip_version);
+   const uint32_t mp = ac_sdma_7_0_get_mall_policy(sdma_ip_version, false);
+
    ac_cmdbuf_begin(cs);
 
    /* Use NOP before POLL_REGMEM on SDMA 2.4-3.1 to prevent hangs.
@@ -80,7 +167,8 @@ ac_emit_sdma_wait_mem(struct ac_cmdbuf *const cs,
    if (sdma_ip_version >= SDMA_2_4 && sdma_ip_version <= SDMA_3_1)
       ac_cmdbuf_emit(SDMA_PACKET(SDMA_OPCODE_NOP, 0, 0));
 
-   ac_cmdbuf_emit(SDMA_PACKET(SDMA_OPCODE_POLL_REGMEM, 0, 0) | op << 28 | SDMA_POLL_MEM);
+   ac_cmdbuf_emit(SDMA_PACKET(SDMA_OPCODE_POLL_REGMEM, 0, 0) | op << 28 | SDMA_POLL_MEM |
+                  SDMA_5_2_POLL_REGMEM_CPV(cpv) | SDMA_5_2_POLL_REGMEM_CP(cp) | SDMA_7_0_POLL_REGMEM_MALL_POLICY(mp));
    ac_cmdbuf_emit(va);
    ac_cmdbuf_emit(va >> 32);
    ac_cmdbuf_emit(ref);
@@ -93,12 +181,17 @@ ac_emit_sdma_wait_mem(struct ac_cmdbuf *const cs,
 void
 ac_emit_sdma_write_data_head(struct ac_cmdbuf *cs, enum sdma_version ver, uint64_t va, uint32_t count)
 {
+   const bool cpv = ac_sdma_5_2_uses_cpv(ver);
+   const uint32_t cp = ac_sdma_5_2_get_cache_policy_wr(ver);
+   const uint32_t mp = ac_sdma_7_0_get_mall_policy(ver, false);
+
    ac_cmdbuf_begin(cs);
-   ac_cmdbuf_emit(SDMA_PACKET(SDMA_OPCODE_WRITE, SDMA_WRITE_SUB_OPCODE_LINEAR, 0));
+   ac_cmdbuf_emit(SDMA_PACKET(SDMA_OPCODE_WRITE, SDMA_WRITE_SUB_OPCODE_LINEAR, 0) |
+                  SDMA_5_2_WRITE_LINEAR_CPV(cpv));
    ac_cmdbuf_emit(va);
    ac_cmdbuf_emit(va >> 32);
    if (ver >= SDMA_4_0)
-      ac_cmdbuf_emit(count - 1);
+      ac_cmdbuf_emit((count - 1) | SDMA_5_2_WRITE_LINEAR_CP(cp) | SDMA_7_0_WRITE_LINEAR_MALL_POLICY(mp));
    else
       ac_cmdbuf_emit(count);
    ac_cmdbuf_end();
@@ -112,9 +205,14 @@ ac_emit_sdma_constant_fill(struct ac_cmdbuf *cs, enum sdma_version sdma_ip_versi
 
    const uint64_t max_fill_size = BITFIELD64_MASK(sdma_ip_version >= SDMA_6_0 ? 30 : 22) & ~0x3;
    const uint64_t bytes_written = MIN2(size, max_fill_size);
+   const bool cpv = ac_sdma_5_2_uses_cpv(sdma_ip_version);
+   const uint32_t cp = ac_sdma_5_2_get_cache_policy_wr(sdma_ip_version);
+   const uint32_t mp = ac_sdma_7_0_get_mall_policy(sdma_ip_version, false);
 
    ac_cmdbuf_begin(cs);
-   ac_cmdbuf_emit(SDMA_PACKET(SDMA_OPCODE_CONSTANT_FILL, 0, 0) | (fill_size << 30));
+   ac_cmdbuf_emit(SDMA_PACKET(SDMA_OPCODE_CONSTANT_FILL, 0, 0) | (fill_size << 30) |
+                  SDMA_5_2_CONSTANT_FILL_CPV(cpv) | SDMA_5_2_CONSTANT_FILL_CP(cp) |
+                  SDMA_7_0_CONSTANT_FILL_MALL_POLICY(mp));
    ac_cmdbuf_emit(va);
    ac_cmdbuf_emit(va >> 32);
    ac_cmdbuf_emit(value);
@@ -133,7 +231,7 @@ ac_emit_sdma_copy_linear(struct ac_cmdbuf *cs, enum sdma_version sdma_ip_version
                          bool tmz)
 {
    const unsigned max_size_per_packet =
-      sdma_ip_version >= SDMA_5_2 ? SDMA_V5_2_COPY_MAX_BYTES : SDMA_V2_0_COPY_MAX_BYTES;
+      sdma_ip_version >= SDMA_5_2 ? SDMA_5_2_COPY_MAX_BYTES : SDMA_2_0_COPY_MAX_BYTES;
    uint32_t align = ~0u;
 
    assert(sdma_ip_version >= SDMA_2_0);
@@ -150,11 +248,18 @@ ac_emit_sdma_copy_linear(struct ac_cmdbuf *cs, enum sdma_version sdma_ip_version
    }
 
    const uint64_t bytes_written = size >= 4 ? MIN2(size & align, max_size_per_packet) : size;
+   const bool cpv = ac_sdma_5_2_uses_cpv(sdma_ip_version);
+   const uint32_t src_cp = ac_sdma_5_2_get_cache_policy_rd(sdma_ip_version);
+   const uint32_t dst_cp = ac_sdma_5_2_get_cache_policy_wr(sdma_ip_version);
+   const uint32_t mp = ac_sdma_7_0_get_mall_policy(sdma_ip_version, true);
 
    ac_cmdbuf_begin(cs);
-   ac_cmdbuf_emit(SDMA_PACKET(SDMA_OPCODE_COPY, SDMA_COPY_SUB_OPCODE_LINEAR, (tmz ? 4 : 0)));
+   ac_cmdbuf_emit(SDMA_PACKET(SDMA_OPCODE_COPY, SDMA_COPY_SUB_OPCODE_LINEAR, (tmz ? 4 : 0)) |
+                  SDMA_5_2_COPY_LINEAR_CPV(cpv));
    ac_cmdbuf_emit(sdma_ip_version >= SDMA_4_0 ? bytes_written - 1 : bytes_written);
-   ac_cmdbuf_emit(0);
+   ac_cmdbuf_emit(SDMA_5_2_COPY_LINEAR_SRC_CP(src_cp) | SDMA_5_2_COPY_LINEAR_DST_CP(dst_cp) |
+                  SDMA_7_0_COPY_LINEAR_SRC_MALL_POLICY(mp) |
+                  SDMA_7_0_COPY_LINEAR_DST_MALL_POLICY(mp));
    ac_cmdbuf_emit(src_va);
    ac_cmdbuf_emit(src_va >> 32);
    ac_cmdbuf_emit(dst_va);
@@ -174,7 +279,8 @@ ac_sdma_check_pitches(enum sdma_version sdma_ip_version, uint32_t pitch,
    assert(util_is_aligned(pitch, pitch_alignment));
 
    if (uses_depth) {
-      ASSERTED const uint32_t slice_pitch_alignment = 4;
+      ASSERTED const uint32_t slice_pitch_alignment =
+         sdma_ip_version >= SDMA_5_0 ? MAX2(1, 4 / bpp) : 4;
       assert(slice_pitch);
       assert(slice_pitch <= (1 << 28));
       assert(util_is_aligned(slice_pitch, slice_pitch_alignment));
@@ -204,9 +310,14 @@ ac_emit_sdma_copy_linear_sub_window(struct ac_cmdbuf *cs, enum sdma_version sdma
    ac_sdma_check_pitches(sdma_ip_version, src->pitch, src->slice_pitch, src->bpp, false);
    ac_sdma_check_pitches(sdma_ip_version, dst->pitch, dst->slice_pitch, dst->bpp, false);
 
+   const bool cpv = ac_sdma_5_2_uses_cpv(sdma_ip_version);
+   const uint32_t src_cp = ac_sdma_5_2_get_cache_policy_rd(sdma_ip_version);
+   const uint32_t dst_cp = ac_sdma_5_2_get_cache_policy_wr(sdma_ip_version);
+   const uint32_t mp = ac_sdma_7_0_get_mall_policy(sdma_ip_version, true);
+
    ac_cmdbuf_begin(cs);
    ac_cmdbuf_emit(SDMA_PACKET(SDMA_OPCODE_COPY, SDMA_COPY_SUB_OPCODE_LINEAR_SUB_WINDOW, 0) |
-                  util_logbase2(src->bpp) << 29);
+                  util_logbase2(src->bpp) << 29 | SDMA_5_2_COPY_LINEAR_SUB_WINDOW_CPV(cpv));
    ac_cmdbuf_emit(src->va);
    ac_cmdbuf_emit(src->va >> 32);
    ac_cmdbuf_emit(src->offset.x | src->offset.y << 16);
@@ -219,7 +330,10 @@ ac_emit_sdma_copy_linear_sub_window(struct ac_cmdbuf *cs, enum sdma_version sdma
    ac_cmdbuf_emit(dst->slice_pitch - 1);
    if (sdma_ip_version >= SDMA_2_4) {
       ac_cmdbuf_emit((width - 1) | (height - 1) << 16);
-      ac_cmdbuf_emit((depth - 1));
+      ac_cmdbuf_emit((depth - 1) | SDMA_5_2_COPY_LINEAR_SUB_WINDOW_SRC_CP(src_cp) |
+                     SDMA_5_2_COPY_LINEAR_SUB_WINDOW_DST_CP(dst_cp) |
+                     SDMA_7_0_COPY_LINEAR_SUB_WINDOW_SRC_MALL_POLICY(mp) |
+                     SDMA_7_0_COPY_LINEAR_SUB_WINDOW_DST_MALL_POLICY(mp));
    } else {
       ac_cmdbuf_emit(width | (height << 16));
       ac_cmdbuf_emit(depth);
@@ -320,7 +434,7 @@ ac_sdma7_get_metadata_config(const struct radeon_info *info,
    uint32_t meta_config = 0;
 
    if (src->is_compressed) {
-      meta_config |= SDMA7_DCC_READ_CM(2);
+      meta_config |= SDMA_7_0_DCC_READ_CM(2);
    }
 
    if (dst->is_compressed) {
@@ -329,11 +443,11 @@ ac_sdma7_get_metadata_config(const struct radeon_info *info,
       const uint32_t dcc_max_compressed_block_size =
          dst->surf->u.gfx9.color.dcc.max_compressed_block_size;
 
-      meta_config |= SDMA7_DCC_DATA_FORMAT(data_format) |
-                     SDMA7_DCC_NUM_TYPE(number_type) |
-                     SDMA7_DCC_MAX_COM(dcc_max_compressed_block_size) |
-                     SDMA7_DCC_MAX_UCOM(1) |
-                     SDMA7_DCC_WRITE_CM(1);
+      meta_config |= SDMA_7_0_DCC_DATA_FORMAT(data_format) |
+                     SDMA_7_0_DCC_NUM_TYPE(number_type) |
+                     SDMA_7_0_DCC_MAX_COM(dcc_max_compressed_block_size) |
+                     SDMA_7_0_DCC_MAX_UCOM(1) |
+                     SDMA_7_0_DCC_WRITE_CM(1);
    }
 
    return meta_config;
@@ -353,15 +467,15 @@ ac_sdma5_get_metadata_config(const struct radeon_info *info,
                                  tiled->surf->u.gfx9.color.dcc.pipe_aligned;
    const bool dcc_write_compress = !detile && !tiled->htile_enabled;
 
-   return SDMA5_DCC_DATA_FORMAT(data_format) |
-          SDMA5_DCC_ALPHA_IS_ON_MSB(alpha_is_on_msb) |
-          SDMA5_DCC_NUM_TYPE(number_type) |
-          SDMA5_DCC_SURF_TYPE(tiled->surf_type) |
-          SDMA5_DCC_MAX_COM(dcc_max_compressed_block_size) |
-          SDMA5_DCC_PIPE_ALIGNED(dcc_pipe_aligned) |
-          SDMA5_DCC_MAX_UCOM(V_028C78_MAX_BLOCK_SIZE_256B) |
-          SDMA5_DCC_WRITE_COMPRESS(dcc_write_compress) |
-          SDMA5_DCC_TMZ(tmz);
+   return SDMA_5_0_DCC_DATA_FORMAT(data_format) |
+          SDMA_5_0_DCC_ALPHA_IS_ON_MSB(alpha_is_on_msb) |
+          SDMA_5_0_DCC_NUM_TYPE(number_type) |
+          SDMA_5_0_DCC_SURF_TYPE(tiled->surf_type) |
+          SDMA_5_0_DCC_MAX_COM(dcc_max_compressed_block_size) |
+          SDMA_5_0_DCC_PIPE_ALIGNED(dcc_pipe_aligned) |
+          SDMA_5_0_DCC_MAX_UCOM(V_028C78_MAX_BLOCK_SIZE_256B) |
+          SDMA_5_0_DCC_WRITE_COMPRESS(dcc_write_compress) |
+          SDMA_5_0_DCC_TMZ(tmz);
 }
 
 /**
@@ -411,31 +525,27 @@ ac_emit_sdma_copy_tiled_sub_window(struct ac_cmdbuf *cs, const struct radeon_inf
    const bool dcc =
       sdma_ip_version >= SDMA_7_0 ? (linear->is_compressed || tiled->is_compressed)
                                         : tiled->is_compressed;
-   uint32_t tiled_cp = 0, linear_cp = 0;
-   bool cpv = false;
+   const bool cpv = ac_sdma_5_2_uses_cpv(info->sdma_ip_version);
+   uint32_t rd_cp = ac_sdma_5_2_get_cache_policy_rd(info->sdma_ip_version);
+   uint32_t wr_cp = ac_sdma_5_2_get_cache_policy_wr(info->sdma_ip_version);
 
-   if (info->sdma_ip_version == SDMA_5_2) {
-      uint32_t rd_cp = SDMA_5_2_CP_LLC_NOALLOC;
-      uint32_t wr_cp = SDMA_5_2_CP_LLC_NOALLOC;
+   /* SDMA 5.2 (GFX10.3) seems to have a cache coherency issue with GL2 and
+    * DCC which causes random corruption. Overwrite the default cache policy
+    * and force NOA for writes and LRU for reads which seems the only
+    * combination to workaround it.
+    */
+   if (info->sdma_ip_version == SDMA_5_2 && dcc) {
+      rd_cp &= ~SDMA_5_2_CP_GL2_NOA;
+      rd_cp |= SDMA_5_2_CP_GL2_LRU;
 
-      if (dcc) {
-         /* SDMA 5.2 (GFX10.3) seems to have a cache coherency issue with GL2
-          * and DCC which causes random corruption. Overwrite the default
-          * cache policy and force NOA for writes and LRU for reads which
-          * seems the only combination to workaround it.
-          */
-         rd_cp |= SDMA_5_2_CP_GL2_LRU;
-         wr_cp |= SDMA_5_2_CP_GL2_NOA;
-      } else {
-         /* Use the default cache policy. */
-         rd_cp |= SDMA_5_2_CP_GL2_NOA;
-         wr_cp |= SDMA_5_2_CP_GL2_BYPASS;
-      }
-
-      tiled_cp = detile ? rd_cp : wr_cp;
-      linear_cp = detile ? wr_cp : rd_cp;
-      cpv = true;
+      wr_cp &= ~SDMA_5_2_CP_GL2_BYPASS;
+      wr_cp |= SDMA_5_2_CP_GL2_NOA;
    }
+
+   const uint32_t tiled_cp = detile ? rd_cp : wr_cp;
+   const uint32_t linear_cp = detile ? wr_cp : rd_cp;
+
+   const uint32_t mall_policy = ac_sdma_7_0_get_mall_policy(info->sdma_ip_version, true);
 
    /* Sanity checks. */
    const bool uses_depth = linear->offset.z != 0 || tiled->offset.z != 0 || depth != 1;
@@ -468,9 +578,10 @@ ac_emit_sdma_copy_tiled_sub_window(struct ac_cmdbuf *cs, const struct radeon_inf
    if (sdma_ip_version >= SDMA_2_4) {
       ac_cmdbuf_emit((width - 1) | (height - 1) << 16);
       ac_cmdbuf_emit((depth - 1) |
-                     (cpv ? SDMA_5_2_COPY_TILED_SUB_WINDOW_TILED_CP(tiled_cp) |
-                            SDMA_5_2_COPY_TILED_SUB_WINDOW_LINEAR_CP(linear_cp)
-                          : 0));
+                     SDMA_5_2_COPY_TILED_SUB_WINDOW_TILED_CP(tiled_cp) |
+                     SDMA_5_2_COPY_TILED_SUB_WINDOW_LINEAR_CP(linear_cp) |
+                     SDMA_7_0_COPY_TILED_SUB_WINDOW_TILED_MALL_POLICY(mall_policy) |
+                     SDMA_7_0_COPY_TILED_SUB_WINDOW_LINEAR_MALL_POLICY(mall_policy));
    } else {
       ac_cmdbuf_emit(width | (height << 16));
       ac_cmdbuf_emit(depth);
@@ -510,11 +621,11 @@ ac_emit_sdma_copy_t2t_sub_window(struct ac_cmdbuf *cs, const struct radeon_info 
       ac_sdma_get_tiled_header_dword(sdma_ip_version, src);
    const uint32_t src_info_dword = ac_sdma_get_tiled_info_dword(info, src);
    const uint32_t dst_info_dword = ac_sdma_get_tiled_info_dword(info, dst);
-   uint32_t src_cp = 0, dst_cp = 0;
-   bool cpv = false;
 
-   /* On GFX10+ this supports DCC, but cannot copy a compressed surface to another compressed surface. */
-   assert(!src->is_compressed || !dst->is_compressed);
+   /* On SDMA 5-6.1, DCC is supported but cannot copy a compressed surface to
+    * another compressed surface.
+    */
+   assert(sdma_ip_version >= SDMA_7_0 || !src->is_compressed || !dst->is_compressed);
 
    if (sdma_ip_version < SDMA_5_0) {
       /* SDMA v2-v4 doesn't support mip_id selection in the T2T copy packet. */
@@ -531,25 +642,24 @@ ac_emit_sdma_copy_t2t_sub_window(struct ac_cmdbuf *cs, const struct radeon_info 
    /* 0 = compress (src is uncompressed), 1 = decompress (src is compressed). */
    const uint32_t dcc_dir = src->is_compressed && !dst->is_compressed;
 
-   if (info->sdma_ip_version == SDMA_5_2) {
-      src_cp = SDMA_5_2_CP_LLC_NOALLOC;
-      dst_cp = SDMA_5_2_CP_LLC_NOALLOC;
-      cpv = true;
+   const bool cpv = ac_sdma_5_2_uses_cpv(info->sdma_ip_version);
+   uint32_t src_cp = ac_sdma_5_2_get_cache_policy_rd(info->sdma_ip_version);
+   uint32_t dst_cp = ac_sdma_5_2_get_cache_policy_wr(info->sdma_ip_version);
 
-      /* SDMA 5.2 (GFX10.3) seems to have a cache coherency issue with GL2 and
-       * DCC which causes random corruption. Overwrite the default cache
-       * policy and force NOA for writes and LRU for reads which seems the
-       * only combination to workaround it.
-       */
-      if (dcc) {
-         src_cp |= SDMA_5_2_CP_GL2_LRU;
-         dst_cp |= SDMA_5_2_CP_GL2_NOA;
-      } else {
-         /* Use the default cache policy. */
-         src_cp |= SDMA_5_2_CP_GL2_NOA;
-         dst_cp |= SDMA_5_2_CP_GL2_BYPASS;
-      }
+   /* SDMA 5.2 (GFX10.3) seems to have a cache coherency issue with GL2 and
+    * DCC which causes random corruption. Overwrite the default cache policy
+    * and force NOA for writes and LRU for reads which seems the only
+    * combination to workaround it.
+    */
+   if (info->sdma_ip_version == SDMA_5_2 && dcc) {
+      src_cp &= ~SDMA_5_2_CP_GL2_NOA;
+      src_cp |= SDMA_5_2_CP_GL2_LRU;
+
+      dst_cp &= ~SDMA_5_2_CP_GL2_BYPASS;
+      dst_cp |= SDMA_5_2_CP_GL2_NOA;
    }
+
+   const uint32_t mp = ac_sdma_7_0_get_mall_policy(info->sdma_ip_version, true);
 
    ac_cmdbuf_begin(cs);
    ac_cmdbuf_emit(SDMA_PACKET(SDMA_OPCODE_COPY, SDMA_COPY_SUB_OPCODE_T2T_SUB_WINDOW, 0) |
@@ -587,9 +697,10 @@ ac_emit_sdma_copy_t2t_sub_window(struct ac_cmdbuf *cs, const struct radeon_info 
 
    if (sdma_ip_version >= SDMA_2_4)
       ac_cmdbuf_emit((depth - 1) |
-                     (cpv ? SDMA_5_2_COPY_T2T_SUB_WINDOW_SRC_CP(src_cp) |
-                           SDMA_5_2_COPY_T2T_SUB_WINDOW_DST_CP(dst_cp)
-                        : 0));
+                     SDMA_5_2_COPY_T2T_SUB_WINDOW_SRC_CP(src_cp) |
+                     SDMA_5_2_COPY_T2T_SUB_WINDOW_DST_CP(dst_cp) |
+                     SDMA_7_0_COPY_T2T_SUB_WINDOW_SRC_MALL_POLICY(mp) |
+                     SDMA_7_0_COPY_T2T_SUB_WINDOW_DST_MALL_POLICY(mp));
    else
       ac_cmdbuf_emit(depth);
 
@@ -619,4 +730,195 @@ ac_emit_sdma_copy_t2t_sub_window(struct ac_cmdbuf *cs, const struct radeon_info 
    }
 
    ac_cmdbuf_end();
+}
+
+static bool
+ac_sdma_check_t2t_alignment(const struct radeon_info *const info,
+                            const struct ac_sdma_surf *const src,
+                            const struct ac_sdma_surf *const dst,
+                            const uint32_t width,
+                            const uint32_t height,
+                            const uint32_t depth)
+{
+   const enum sdma_version ver = info->sdma_ip_version;
+   const unsigned log2bpp = util_logbase2(src->bpp);
+   uint32_t x_alignment = 1;
+   uint32_t y_alignment = 1;
+   uint32_t z_alignment = 1;
+
+   if (ver >= SDMA_4_0) {
+      bool needs_3d_alignment = src->surf->u.gfx9.resource_type == RADEON_RESOURCE_3D;
+
+      /* Only for 3D standard/displayable swizzle modes. */
+      if (ver < SDMA_7_0)
+         needs_3d_alignment &= (src->surf->micro_tile_mode == RADEON_MICRO_MODE_DISPLAY ||
+                                src->surf->micro_tile_mode == RADEON_MICRO_MODE_STANDARD);
+
+      x_alignment = needs_3d_alignment
+                    ? ac_sdma_t2t_alignment_3d[log2bpp][0]
+                    : ac_sdma_t2t_alignment_2d_and_planar[log2bpp][0];
+      y_alignment = needs_3d_alignment
+                    ? ac_sdma_t2t_alignment_3d[log2bpp][1]
+                    : ac_sdma_t2t_alignment_2d_and_planar[log2bpp][1];
+      z_alignment = needs_3d_alignment
+                    ? ac_sdma_t2t_alignment_3d[log2bpp][2]
+                    : ac_sdma_t2t_alignment_2d_and_planar[log2bpp][2];
+   } else {
+      const uint32_t src_tile_index = ac_surface_get_legacy_tiling_index(src->surf, src->first_level, src->is_stencil);
+      const uint32_t src_tile_mode = info->si_tile_mode_array[src_tile_index];
+      const uint32_t src_array_mode = G_009910_ARRAY_MODE(src_tile_mode);
+
+      x_alignment = 8;
+      y_alignment = 8;
+
+      if (G_009910_MICRO_TILE_MODE_NEW(src_tile_mode) == V_009910_ADDR_SURF_THICK_MICRO_TILING)
+         z_alignment = ac_sdma_t2t_thick_z_alignment_sdma2[src_array_mode];
+   }
+
+   return util_is_aligned(width, x_alignment) &&
+          util_is_aligned(height, y_alignment) &&
+          util_is_aligned(depth, z_alignment) &&
+          util_is_aligned(src->offset.x, x_alignment) &&
+          util_is_aligned(src->offset.y, y_alignment) &&
+          util_is_aligned(src->offset.z, z_alignment) &&
+          util_is_aligned(dst->offset.x, x_alignment) &&
+          util_is_aligned(dst->offset.y, y_alignment) &&
+          util_is_aligned(dst->offset.z, z_alignment);
+}
+
+/**
+ * The SDMA has severe limitations on every AMD GPU generation
+ * when copying a tiled image to another tiled image.
+ *
+ * When the HW requirements are met, we can use the built-in
+ * SDMA T2T subwindow copy packet which should be the
+ * most optimal.
+ *
+ * When the limitations are NOT met, we must use a workaround:
+ * Copy the tiled image to a temporary linear buffer,
+ * then copy the linear buffer to the destination image.
+ * This is done by small chunks ("scanlines") so that
+ * the temporary buffer doesn't have to be arbitrarily big.
+ * The workaround is called a T2T scanline copy.
+ *
+ * Return true if the T2T scanline copy workaround is required.
+ * Return false if the T2T subwindow packet can be used.
+ */
+bool
+ac_sdma_use_t2t_scanline_copy(const struct radeon_info *const info,
+                              const struct ac_sdma_surf *const src,
+                              const struct ac_sdma_surf *const dst,
+                              const uint32_t width,
+                              const uint32_t height,
+                              const uint32_t depth)
+{
+   /* These need a linear-to-linear / linear-to-tiled copy. */
+   if (src->surf->is_linear || dst->surf->is_linear)
+      return false;
+
+   /* SDMA can't do format conversion. */
+   assert(src->bpp == dst->bpp);
+
+   const enum sdma_version ver = info->sdma_ip_version;
+   if (ver < SDMA_5_0) {
+      /* SDMA v4.x and older doesn't support proper mip level selection. */
+      if (src->num_levels > 1 || dst->num_levels > 1)
+         return true;
+   }
+
+   /* Before SDMA 7, the T2T subwindow copy packet only has fields for one metadata configuration.
+    * It can either compress or decompress, or copy uncompressed images, but it can't copy from a
+    * compressed image to another.
+    */
+   if (ver < SDMA_7_0 && src->is_compressed && dst->is_compressed)
+      return true;
+
+   if (ver >= SDMA_7_0) {
+      /* No support for tiling format transformation at all. */
+      if (src->surf->u.gfx9.swizzle_mode != dst->surf->u.gfx9.swizzle_mode)
+         return true;
+   } else {
+      /* The two images can have a different block size, but must have the same swizzle mode. */
+      if (src->surf->micro_tile_mode != dst->surf->micro_tile_mode)
+         return true;
+   }
+
+   if (!ac_sdma_check_t2t_alignment(info, src, dst, width, height, depth))
+      return true;
+
+   if (ver < SDMA_6_0 &&
+       ((src->img_format == PIPE_FORMAT_S8_UINT && dst->is_color) ||
+        (src->is_color && dst->img_format == PIPE_FORMAT_S8_UINT))) {
+      /* Color<->stencil only T2T subwindow copies don't work on SDMA5 and older.
+       * Fallback to scanline copies as a workaround.
+       */
+      return true;
+   }
+
+   return false;
+}
+
+/**
+ * The SDMA has some alignment requirements on
+ * L2T (linear to tiled, ie. buffer to image) and
+ * T2L (tiled to linear, ie. image to buffer) copies.
+ *
+ * When the HW requirements are met, we can use a
+ * single tiled subwindow copy packet to perform the copy,
+ * which performs best.
+ *
+ * When the HW requirements are NOT met, we must use a workaround.
+ * The workaround is to do an aligned copy to a temporary buffer first,
+ * and another aligned copy from the temporary to the destination.
+ *
+ * Return true if the unaligned copy workaround is required.
+ * Return false if a single tiled subwindow packet can be used.
+ */
+bool
+ac_sdma_use_unaligned_buffer_image_copy(const struct radeon_info *const info,
+                                        const struct ac_sdma_surf *const buf,
+                                        const struct ac_sdma_surf *const img,
+                                        const uint32_t width,
+                                        const uint32_t height,
+                                        const uint32_t depth)
+{
+   const enum sdma_version ver = info->sdma_ip_version;
+
+   if (ver < SDMA_4_0) {
+      /* SDMA2-3 seems to access memory before the linear buffer's VA
+       * when the image is tiled and the offset isn't aligned to
+       * microtile width (8 pixels) or 16 bytes, causing page faults.
+       * This issue isn't documented or acknowledged by AMD.
+       */
+      if (!img->surf->is_linear &&
+          !(util_is_aligned(img->offset.x, 8) ||
+            util_is_aligned(img->offset.x * img->bpp, 16)))
+         return true;
+
+      /* SDMA2-3 HW requirements for L2L/L2T/T2L copies:
+       * Tiled surface must be 256-byte aligned.
+       * Linear surface needs to be dword-aligned.
+       * Linear pitch (and slice pitch) needs to be dword-aligned.
+       * Linear and tiled offset X need to be dword-aligned
+       * (multiple of 4 for 8 bits per pixel, multiple of 2 for 16 bits per pixel).
+       */
+      return !util_is_aligned(img->offset.x * img->bpp, 4) ||
+             !util_is_aligned(buf->va, 4) ||
+             !util_is_aligned(buf->pitch, 4) ||
+             !util_is_aligned(buf->slice_pitch, 4) ||
+             !util_is_aligned(width * img->bpp, 4);
+   }
+
+   const uint32_t required_pitch_alignment = ver >= SDMA_5_0 ? MAX2(1, 4 / img->bpp) : 4;
+
+   if (!util_is_aligned(buf->pitch, required_pitch_alignment))
+      return true;
+
+   const bool uses_depth = img->offset.z != 0 || depth != 1;
+   if (!img->surf->is_linear && uses_depth) {
+      if (!util_is_aligned(buf->slice_pitch, required_pitch_alignment))
+         return true;
+   }
+
+   return false;
 }

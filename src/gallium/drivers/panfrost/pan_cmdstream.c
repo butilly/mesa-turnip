@@ -37,7 +37,6 @@
 #include "pan_jm.h"
 #include "pan_job.h"
 #include "pan_pool.h"
-#include "pan_precomp.h"
 #include "libpan_copy.h"
 #include "pan_resource.h"
 #include "pan_samples.h"
@@ -48,6 +47,10 @@
 #include "pan_trace.h"
 #include "panfrost_tracepoints.h"
 #include "panfrost_perfetto.h"
+
+#if PAN_ARCH >= 6
+#include "pan_precomp.h"
+#endif
 
 /* JOBX() is used to select the job backend helpers to call from generic
  * functions. */
@@ -1564,7 +1567,9 @@ panfrost_emit_const_buf(struct panfrost_batch *batch,
          ((user_ubo_mask & ~BITFIELD_MASK(PAN_UBO_SYSVALS + 1)) >> 1);
 
    u_foreach_bit(ubo_adj, user_ubo_mask_adj & buf->enabled_mask) {
+      assert(ubo_adj < ARRAY_SIZE(buf->cb));
       unsigned ubo = ubo_adj + (ubo_adj >= sysval_ubo ? 1 : 0);
+      assert(ubo < shader->info.ubo_count);
 
       size_t usz = buf->cb[ubo_adj].buffer_size;
       uint64_t address = 0;
@@ -3518,7 +3523,7 @@ prepare_draw(struct pipe_context *pipe, enum mesa_prim prim)
    struct panfrost_device *dev = pan_device(pipe->screen);
 
    /* Do some common setup */
-   struct panfrost_batch *batch = panfrost_get_batch_for_fbo(ctx);
+   struct panfrost_batch *batch = panfrost_get_render_batch(ctx);
    if (!batch)
       return NULL;
 
@@ -3529,7 +3534,7 @@ prepare_draw(struct pipe_context *pipe, enum mesa_prim prim)
     * (arbitrary) to avoid the risk of timeouts. This might not be a good
     * idea. */
    if (unlikely(batch->draw_count > 10000)) {
-      batch = panfrost_get_fresh_batch_for_fbo(ctx, "Too many draws");
+      batch = panfrost_get_fresh_render_batch(ctx, "Too many draws");
       if (!batch)
          return NULL;
    }
@@ -3537,7 +3542,7 @@ prepare_draw(struct pipe_context *pipe, enum mesa_prim prim)
    enum mesa_prim reduced_prim = u_reduced_prim(prim);
 
    if (unlikely(!panfrost_compatible_batch_state(batch, reduced_prim))) {
-      batch = panfrost_get_fresh_batch_for_fbo(ctx, "State change");
+      batch = panfrost_get_fresh_render_batch(ctx, "State change");
       if (!batch)
          return NULL;
 
@@ -3831,7 +3836,12 @@ panfrost_launch_grid(struct pipe_context *pipe,
     * test: KHR-GLES31.core.compute_shader.pipeline-post-xfb */
    panfrost_flush_all_batches(ctx, "Launch grid pre-barrier");
 
-   struct panfrost_batch *batch = panfrost_get_batch_for_fbo(ctx);
+   struct panfrost_batch *batch = panfrost_get_compute_batch(ctx);
+   if (!batch) {
+      mesa_loge("panfrost_launch_grid failed");
+      return;
+   }
+
    panfrost_launch_grid_on_batch(pipe, batch, info);
 
    panfrost_flush_all_batches(ctx, "Launch grid post-barrier");
@@ -3972,7 +3982,11 @@ panfrost_compute_copy_buffer(struct pipe_context *pctx,
     * before and after so the copy is ordered against other batches. */
    panfrost_flush_all_batches(ctx, "Compute buffer copy pre-barrier");
 
-   struct panfrost_batch *batch = panfrost_get_batch_for_fbo(ctx);
+   struct panfrost_batch *batch = panfrost_get_compute_batch(ctx);
+   if (!batch) {
+      mesa_loge("panfrost_compute_copy_buffer failed");
+      return;
+   }
 
    panfrost_batch_read_rsrc(batch, src);
    panfrost_batch_write_rsrc(batch, dst);
@@ -4092,7 +4106,12 @@ panfrost_mtk_detile_compute(struct panfrost_context *ctx, struct pipe_blit_info 
 
    panfrost_flush_all_batches(ctx, "mtk_detile pre-barrier");
 
-   struct panfrost_batch *batch = panfrost_get_batch_for_fbo(ctx);
+   struct panfrost_batch *batch = panfrost_get_compute_batch(ctx);
+   if (!batch) {
+      mesa_loge("panfrost_mtk_detile_compute failed");
+      goto out_restore_res;
+   }
+
    pipe->set_shader_images(pipe, MESA_SHADER_COMPUTE, 0, 4, 0, image);
 
    /* launch the compute shader */
@@ -4129,6 +4148,7 @@ panfrost_mtk_detile_compute(struct panfrost_context *ctx, struct pipe_blit_info 
    pipe->bind_compute_state(pipe, saved_cso);
    pipe->set_constant_buffer(pipe, MESA_SHADER_COMPUTE, 0, &saved_const);
 
+out_restore_res:
    panfrost_resource_restore_format(pan_resource(y_src), &y_src_save);
    panfrost_resource_restore_format(pan_resource(uv_src), &uv_src_save);
    panfrost_resource_restore_format(pan_resource(y_dst), &y_dst_save);
@@ -4649,8 +4669,10 @@ screen_destroy(struct pipe_screen *pscreen)
    struct panfrost_device *dev = pan_device(pscreen);
    GENX(pan_fb_preload_cache_cleanup)(&dev->fb_preload_cache);
    pan_blend_shader_cache_cleanup(&dev->blend_shaders);
+#if PAN_ARCH >= 6
    if (dev->precomp_cache)
       GENX(panfrost_precomp_cache_cleanup)(dev->precomp_cache);
+#endif
 }
 
 static void
@@ -4670,6 +4692,7 @@ static void
 context_populate_vtbl(struct pipe_context *pipe)
 {
    pipe->draw_vbo = panfrost_draw_vbo;
+   pipe->draw_vbo_buffers = util_draw_vbo_buffers;
    pipe->launch_grid = panfrost_launch_grid;
 
    pipe->create_vertex_elements_state = panfrost_create_vertex_elements_state;
@@ -4772,8 +4795,7 @@ submit_batch(struct panfrost_batch *batch, struct pan_fb_info *fb)
    JOBX(preload_fb)(batch, fb);
    init_polygon_list(batch);
 
-   /* Now that all draws are in, we can finally prepare the
-    * FBD for the batch (if there is one). */
+   /* Now that all jobs are in, we can finally prepare the batch. */
 
    emit_tls(batch);
 
@@ -4906,14 +4928,14 @@ GENX(panfrost_cmdstream_screen_init)(struct panfrost_screen *screen)
    screen->vtbl.get_conv_desc = get_conv_desc;
    screen->vtbl.draw_fullscreen = panfrost_draw_fullscreen;
 
-   pan_blend_shader_cache_init(&dev->blend_shaders, panfrost_device_gpu_id(dev),
-                               dev->kmod.dev->props.gpu_variant,
+   pan_blend_shader_cache_init(&dev->blend_shaders, dev->model,
                                &screen->mempools.bin.base);
 
    GENX(pan_fb_preload_cache_init)
-   (&dev->fb_preload_cache, panfrost_device_gpu_id(dev),
-    dev->kmod.dev->props.gpu_variant, &dev->blend_shaders,
+   (&dev->fb_preload_cache, dev->model, &dev->blend_shaders,
     &screen->mempools.bin.base, &screen->mempools.desc.base);
 
+#if PAN_ARCH >= 6
    dev->precomp_cache = GENX(panfrost_precomp_cache_init)(screen);
+#endif
 }

@@ -270,7 +270,6 @@ spec@ext_transform_feedback@change-size base-shrink,Fail
 spec@ext_transform_feedback@change-size offset-shrink,Fail
 spec@ext_transform_feedback@change-size range-grow,Fail
 spec@ext_transform_feedback@change-size range-shrink,Fail
-spec@ext_transform_feedback@generatemipmap prims_generated,Fail
 spec@ext_transform_feedback@immediate-reuse-index-buffer,Fail
 spec@ext_transform_feedback@interleaved-attribs,Fail
 spec@ext_transform_feedback@intervening-read output,Fail
@@ -375,7 +374,6 @@ spec@glsl-1.40@execution@texturesize@fs-texturesize-usamplerbuffer,Fail
 spec@glsl-1.40@execution@texturesize@vs-texturesize-isamplerbuffer,Fail
 spec@glsl-1.40@execution@texturesize@vs-texturesize-samplerbuffer,Fail
 spec@glsl-1.40@execution@texturesize@vs-texturesize-usamplerbuffer,Fail
-spec@glsl-1.40@execution@tf-no-position,Fail
 spec@glsl-es-3.00@execution@varying-struct-centroid_gles3,Fail
 spec@khr_texture_compression_astc@miptree-gl srgb-fp,Fail
 spec@khr_texture_compression_astc@miptree-gl srgb-fp@sRGB decode full precision,Fail

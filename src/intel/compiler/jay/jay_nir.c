@@ -575,17 +575,38 @@ alpha_to_coverage_enabled(nir_shader *shader, enum intel_sometimes alpha_to_cove
       alpha_to_coverage : INTEL_NEVER;
 }
 
+static bool
+lower_demote_to_terminate(nir_builder *b, nir_intrinsic_instr *intr, void *_)
+{
+   switch (intr->intrinsic) {
+   case nir_intrinsic_demote:
+      intr->intrinsic = nir_intrinsic_terminate;
+      return true;
+   case nir_intrinsic_demote_if:
+      intr->intrinsic = nir_intrinsic_terminate_if;
+      return true;
+   case nir_intrinsic_load_helper_invocation:
+   case nir_intrinsic_is_helper_invocation:
+      b->cursor = nir_before_instr(&intr->instr);
+      nir_def_replace(&intr->def, nir_imm_false(b));
+      return true;
+   default:
+      return false;
+   }
+}
+
 /**
  * Do NIR processing that can be shared across all SIMD width variants.
  */
 void
 jay_process_nir(const struct intel_device_info *devinfo,
-                nir_shader *nir,
-                union brw_any_prog_data *prog_data,
-                union brw_any_prog_key *key,
-                debug_archiver *archiver,
+                const struct jay_compile_params *params,
                 struct jay_fs_perprim_data *fs_perprim)
 {
+   nir_shader *nir = params->nir;
+   union brw_any_prog_data *prog_data = params->prog_data;
+   union brw_any_prog_key *key = params->key;
+
    enum mesa_shader_stage stage = nir->info.stage;
    struct brw_compiler compiler = { .devinfo = devinfo };
 
@@ -598,7 +619,7 @@ jay_process_nir(const struct intel_device_info *devinfo,
       .key = &key->base,
       .dispatch_width = 0,
       .compiler = &compiler,
-      .archiver = archiver,
+      .archiver = params->archiver,
    }, *pt = &pt_;
 
    JAY_NIR_SNAPSHOT("first");
@@ -917,11 +938,12 @@ jay_process_nir(const struct intel_device_info *devinfo,
       JAY_NIR_PASS(nir_lower_io_to_scalar, nir_var_shader_in, NULL, NULL);
 
       if (!brw_can_coherent_fb_fetch(devinfo))
-         JAY_NIR_PASS(brw_nir_lower_fs_load_output, &key->fs);
+         JAY_NIR_PASS(brw_nir_lower_fs_load_output, &key->fs, 0);
 
       /* Do this lowering before jay_populate_prog_data(). */
       JAY_NIR_PASS(nir_opt_frag_coord_to_pixel_coord);
       JAY_NIR_PASS(nir_lower_frag_coord_to_pixel_coord);
+      JAY_NIR_PASS(nir_lower_alu_to_scalar, NULL, NULL);
       JAY_NIR_PASS(nir_opt_barycentric, true);
       JAY_NIR_PASS(nir_opt_constant_folding);
 
@@ -936,14 +958,6 @@ jay_process_nir(const struct intel_device_info *devinfo,
                     !(nir->info.outputs_written & BITFIELD64_BIT(FRAG_RESULT_SAMPLE_MASK))),
                    NULL, NULL);
 
-      /* nir_lower_terminate_to_demote will hamper our ability to schedule
-       * terminates (since it turns them into real control flow), so run
-       * nir_opt_move_discards_to_top first as a prepass. That should help
-       * scheduling demotes too (which is more important).
-       */
-      JAY_NIR_PASS(nir_opt_move_discards_to_top);
-      JAY_NIR_PASS(nir_lower_terminate_to_demote);
-
       brw_nir_cleanup_pre_fs_prog_data(pt);
 
       // TODO
@@ -953,6 +967,23 @@ jay_process_nir(const struct intel_device_info *devinfo,
        * information.
        */
       jay_populate_prog_data(devinfo, nir, prog_data, key, fs_perprim);
+
+      /* Although its not required by the spec, other vendors mask out helper
+       * lanes entirely unless the shader uses derivatives. Some applications
+       * depend on this behavior not to get stuck in infinite loops.
+       */
+      if (!prog_data->fs.uses_vmask && !nir->info.maximally_reconverges) {
+         JAY_NIR_PASS(nir_shader_intrinsics_pass, lower_demote_to_terminate,
+                      nir_metadata_control_flow, NULL);
+      }
+
+      /* nir_lower_terminate_to_demote will hamper our ability to schedule
+       * terminates (since it turns them into real control flow), so run
+       * nir_opt_move_discards_to_top first as a prepass. That should help
+       * scheduling demotes too (which is more important).
+       */
+      JAY_NIR_PASS(nir_opt_move_discards_to_top);
+      JAY_NIR_PASS(nir_lower_terminate_to_demote);
 
       JAY_NIR_PASS(nir_shader_intrinsics_pass, lower_load_barycentric_at_offset,
                    0, NULL);
@@ -1021,8 +1052,25 @@ jay_select_simd(const struct intel_device_info *devinfo, nir_shader *nir)
       if (nir->info.outputs_written & BITFIELD64_BIT(FRAG_RESULT_STENCIL))
          unsupported_modes |= 32;
 
-      if (nir->info.fs.color_is_dual_source)
-         unsupported_modes |= 32;
+      /* Following condition implements Wa_14017468336:
+       *
+       * "If dual source blend is enabled do not enable SIMD32 dispatch" and
+       * "For a thread dispatched as SIMD32, must not issue SIMD8 message with
+       *  Last Render Target Select set."
+       *
+       * The dual-source RT write messages fail to release the thread
+       * dependency on ICL and TGL with SIMD32 dispatch, leading to hangs.
+       *
+       * XXX - Emit an extra single-source NULL RT-write marked LastRT in
+       *       order to release the thread dependency without disabling SIMD32.
+       *
+       * The dual-source RT write messages may lead to hangs with SIMD16
+       * dispatch on ICL due some unknown reasons, see:
+       *
+       * https://gitlab.freedesktop.org/mesa/mesa/-/issues/2183
+       */
+      if (nir->info.fs.color_is_dual_source && devinfo->ver < 20)
+         unsupported_modes |= 16 | 32;
    }
 
    if (nir->info.min_subgroup_size) {
@@ -1043,13 +1091,18 @@ jay_select_simd(const struct intel_device_info *devinfo, nir_shader *nir)
       }
    }
 
+   /* jay_spill can't handle a single flag register. We should rework later. */
+   if (devinfo->ver < 20 &&
+       nir->info.stage == MESA_SHADER_FRAGMENT &&
+       nir->info.fs.uses_discard) {
+      unsupported_modes |= 32;
+   }
+
    /* Step 2: Apply heuristics to mark SIMD mode preferences */
 
    /* SIMD splitting of ray queries is inefficient, avoid it when possible */
    if (nir->info.ray_queries && nir->info.min_subgroup_size < 32) {
       undesirable_modes |= 32;
-      /* XXX: ray query SIMD splitting not implemented yet */
-      unsupported_modes |= 32;
    }
 
    /* If the entire workgroup fits in a SIMD, use that one. */
@@ -1070,7 +1123,6 @@ jay_select_simd(const struct intel_device_info *devinfo, nir_shader *nir)
    }
 
    unsigned modes = (32 | 16 | 8) & ~unsupported_modes;
-   assert(modes && "some SIMD mode must be supported");
 
    /* Skip undesirable modes when possible */
    if (modes & ~undesirable_modes) {
@@ -1085,20 +1137,19 @@ jay_select_simd(const struct intel_device_info *devinfo, nir_shader *nir)
  */
 void
 jay_process_nir_for_simd(const struct intel_device_info *devinfo,
-                         nir_shader *nir,
+                         const struct jay_compile_params *params,
                          unsigned simd_width,
-                         union brw_any_prog_data *prog_data,
-                         union brw_any_prog_key *key,
-                         debug_archiver *archiver,
                          bool *track_helpers)
 {
+   nir_shader *nir = params->nir;
+
    struct brw_compiler compiler = { .devinfo = devinfo };
    brw_pass_tracker pt_ = {
       .nir = nir,
-      .key = &key->base,
+      .key = &params->key->base,
       .dispatch_width = simd_width,
       .compiler = &compiler,
-      .archiver = archiver,
+      .archiver = params->archiver,
    }, *pt = &pt_;
 
    /* If the API subgroup size must be draw uniform, we handle it in
@@ -1128,12 +1179,11 @@ jay_process_nir_for_simd(const struct intel_device_info *devinfo,
                 nir_metadata_control_flow, NULL);
 
    /* Late postprocess while remaining in SSA */
-   /* Run fsign lowering again after the last time brw_nir_optimize is called.
-    * As is the case with conversion lowering (below), brw_nir_optimize can
-    * create additional fsign instructions.
+   /* Run algebraic lowering after the last brw_nir_optimize call, which
+    * can recreate operations such as fsign.
     */
    JAY_NIR_PASS(jay_nir_lower_bfloat_math);
-   JAY_NIR_PASS(jay_nir_lower_fsign, devinfo->verx10);
+   JAY_NIR_PASS(jay_nir_lower_algebraic, devinfo->verx10);
    JAY_NIR_PASS(jay_nir_lower_bool);
    JAY_NIR_PASS(nir_opt_cse);
    JAY_NIR_PASS(nir_opt_dce);
@@ -1174,6 +1224,11 @@ jay_process_nir_for_simd(const struct intel_device_info *devinfo,
                 nir_metadata_control_flow, NULL);
    JAY_NIR_PASS(jay_nir_lower_bool);
 
+   if (JAY_NIR_PASS(intel_nir_lower_local_ids)) {
+      JAY_NIR_PASS(nir_opt_copy_prop);
+      JAY_NIR_PASS(nir_opt_dce);
+   }
+
    /* Run divergence analysis at the end */
    nir_sweep(nir);
    nir_divergence_analysis(nir);
@@ -1181,23 +1236,29 @@ jay_process_nir_for_simd(const struct intel_device_info *devinfo,
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
       /* Certain features require tracking helpers for correctness */
       nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
-      *track_helpers |= nir->info.fs.uses_discard || nir->info.writes_memory;
-      *track_helpers |= BITSET_TEST(nir->info.system_values_read,
-                                    SYSTEM_VALUE_HELPER_INVOCATION);
 
-      /* ...but this is more subtle. nir_opt_load_skip_helpers flags texturing
-       * operations that we can skip for bandwidth savings.  We need divergence
-       * info for this, so we run late.
-       *
-       * We may or may not want to force track_helpers on if this makes
-       * progress. Possibly driconf'ing on furmark makes sense.
-       */
-      struct nir_opt_load_skip_helpers_options skip_helpers = {
-         .no_add_divergence = true
-      };
-      JAY_NIR_PASS(nir_opt_load_skip_helpers, &skip_helpers);
+      if (params->prog_data->fs.uses_vmask || nir->info.maximally_reconverges) {
+         *track_helpers |= nir->info.fs.uses_discard | nir->info.writes_memory;
+         *track_helpers |= BITSET_TEST(nir->info.system_values_read,
+                                       SYSTEM_VALUE_HELPER_INVOCATION);
+
+         if (params->prog_data->fs.uses_vmask || nir->info.fs.uses_discard) {
+            /* ...but this is more subtle. nir_opt_load_skip_helpers flags
+             * texturing operations that we can skip for bandwidth savings.  We
+             * need divergence info for this, so we run late. Of course, if we
+             * don't spawn helper threads and we don't demote anything, there
+             * will never be helpers active so there's nothing to skip in
+             * software.
+             */
+            struct nir_opt_load_skip_helpers_options skip_helpers = {
+               .no_add_divergence = true
+            };
+            *track_helpers |=
+               JAY_NIR_PASS(nir_opt_load_skip_helpers, &skip_helpers);
+         }
+      }
    } else {
-      jay_populate_prog_data(devinfo, nir, prog_data, key, NULL);
+      jay_populate_prog_data(devinfo, nir, params->prog_data, params->key, NULL);
    }
 
    /* This must be the very last pass since nir_print itself will reindex! */

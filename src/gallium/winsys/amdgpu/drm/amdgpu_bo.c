@@ -23,8 +23,12 @@
 #include <stdio.h>
 #include <inttypes.h>
 
+#if DETECT_OS_POSIX_LITE
+#include <sched.h> /* sched_yield */
+#endif
+
 #ifndef AMDGPU_VA_RANGE_HIGH
-#define AMDGPU_VA_RANGE_HIGH	0x2
+#define AMDGPU_VA_RANGE_HIGH   0x2
 #endif
 
 /* Set to 1 for verbose output showing committed sparse buffer ranges. */
@@ -245,11 +249,7 @@ void amdgpu_bo_destroy(struct amdgpu_winsys *aws, struct pb_buffer_lean *_buf)
 
    simple_mtx_lock(&aws->bo_export_table_lock);
 
-   /* amdgpu_bo_from_handle might have revived the bo */
-   if (p_atomic_read(&bo->b.base.reference.count)) {
-      simple_mtx_unlock(&aws->bo_export_table_lock);
-      return;
-   }
+   assert (p_atomic_read(&bo->b.base.reference.count) == 0);
 
    _mesa_hash_table_remove_key(aws->bo_export_table, bo->bo.abo);
 
@@ -394,7 +394,7 @@ void *amdgpu_bo_map(struct radeon_winsys *rws,
             if (acs && amdgpu_bo_is_referenced_by_cs_with_usage(acs, bo,
                                                                 RADEON_USAGE_WRITE)) {
                acs->flush_cs(acs->flush_data,
-			    RADEON_FLUSH_ASYNC_START_NEXT_GFX_IB_NOW, NULL);
+                             RADEON_FLUSH_ASYNC_START_NEXT_GFX_IB_NOW, NULL);
                return NULL;
             }
 
@@ -405,7 +405,7 @@ void *amdgpu_bo_map(struct radeon_winsys *rws,
          } else {
             if (acs && amdgpu_bo_is_referenced_by_cs(acs, bo)) {
                acs->flush_cs(acs->flush_data,
-			    RADEON_FLUSH_ASYNC_START_NEXT_GFX_IB_NOW, NULL);
+                             RADEON_FLUSH_ASYNC_START_NEXT_GFX_IB_NOW, NULL);
                return NULL;
             }
 
@@ -429,7 +429,7 @@ void *amdgpu_bo_map(struct radeon_winsys *rws,
                if (amdgpu_bo_is_referenced_by_cs_with_usage(acs, bo,
                                                             RADEON_USAGE_WRITE)) {
                   acs->flush_cs(acs->flush_data,
-			       RADEON_FLUSH_START_NEXT_GFX_IB_NOW, NULL);
+                                RADEON_FLUSH_START_NEXT_GFX_IB_NOW, NULL);
                } else {
                   /* Try to avoid busy-waiting in amdgpu_bo_wait. */
                   if (p_atomic_read(&bo->num_active_ioctls))
@@ -444,7 +444,7 @@ void *amdgpu_bo_map(struct radeon_winsys *rws,
             if (acs) {
                if (amdgpu_bo_is_referenced_by_cs(acs, bo)) {
                   acs->flush_cs(acs->flush_data,
-			       RADEON_FLUSH_START_NEXT_GFX_IB_NOW, NULL);
+                                RADEON_FLUSH_START_NEXT_GFX_IB_NOW, NULL);
                } else {
                   /* Try to avoid busy-waiting in amdgpu_bo_wait. */
                   if (p_atomic_read(&bo->num_active_ioctls))
@@ -641,13 +641,8 @@ static struct amdgpu_winsys_bo *amdgpu_create_bo(struct amdgpu_winsys *aws,
        flags & RADEON_FLAG_NO_INTERPROCESS_SHARING)
       request.flags |= AMDGPU_GEM_CREATE_VM_ALWAYS_VALID;
 
-   if (flags & RADEON_FLAG_DISCARDABLE &&
-       aws->info.drm_minor >= 47)
+   if (flags & RADEON_FLAG_DISCARDABLE)
       request.flags |= AMDGPU_GEM_CREATE_DISCARDABLE;
-
-   if ((flags & RADEON_FLAG_CLEAR_VRAM) || (aws->zero_all_vram_allocs &&
-        (request.preferred_heap & AMDGPU_GEM_DOMAIN_VRAM)))
-      request.flags |= AMDGPU_GEM_CREATE_VRAM_CLEARED;
 
    if ((flags & RADEON_FLAG_ENCRYPTED) &&
        aws->info.has_tmz_support) {
@@ -1512,7 +1507,7 @@ no_slab:
 
    bool use_reusable_pool = !(domain & RADEON_DOMAIN_DOORBELL) &&
       (flags & RADEON_FLAG_NO_INTERPROCESS_SHARING) &&
-      !(flags & (RADEON_FLAG_DISCARDABLE | RADEON_FLAG_CLEAR_VRAM));
+      !(flags & (RADEON_FLAG_DISCARDABLE));
 
    if (use_reusable_pool) {
        /* RADEON_FLAG_NO_SUBALLOC is irrelevant for the cache. */
@@ -1599,6 +1594,7 @@ static struct pb_buffer_lean *amdgpu_bo_from_handle(struct radeon_winsys *rws,
       return NULL;
    }
 
+retry:
    r = ac_drm_bo_import(aws->dev, type, whandle->handle, &result);
    if (r)
       return NULL;
@@ -1610,7 +1606,21 @@ static struct pb_buffer_lean *amdgpu_bo_from_handle(struct radeon_winsys *rws,
     * counter and return it.
     */
    if (bo) {
-      p_atomic_inc(&bo->b.base.reference.count);
+      /* If we hold the only reference to the BO but it's still listed in
+       * bo_export_table it means that another thread is in the middle of
+       * destroying it.
+       * Give up the lock so that the other thread can complete its work
+       * and re-import the BO.
+       */
+      if (p_atomic_inc_return(&bo->b.base.reference.count) == 1) {
+         p_atomic_dec(&bo->b.base.reference.count);
+         simple_mtx_unlock(&aws->bo_export_table_lock);
+         ac_drm_bo_free(aws->dev, result.bo);
+#if DETECT_OS_POSIX_LITE
+         sched_yield();
+#endif
+         goto retry;
+      }
       simple_mtx_unlock(&aws->bo_export_table_lock);
 
       /* Release the buffer handle, because we don't need it anymore.
@@ -1804,8 +1814,8 @@ static bool amdgpu_bo_get_handle(struct radeon_winsys *rws,
 }
 
 static struct pb_buffer_lean *amdgpu_bo_from_ptr(struct radeon_winsys *rws,
-					    void *pointer, uint64_t size,
-					    enum radeon_bo_flag flags)
+                                                 void *pointer, uint64_t size,
+                                                 enum radeon_bo_flag flags)
 {
     struct amdgpu_winsys *aws = amdgpu_winsys(rws);
     ac_drm_bo buf_handle;

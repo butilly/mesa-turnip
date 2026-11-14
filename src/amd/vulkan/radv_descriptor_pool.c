@@ -88,12 +88,16 @@ radv_create_descriptor_pool(struct radv_device *device, const VkDescriptorPoolCr
          break;
       case VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
       case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
-      case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
-      case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
       case VK_DESCRIPTOR_TYPE_SAMPLER:
       case VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
          bo_size += RADV_BUFFER_DESC_SIZE * pCreateInfo->pPoolSizes[i].descriptorCount;
          num_16byte_descriptors += pCreateInfo->pPoolSizes[i].descriptorCount;
+         break;
+      case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
+      case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+         bo_size += radv_get_texel_buffer_desc_size(pdev) * pCreateInfo->pPoolSizes[i].descriptorCount;
+         if (pdev->info.gfx_level < GFX13)
+            num_16byte_descriptors += pCreateInfo->pPoolSizes[i].descriptorCount;
          break;
       case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
          bo_size += RADV_STORAGE_IMAGE_DESC_SIZE * pCreateInfo->pPoolSizes[i].descriptorCount;
@@ -160,7 +164,7 @@ radv_create_descriptor_pool(struct radv_device *device, const VkDescriptorPoolCr
       pool->host_memory_end = (uint8_t *)pool + size;
    } else {
       if (bo_size) {
-         util_vma_heap_init(&pool->bo_heap, RADV_POOL_HEAP_OFFSET, bo_size + RADV_POOL_HEAP_OFFSET);
+         util_vma_heap_init(&pool->bo_heap, RADV_POOL_HEAP_OFFSET, bo_size);
          pool->bo_heap.alloc_high = false;
       }
    }
@@ -231,7 +235,7 @@ radv_ResetDescriptorPool(VkDevice _device, VkDescriptorPool descriptorPool, VkDe
 
    if (!pool->host_memory_base && pool->size) {
       util_vma_heap_finish(&pool->bo_heap);
-      util_vma_heap_init(&pool->bo_heap, RADV_POOL_HEAP_OFFSET, pool->size + RADV_POOL_HEAP_OFFSET);
+      util_vma_heap_init(&pool->bo_heap, RADV_POOL_HEAP_OFFSET, pool->size);
       pool->bo_heap.alloc_high = false;
    }
 

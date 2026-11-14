@@ -112,9 +112,15 @@ lower_abi_instr(nir_builder *b, nir_intrinsic_instr *intrin, void *state)
       /* Note, the HW always assumes there is at least 1 per-vertex param. */
       const unsigned total_num_params = MAX2(1, s->info->outinfo.param_exports) + s->info->outinfo.prim_param_exports;
 
-      nir_def *dword1 = nir_channel(b, replacement, 1);
-      dword1 = nir_ior_imm(b, dword1, S_008F04_STRIDE(16 * total_num_params));
-      replacement = nir_vector_insert_imm(b, replacement, dword1, 1);
+      if (s->gfx_level >= GFX13) {
+         nir_def *dword3 = nir_channel(b, replacement, 3);
+         dword3 = nir_ior_imm(b, dword3, S_008F0C_STRIDE(16 * total_num_params));
+         replacement = nir_vector_insert_imm(b, replacement, dword3, 3);
+      } else {
+         nir_def *dword1 = nir_channel(b, replacement, 1);
+         dword1 = nir_ior_imm(b, dword1, S_008F04_STRIDE(16 * total_num_params));
+         replacement = nir_vector_insert_imm(b, replacement, dword1, 1);
+      }
       break;
 
    case nir_intrinsic_load_patch_vertices_in:
@@ -425,6 +431,9 @@ lower_abi_instr(nir_builder *b, nir_intrinsic_instr *intrin, void *state)
    }
    case nir_intrinsic_load_poly_line_smooth_enabled:
       replacement = nir_ieq_imm(b, GET_SGPR_FIELD_NIR(s->args->ps_state, PS_STATE_SMOOTH_LINES), 1);
+      break;
+   case nir_intrinsic_load_poly_line_smooth_coverage:
+      replacement = ac_nir_load_arg(b, &s->args->ac, s->args->ac.sample_coverage);
       break;
    case nir_intrinsic_load_initial_edgeflags_amd:
       replacement = nir_imm_int(b, 0);

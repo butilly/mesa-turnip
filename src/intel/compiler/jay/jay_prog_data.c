@@ -465,19 +465,21 @@ populate_fs_prog_data(nir_shader *shader,
    if (intel_nir_pulls_at_sample(shader))
       prog_data->coarse_pixel_dispatch = false;
 
-   /* We choose to always enable VMask prior to XeHP, as it would cause
-    * us to lose out on the eliminate_find_live_channel() optimization.
+   /* TODO: Proprietary compilers are probably bloated with passes to
+    * aggressively eliminate any instruction that computes derivatives from a
+    * convergent source, we need to factor that into our decision here if we
+    * want to guarantee that helper lane behavior matches the expectations of
+    * broken apps.
     */
    prog_data->uses_vmask =
-      devinfo->verx10 < 125 ||
       shader->info.fs.needs_coarse_quad_helper_invocations ||
-      shader->info.uses_wide_subgroup_intrinsics ||
-      prog_data->coarse_pixel_dispatch;
+      shader->info.uses_wide_subgroup_intrinsics;
 
    prog_data->uses_depth_w_coefficients = prog_data->uses_pc_bary_coefficients;
 
    if (prog_data->coarse_pixel_dispatch) {
       prog_data->uses_depth_w_coefficients |= prog_data->uses_src_depth;
+      prog_data->uses_src_xy |= prog_data->uses_src_depth;
       prog_data->uses_src_depth = false;
    }
 
@@ -500,7 +502,6 @@ populate_vs_prog_data(nir_shader *nir,
       bool *data;
       gl_system_value val;
    } bool_sysvals[] = {
-      { &prog_data->uses_is_indexed_draw, SYSTEM_VALUE_IS_INDEXED_DRAW     },
       { &prog_data->uses_firstvertex,     SYSTEM_VALUE_FIRST_VERTEX        },
       { &prog_data->uses_baseinstance,    SYSTEM_VALUE_BASE_INSTANCE       },
       { &prog_data->uses_vertexid,        SYSTEM_VALUE_VERTEX_ID_ZERO_BASE },

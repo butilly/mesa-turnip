@@ -780,6 +780,7 @@ panfrost_init_screen_caps(struct panfrost_screen *screen)
    caps->glsl_feature_level =
    caps->glsl_feature_level_compatibility = is_gl3 ? 330 : 140;
    caps->essl_feature_level = dev->arch >= 6 ? 320 : 310;
+   caps->fs_sample_variables = dev->arch >= 6;
 
    caps->constant_buffer_offset_alignment = 16;
 
@@ -1064,8 +1065,8 @@ panfrost_create_screen(int fd, const struct pipe_screen_config *config,
 
    unsigned core_count = pan_query_core_count(&dev->kmod.dev->props);
 
-   snprintf(screen->renderer_string, sizeof(screen->renderer_string),
-            "%s MC%u (Panfrost)", dev->model->name, core_count);
+   pan_model_device_name(screen->renderer_string, sizeof(screen->renderer_string),
+                         dev->model, core_count, " (Panfrost)");
 
    screen->heap_memory_percent =
       driQueryOptionf(config->options, "heap_memory_percent");

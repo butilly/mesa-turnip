@@ -19,11 +19,17 @@ const struct si_reg *ac_find_register(enum amd_gfx_level gfx_level, enum radeon_
    unsigned table_size;
 
    switch (gfx_level) {
+   case GFX13:
+      table = gfx13_reg_table;
+      table_size = gfx13_reg_table_size;
+      break;
    case GFX12:
+   case GFX12_1:
       table = gfx12_reg_table;
       table_size = gfx12_reg_table_size;
       break;
    case GFX11_5:
+   case GFX11_7:
       table = gfx115_reg_table;
       table_size = gfx115_reg_table_size;
       break;

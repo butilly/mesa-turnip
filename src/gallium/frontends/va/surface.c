@@ -317,6 +317,10 @@ vlVaQuerySurfaceAttributes(VADriverContextP ctx, VAConfigID config_id,
    vlVaAddSurfaceFormat(pscreen, config, PIPE_FORMAT_UYVY, attribs, &i);
    vlVaAddSurfaceFormat(pscreen, config, PIPE_FORMAT_YUYV, attribs, &i);
    vlVaAddSurfaceFormat(pscreen, config, PIPE_FORMAT_Y8_U8_V8_440_UNORM, attribs, &i);
+   vlVaAddSurfaceFormat(pscreen, config, PIPE_FORMAT_NV16, attribs, &i);
+
+   /* VA_RT_FORMAT_YUV422_10 */
+   vlVaAddSurfaceFormat(pscreen, config, PIPE_FORMAT_P210, attribs, &i);
 
    /* VA_RT_FORMAT_YUV444 */
    vlVaAddSurfaceFormat(pscreen, config, PIPE_FORMAT_Y8_U8_V8_444_UNORM, attribs, &i);
@@ -783,32 +787,6 @@ vlVaSurfaceFlush(vlVaDriver *drv, vlVaSurface *surf)
                     drv->has_external_handles ? 0 : PIPE_FLUSH_ASYNC);
 }
 
-static void
-vlVaSwitchToProtectedContext(vlVaDriver *drv)
-{
-   if (drv->pipe2)
-      return;
-
-   /* For now the context only needs to have graphics */
-   struct pipe_context *ctx = pipe_create_multimedia_context(drv->pipe->screen, false);
-   if (!ctx)
-      return;
-
-   drv->pipe2 = drv->pipe;
-   drv->pipe = ctx;
-
-   if (drv->proc) {
-      struct pipe_video_codec templat = {
-         .profile = PIPE_VIDEO_PROFILE_UNKNOWN,
-         .entrypoint = PIPE_VIDEO_ENTRYPOINT_PROCESSING,
-      };
-      pipe_video_codec_reference(&drv->proc, NULL);
-      drv->proc = vl_create_proc(drv->pipe, &templat);
-      if (drv->proc)
-         pipe_reference_init(&drv->proc->reference, 1);
-   }
-}
-
 static int
 rt_format_to_fourcc(uint32_t format)
 {
@@ -821,6 +799,8 @@ rt_format_to_fourcc(uint32_t format)
       return VA_FOURCC_P012;
    case VA_RT_FORMAT_YUV422:
       return VA_FOURCC_YUY2;
+   case VA_RT_FORMAT_YUV422_10:
+      return VA_FOURCC('P','2','1','0');
    case VA_RT_FORMAT_YUV444:
       return VA_FOURCC_444P;
    case VA_RT_FORMAT_YUV400:
@@ -888,9 +868,6 @@ vlVaCreateSurfaces2(VADriverContextP ctx, unsigned int format,
 
    protected = format & VA_RT_FORMAT_PROTECTED;
    format &= ~VA_RT_FORMAT_PROTECTED;
-
-   if (protected)
-      vlVaSwitchToProtectedContext(drv);
 
    expected_fourcc = rt_format_to_fourcc(format);
    if (!expected_fourcc)
@@ -1132,10 +1109,14 @@ static uint32_t pipe_format_to_drm_format(enum pipe_format format)
       return DRM_FORMAT_XBGR2101010;
    case PIPE_FORMAT_NV12:
       return DRM_FORMAT_NV12;
+   case PIPE_FORMAT_NV16:
+      return DRM_FORMAT_NV16;
    case PIPE_FORMAT_P010:
       return DRM_FORMAT_P010;
    case PIPE_FORMAT_P012:
       return DRM_FORMAT_P012;
+   case PIPE_FORMAT_P210:
+      return DRM_FORMAT_P210;
    case PIPE_FORMAT_YUYV:
    case PIPE_FORMAT_R8G8_R8B8_UNORM:
       return DRM_FORMAT_YUYV;

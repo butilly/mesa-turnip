@@ -168,8 +168,6 @@ fn nir_options(dev: &nv_device_info) -> nir_shader_compiler_options {
         lower_ffract: true,
         lower_fpow: true,
         lower_scmp: true,
-        lower_uadd_carry: true,
-        lower_usub_borrow: true,
         has_rotate32: dev.sm >= 32,
         has_shfr32: dev.sm >= 32,
         has_iadd3: dev.sm >= 70,
@@ -317,7 +315,9 @@ impl ShaderBin {
                             post_depth_coverage: fs_info.post_depth_coverage,
                             uses_sample_shading: fs_info.uses_sample_shading,
                             early_fragment_tests: fs_info.early_fragment_tests,
-                            _pad: [0; 135],
+                            z_min_bounded: fs_info.z_min_bounded,
+                            z_max_bounded: fs_info.z_max_bounded,
+                            _pad: [0; 133],
                         },
                     }
                 }

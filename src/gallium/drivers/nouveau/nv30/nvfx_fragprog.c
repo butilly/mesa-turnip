@@ -548,17 +548,35 @@ nvfx_fragprog_parse_instruction(struct nvfx_fpc *fpc,
       NOUVEAU_ERR("CEIL should have been lowered.\n");
       break;
    case TGSI_OPCODE_CMP:
-      insn = arith(0, MOV, none.reg, mask, src[0], none, none);
-      insn.cc_update = 1;
-      nvfx_fp_emit(fpc, insn);
+       /* we need to preserve original source for second operation */
+       if(dst.index == src[1].reg.index && dst.type == src[1].reg.type) {
+         tmp = nvfx_src(temp(fpc));
+         insn = arith(0, MOV, none.reg, mask, src[0], none, none);
+         insn.cc_update = 1;
+         nvfx_fp_emit(fpc, insn);
 
-      insn = arith(sat, MOV, dst, mask, src[2], none, none);
-      insn.cc_test = NVFX_COND_GE;
-      nvfx_fp_emit(fpc, insn);
+         insn = arith(sat, MOV, tmp.reg, NVFX_FP_MASK_ALL, src[2], none, none);
+         nvfx_fp_emit(fpc, insn);
 
-      insn = arith(sat, MOV, dst, mask, src[1], none, none);
-      insn.cc_test = NVFX_COND_LT;
-      nvfx_fp_emit(fpc, insn);
+         insn = arith(sat, MOV, tmp.reg, NVFX_FP_MASK_ALL, src[1], none, none);
+         insn.cc_test = NVFX_COND_LT;
+         nvfx_fp_emit(fpc, insn);
+
+         insn = arith(sat, MOV, dst, mask, tmp, none, none);
+         nvfx_fp_emit(fpc, insn);
+      } else {
+         tmp = nvfx_src(temp(fpc));
+         insn = arith(0, MOV, none.reg, mask, src[0], none, none);
+         insn.cc_update = 1;
+         nvfx_fp_emit(fpc, insn);
+
+         insn = arith(sat, MOV, dst, mask, src[2], none, none);
+         nvfx_fp_emit(fpc, insn);
+
+         insn = arith(sat, MOV, dst, mask, src[1], none, none);
+         insn.cc_test = NVFX_COND_LT;
+         nvfx_fp_emit(fpc, insn);
+      }
       break;
    case TGSI_OPCODE_COS:
       nvfx_fp_emit(fpc, arith(sat, COS, dst, mask, src[0], none, none));
@@ -586,9 +604,13 @@ nvfx_fragprog_parse_instruction(struct nvfx_fpc *fpc,
       }
       break;
    case TGSI_OPCODE_DP2:
-      tmp = nvfx_src(temp(fpc));
-      nvfx_fp_emit(fpc, arith(0, MUL, tmp.reg, NVFX_FP_MASK_X | NVFX_FP_MASK_Y, src[0], src[1], none));
-      nvfx_fp_emit(fpc, arith(0, ADD, dst, mask, swz(tmp, X, X, X, X), swz(tmp, Y, Y, Y, Y), none));
+      if(fpc->is_nv4x) {
+         nvfx_fp_emit(fpc, arith(sat, DP2_NV40, dst, mask, src[0], src[1], none));
+      } else {
+         tmp = nvfx_src(temp(fpc));
+         nvfx_fp_emit(fpc, arith(0, MUL, tmp.reg, NVFX_FP_MASK_X | NVFX_FP_MASK_Y, src[0], src[1], none));
+         nvfx_fp_emit(fpc, arith(0, ADD, dst, mask, swz(tmp, X, X, X, X), swz(tmp, Y, Y, Y, Y), none));
+      }
       break;
    case TGSI_OPCODE_DP3:
       nvfx_fp_emit(fpc, arith(sat, DP3, dst, mask, src[0], src[1], none));

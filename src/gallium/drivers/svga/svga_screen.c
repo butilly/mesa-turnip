@@ -426,6 +426,8 @@ svga_init_screen_caps(struct svga_screen *svgascreen)
    caps->glsl_feature_level_compatibility =
       sws->have_gl43 ? 430 : (sws->have_sm5 ? 410 : (sws->have_vgpu10 ? 330 : 120));
 
+   caps->fs_sample_variables = sws->have_gl43 || sws->have_sm5;
+
    caps->texture_transfer_modes = 0;
 
    caps->fragment_shader_texture_lod = true;
@@ -524,8 +526,6 @@ svga_init_screen_caps(struct svga_screen *svgascreen)
           (sws->have_vgpu10 &&
            svgascreen->max_viewports == SVGA3D_DX_MAX_VIEWPORTS));
    caps->max_viewports = svgascreen->max_viewports;
-
-   caps->endianness = PIPE_ENDIAN_LITTLE;
 
    caps->vendor_id = 0x15ad; /* VMware Inc. */
    caps->device_id = sws->device_id ? sws->device_id : 0x0405; /* assume SVGA II */
