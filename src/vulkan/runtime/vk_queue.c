@@ -24,6 +24,7 @@
 #include "vk_queue.h"
 
 #include "util/perf/cpu_trace.h"
+#include "util/log.h"
 #include "util/u_debug.h"
 #include <inttypes.h>
 
@@ -130,6 +131,9 @@ _vk_queue_set_lost(struct vk_queue *queue,
    va_start(ap, msg);
    vsnprintf(queue->_lost.error_msg, sizeof(queue->_lost.error_msg), msg, ap);
    va_end(ap);
+
+   mesa_loge("TU-LOSS-DIAG queue=%p source=%s:%d reason=%s",
+             (void *)queue, file, line, queue->_lost.error_msg);
 
    p_atomic_inc(&queue->base.device->_lost.lost);
 
