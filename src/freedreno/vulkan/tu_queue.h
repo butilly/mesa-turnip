@@ -36,6 +36,10 @@ struct tu_queue
    unsigned render_pass_idx;
 
    int fence;           /* timestamp/fence of the last queue submission */
+
+   /* Diagnostic snapshots; status queries may run on another thread. */
+   uint32_t diagnostic_submit;
+   uint32_t diagnostic_cmdbufs;
 };
 VK_DEFINE_HANDLE_CASTS(tu_queue, vk.base, VkQueue, VK_OBJECT_TYPE_QUEUE)
 

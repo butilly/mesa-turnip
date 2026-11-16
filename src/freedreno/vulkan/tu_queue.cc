@@ -9,6 +9,7 @@
 
 #include "tu_queue.h"
 
+#include "util/log.h"
 #include "vk_util.h"
 
 #include "tu_buffer.h"
@@ -389,12 +390,20 @@ queue_submit_sparse(struct vk_queue *_queue, struct vk_queue_submit *vk_submit)
       }
    }
 
+   p_atomic_set(&queue->diagnostic_submit, device->submit_count);
+   p_atomic_set(&queue->diagnostic_cmdbufs, vk_submit->command_buffer_count);
+
    VkResult result =
       tu_queue_submit(queue, submit, vk_submit->waits, vk_submit->wait_count,
                       vk_submit->signals, vk_submit->signal_count,
                       NULL);
 
    if (result != VK_SUCCESS) {
+      mesa_loge("TU-LOSS-DIAG op=sparse_queue_submit context=%u submit=%u "
+                "cmdbufs=%u waits=%u signals=%u result=%d",
+                queue->msm_queue_id, device->submit_count,
+                vk_submit->command_buffer_count, vk_submit->wait_count,
+                vk_submit->signal_count, result);
       pthread_mutex_unlock(&device->submit_mutex);
       goto out;
    }
@@ -553,12 +562,20 @@ queue_submit(struct vk_queue *_queue, struct vk_queue_submit *vk_submit)
    }
 #endif
 
+   p_atomic_set(&queue->diagnostic_submit, device->submit_count);
+   p_atomic_set(&queue->diagnostic_cmdbufs, vk_submit->command_buffer_count);
+
    result =
       tu_queue_submit(queue, submit, vk_submit->waits, vk_submit->wait_count,
                       vk_submit->signals, vk_submit->signal_count,
                       u_trace_submission_data);
 
    if (result != VK_SUCCESS) {
+      mesa_loge("TU-LOSS-DIAG op=queue_submit context=%u submit=%u "
+                "cmdbufs=%u waits=%u signals=%u result=%d",
+                queue->msm_queue_id, device->submit_count,
+                vk_submit->command_buffer_count, vk_submit->wait_count,
+                vk_submit->signal_count, result);
       pthread_mutex_unlock(&device->submit_mutex);
       goto out;
    }
@@ -629,6 +646,8 @@ tu_queue_init(struct tu_device *device,
    queue->fence = -1;
    queue->priority = -1;
    queue->msm_queue_id = 0;
+   queue->diagnostic_submit = 0;
+   queue->diagnostic_cmdbufs = 0;
 
    if (shared_queue) {
       /* Emulated queue: submissions are redirected to the real queue by
@@ -664,4 +683,3 @@ tu_queue_finish(struct tu_queue *queue)
    if (!emulated)
       tu_drm_submitqueue_close(queue->device, queue);
 }
-
