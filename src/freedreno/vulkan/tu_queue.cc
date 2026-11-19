@@ -397,6 +397,11 @@ queue_submit_sparse(struct vk_queue *_queue, struct vk_queue_submit *vk_submit)
                       NULL);
 
    if (result != VK_SUCCESS) {
+      mesa_loge("TU-SUBMIT-DIAG sparse queue=%u submit=%u "
+                "buffer_binds=%u image_binds=%u opaque_binds=%u result=%d",
+                queue->msm_queue_id, device->submit_count,
+                vk_submit->buffer_bind_count, vk_submit->image_bind_count,
+                vk_submit->image_opaque_bind_count, result);
       pthread_mutex_unlock(&device->submit_mutex);
       goto out;
    }
@@ -566,6 +571,11 @@ queue_submit(struct vk_queue *_queue, struct vk_queue_submit *vk_submit)
                       u_trace_submission_data);
 
    if (result != VK_SUCCESS) {
+      mesa_loge("TU-SUBMIT-DIAG queue-submit queue=%u submit=%u "
+                "cmd_buffers=%u expanded_cmd_buffers=%u waits=%u signals=%u result=%d",
+                queue->msm_queue_id, device->submit_count,
+                vk_submit->command_buffer_count, cmdbuf_count,
+                vk_submit->wait_count, vk_submit->signal_count, result);
       pthread_mutex_unlock(&device->submit_mutex);
       goto out;
    }
