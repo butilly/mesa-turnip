@@ -61,6 +61,7 @@ kgsl_submitqueue_new(struct tu_device *dev, struct tu_queue *queue)
       return ret;
 
    queue->msm_queue_id = req.drawctxt_id;
+   mesa_logi("TU-DIAG Gen8 loss capture enabled queue=%u", queue->msm_queue_id);
 
    return 0;
 }
@@ -1603,6 +1604,19 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
       ret = safe_ioctl(queue->device->physical_device->local_fd,
                        IOCTL_KGSL_GPU_COMMAND, &req);
 
+      if (ret) {
+         const int submit_errno = errno;
+         const uint64_t diagnostic = p_atomic_read(&queue->diagnostic_submit);
+         mesa_loge("TU-DIAG IOCTL_KGSL_GPU_COMMAND queue=%u submit=%u "
+                   "cmdbufs=%u ibs=%u waits=%u signals=%u previous_ts=%d "
+                   "ret=%d errno=%d (%s)",
+                   queue->msm_queue_id, (uint32_t) (diagnostic >> 32),
+                   (uint32_t) diagnostic, req.numcmds, wait_count, signal_count,
+                   p_atomic_read(&queue->fence), ret, submit_errno,
+                   strerror(submit_errno));
+         errno = submit_errno;
+      }
+
       timestamp = req.timestamp;
    } else {
       /* kgsl doesn't support multiple bind commands at once */
@@ -1635,6 +1649,13 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
                           IOCTL_KGSL_GPU_AUX_COMMAND, &req);
 
          if (ret) {
+            const int submit_errno = errno;
+            mesa_loge("TU-DIAG IOCTL_KGSL_GPU_AUX_COMMAND queue=%u submit=%u "
+                      "cmdbufs=0 bind=%u waits=%u signals=%u ret=%d errno=%d (%s)",
+                      queue->msm_queue_id, queue->device->submit_count, i,
+                      wait_count, signal_count, ret, submit_errno,
+                      strerror(submit_errno));
+            errno = submit_errno;
             result = vk_device_set_lost(&queue->device->vk,
                                         "bind submit failed: %s\n",
                                         strerror(errno));
@@ -1769,6 +1790,23 @@ kgsl_device_check_status(struct tu_device *device)
          uint32_t value = device->queues[i][q].msm_queue_id;
          VkResult status = get_kgsl_prop(device->fd, KGSL_PROP_GPU_RESET_STAT,
                                        &value, sizeof(value));
+         const int status_errno = status == VK_SUCCESS ? 0 : errno;
+         if (status != VK_SUCCESS ||
+             (value != KGSL_CTX_STAT_NO_ERROR &&
+              value != KGSL_CTX_STAT_INNOCENT_CONTEXT_RESET_EXT)) {
+            struct tu_queue *queue = &device->queues[i][q];
+            if (p_atomic_cmpxchg(&queue->diagnostic_reset_reported, 0, 1) == 0) {
+               const uint64_t diagnostic = p_atomic_read(&queue->diagnostic_submit);
+               mesa_loge("TU-DIAG KGSL_PROP_GPU_RESET_STAT queue=%u family=%u "
+                         "index=%u latest_attempt=%u cmdbufs=%u last_ts=%d "
+                         "status=%d reset_value=%u errno=%d (%s); "
+                         "latest attempt is not necessarily the guilty submit",
+                         queue->msm_queue_id, i, q,
+                         (uint32_t) (diagnostic >> 32), (uint32_t) diagnostic,
+                         p_atomic_read(&queue->fence), status, value,
+                         status_errno, strerror(status_errno));
+            }
+         }
          if (status != VK_SUCCESS)
             return vk_device_set_lost(&device->vk, "Failed to get GPU reset status");
 
