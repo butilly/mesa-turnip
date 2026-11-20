@@ -35,6 +35,10 @@ struct tu_queue
 
    unsigned render_pass_idx;
 
+   uint32_t diagnostic_submit_id;
+   uint32_t diagnostic_cmd_buffers;
+   uint32_t diagnostic_ibs;
+
    int fence;           /* timestamp/fence of the last queue submission */
 };
 VK_DEFINE_HANDLE_CASTS(tu_queue, vk.base, VkQueue, VK_OBJECT_TYPE_QUEUE)
