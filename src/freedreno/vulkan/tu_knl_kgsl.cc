@@ -66,6 +66,21 @@ kgsl_submitqueue_new(struct tu_device *dev, struct tu_queue *queue)
 }
 
 static void
+kgsl_log_loss(struct tu_queue *queue, const char *operation, int error,
+              uint32_t detail)
+{
+   const int saved_errno = errno;
+   mesa_loge("TU-LOSS %s queue=%u latest_submit=%u latest_cmd_buffers=%u "
+             "latest_ibs=%u last_fence=%d errno=%d (%s) detail=%u",
+             operation, queue->msm_queue_id,
+             p_atomic_read(&queue->diagnostic_submit_id),
+             p_atomic_read(&queue->diagnostic_cmd_buffers),
+             p_atomic_read(&queue->diagnostic_ibs),
+             p_atomic_read(&queue->fence), error, strerror(error), detail);
+   errno = saved_errno;
+}
+
+static void
 kgsl_submitqueue_close(struct tu_device *dev, struct tu_queue *queue)
 {
    struct kgsl_drawctxt_destroy req = {
@@ -853,6 +868,16 @@ wait_timestamp_safe(int fd,
 
          wait.timeout = timeout_ms;
       } else if (ret == -1) {
+         const int error = errno;
+         if (error != ETIMEDOUT) {
+            static unsigned reported_errors;
+            if (p_atomic_inc_return(&reported_errors) <= 4)
+               mesa_loge("TU-LOSS WAITTIMESTAMP queue=%u timestamp=%u "
+                         "timeout_ms=%u errno=%d (%s)",
+                         context_id, timestamp, wait.timeout, error,
+                         strerror(error));
+         }
+         errno = error;
          assert(errno == ETIMEDOUT);
          return VK_TIMEOUT;
       } else {
@@ -1447,6 +1472,10 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
    uint64_t start_ts = tu_perfetto_begin_submit();
 #endif
 
+   p_atomic_set(&queue->diagnostic_ibs,
+                util_dynarray_num_elements(&submit->commands,
+                                            struct kgsl_command_object));
+
    if (submit->commands.size == 0 && submit->bind_cmds.size == 0) {
       /* This handles the case where we have a wait and no commands to submit.
        * It is necessary to handle this case separately as the kernel will not
@@ -1616,6 +1645,8 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
 
       ret = safe_ioctl(queue->device->physical_device->local_fd,
                        IOCTL_KGSL_GPU_COMMAND, &req);
+      if (ret)
+         kgsl_log_loss(queue, "GPU_COMMAND", errno, req.numsyncs);
 
       timestamp = req.timestamp;
    } else {
@@ -1649,6 +1680,7 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
                           IOCTL_KGSL_GPU_AUX_COMMAND, &req);
 
          if (ret) {
+            kgsl_log_loss(queue, "GPU_AUX_COMMAND", errno, i);
             result = vk_device_set_lost(&queue->device->vk,
                                         "bind submit failed: %s\n",
                                         strerror(errno));
@@ -1783,11 +1815,15 @@ kgsl_device_check_status(struct tu_device *device)
          uint32_t value = device->queues[i][q].msm_queue_id;
          VkResult status = get_kgsl_prop(device->fd, KGSL_PROP_GPU_RESET_STAT,
                                        &value, sizeof(value));
-         if (status != VK_SUCCESS)
+         if (status != VK_SUCCESS) {
+            kgsl_log_loss(&device->queues[i][q], "GET_GPU_RESET_STAT",
+                           errno, 0);
             return vk_device_set_lost(&device->vk, "Failed to get GPU reset status");
+         }
 
          if (value != KGSL_CTX_STAT_NO_ERROR &&
             value != KGSL_CTX_STAT_INNOCENT_CONTEXT_RESET_EXT) {
+            kgsl_log_loss(&device->queues[i][q], "GPU_RESET_STAT", 0, value);
             return vk_device_set_lost(&device->vk, "GPU faulted or hung");
          }
       }
