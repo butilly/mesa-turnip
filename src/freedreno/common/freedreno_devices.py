@@ -68,64 +68,45 @@ add_gpus([
         reg_size_vec4 = 48, # not measured the way a5xx was
     ))
 
+# FIXME: measure on the hardware
 add_gpus([
         GPUId(505),
         GPUId(506),
-        GPUId(508),
-        GPUId(509),
-    ], GPUInfo(
-        CHIP.A5XX,
-        gmem_align_w = 64,  gmem_align_h = 32,
-        tile_align_w = 64,  tile_align_h = 32,
-        tile_max_w   = 1024, # max_bitfield_val(7, 0, 5)
-        tile_max_h   = max_bitfield_val(16, 9, 5),
-        num_vsc_pipes = 16,
-        cs_shared_mem_size = 32 * 1024,
-        num_sp_cores = 1,
-        wave_granularity = 2,
-        fibers_per_sp = 64 * 16, # Lowest number that didn't fault on spillall fs-varying-array-mat4-col-row-rd.
-        highest_bank_bit = 14,
-        threadsize_base = 32,
-        reg_size_vec4 = 64,
-    ))
+    ], A5xxGPUInfo(num_sp_cores = 1, highest_bank_bit = 14,
+                   reg_size_vec4 = 64,
+                   wave_granularity = 1))
 
 add_gpus([
+        GPUId(508),
+    ], A5xxGPUInfo(num_sp_cores = 1, highest_bank_bit = 14,
+                   reg_size_vec4 = 64,
+                   wave_granularity = 2))
+
+# FIXME: measure on the hardware
+add_gpus([
         GPUId(510),
+    ], A5xxGPUInfo(num_sp_cores = 2, highest_bank_bit = 14,
+                   reg_size_vec4 = 64,
+                   wave_granularity = 1))
+
+add_gpus([
+        GPUId(509),
         GPUId(512),
-    ], GPUInfo(
-        CHIP.A5XX,
-        gmem_align_w = 64,  gmem_align_h = 32,
-        tile_align_w = 64,  tile_align_h = 32,
-        tile_max_w   = 1024, # max_bitfield_val(7, 0, 5)
-        tile_max_h   = max_bitfield_val(16, 9, 5),
-        num_vsc_pipes = 16,
-        cs_shared_mem_size = 32 * 1024,
-        num_sp_cores = 2,
-        wave_granularity = 2,
-        fibers_per_sp = 64 * 16, # Lowest number that didn't fault on spillall fs-varying-array-mat4-col-row-rd.
-        highest_bank_bit = 14,
-        threadsize_base = 32,
-        reg_size_vec4 = 64,
-    ))
+    ], A5xxGPUInfo(num_sp_cores = 2, highest_bank_bit = 14,
+                   reg_size_vec4 = 96,
+                   wave_granularity = 1))
 
 add_gpus([
         GPUId(530),
+    ], A5xxGPUInfo(num_sp_cores = 4, highest_bank_bit = 15,
+                   reg_size_vec4 = 64,
+                   wave_granularity = 2))
+
+add_gpus([
         GPUId(540),
-    ], GPUInfo(
-        CHIP.A5XX,
-        gmem_align_w = 64,  gmem_align_h = 32,
-        tile_align_w = 64,  tile_align_h = 32,
-        tile_max_w   = 1024, # max_bitfield_val(7, 0, 5)
-        tile_max_h   = max_bitfield_val(16, 9, 5),
-        num_vsc_pipes = 16,
-        cs_shared_mem_size = 32 * 1024,
-        num_sp_cores = 4,
-        wave_granularity = 2,
-        fibers_per_sp = 64 * 16, # Lowest number that didn't fault on spillall fs-varying-array-mat4-col-row-rd.
-        highest_bank_bit = 15,
-        threadsize_base = 32,
-        reg_size_vec4 = 64,
-    ))
+    ], A5xxGPUInfo(num_sp_cores = 4, highest_bank_bit = 15,
+                   reg_size_vec4 = 96,
+                   wave_granularity = 2))
 
 # Props could be modified with env var:
 #  FD_DEV_FEATURES=%feature_name%=%value%:%feature_name%=%value%:...
@@ -171,6 +152,7 @@ a6xx_gen1_low = GPUProps(
         instr_cache_size = 64,
         indirect_draw_wfm_quirk = True,
         draw_auto_stale_stride_quirk = True,
+        predicated_binning_quirk = True,
         depth_bounds_require_depth_test_quirk = True,
 
         has_gmem_fast_clear = False,
@@ -191,6 +173,7 @@ a6xx_gen1 = GPUProps(
         instr_cache_size = 64,
         indirect_draw_wfm_quirk = True,
         draw_auto_stale_stride_quirk = True,
+        predicated_binning_quirk = True,
         depth_bounds_require_depth_test_quirk = True,
     )
 
@@ -201,6 +184,7 @@ a6xx_gen2 = GPUProps(
         has_z24uint_s8uint = True,
         indirect_draw_wfm_quirk = True,
         draw_auto_stale_stride_quirk = True,
+        predicated_binning_quirk = True,
         depth_bounds_require_depth_test_quirk = True, # TODO: check if true
         has_dp2acc = False, # TODO: check if true
         has_8bpp_ubwc = False,
@@ -377,7 +361,8 @@ add_gpus([
         GPUId(620),
     ], A6xxGPUInfo(
         CHIP.A6XX,
-        [a6xx_base, a6xx_gen1, GPUProps(draw_auto_stale_stride_quirk = False)],
+        [a6xx_base, a6xx_gen1, GPUProps(draw_auto_stale_stride_quirk = False,
+                                         predicated_binning_quirk = False)],
         num_ccu = 1,
         tile_align_w = 32,
         tile_align_h = 16,
@@ -552,8 +537,8 @@ add_gpus([
             [A6XXRegs.REG_A6XX_PC_MODE_CNTL, 0x1f],
             [A6XXRegs.REG_A6XX_PC_POWER_CNTL, 2],
             [A6XXRegs.REG_A6XX_VFD_POWER_CNTL, 2],
-            # this seems to be a chicken bit that fixes cubic filtering:
-            [A6XXRegs.REG_A6XX_TPL1_DBG_ECO_CNTL, 0x00108000],
+            # bit 24 seems to be a chicken bit that fixes cubic filtering:
+            [A6XXRegs.REG_A6XX_TPL1_DBG_ECO_CNTL, 0x01008000],
             [A6XXRegs.REG_A6XX_GRAS_DBG_ECO_CNTL, 0],
             [A6XXRegs.REG_A6XX_SP_CHICKEN_BITS, 0x00001400],
             [A6XXRegs.REG_A6XX_SP_DBG_ECO_CNTL, 0x01000000],
@@ -716,6 +701,7 @@ add_gpus([
             storage_16bit = True,
             is_a702 = True,
             draw_auto_stale_stride_quirk = False,
+            predicated_binning_quirk = False,
             )
         ],
         num_ccu = 1,
@@ -821,6 +807,7 @@ a7xx_gen1 = GPUProps(
         supports_uav_ubwc = True,
         enable_tp_ubwc_flag_hint = True,
         reading_shading_rate_requires_smask_quirk = True,
+        QCTDD08049535 = True,
         QCTDD08407086 = True,
         QCTDD08517960 = True,
     )
@@ -840,13 +827,18 @@ a7xx_gen2 = GPUProps(
         has_image_processing = True,
         has_64b_image_atomics = True,
         has_implicit_fragface_fragcoord_ij_linear = True,
+        has_resbase = True,
 
+        QCTDD08049535 = True,
         QCTDD08901551 = True,
         QCTDD08517960 = True,
+        # TODO we might need to check if fw supports the w/a:
+        # QCTDD10497382 = True,
     )
 
 a7xx_gen3 = GPUProps(
         has_event_write_sample_count = True,
+        has_resbase = True,
         load_inline_uniforms_via_preamble_ldgk = True,
         load_shader_consts_via_preamble = True,
         has_gmem_vpc_attr_buf = True,
@@ -864,7 +856,6 @@ a7xx_gen3 = GPUProps(
         has_primitive_shading_rate = True,
         has_ray_intersection = True,
         has_sw_fuse = True,
-        has_rt_workaround = True,
         has_alias_rt = True,
         has_abs_bin_mask = True,
         new_control_regs = True,
@@ -876,6 +867,7 @@ a7xx_gen3 = GPUProps(
         subpass_fence_cleans_resolve = True,
 
         QCTDD08901551 = False,
+        QCTDD10497382 = True,
         QCTDD12766770 = True,
         QCTDD13523866 = True,
     )
@@ -937,7 +929,7 @@ a740_raw_magic_regs = [
         [A6XXRegs.REG_A7XX_UCHE_UNKNOWN_0E10, 0x00000000],
         [A6XXRegs.REG_A7XX_UCHE_UNKNOWN_0E11, 0x00000000],
         [A6XXRegs.REG_A7XX_SP_HLSQ_DBG_ECO_CNTL, 0x00000000],
-        [A6XXRegs.REG_A6XX_SP_DBG_ECO_CNTL, 0x10000000],
+        [A6XXRegs.REG_A6XX_SP_DBG_ECO_CNTL, 0x10200000],
         [A6XXRegs.REG_A6XX_PC_MODE_CNTL,    0x1f1f],
         [A6XXRegs.REG_A6XX_PC_DBG_ECO_CNTL, 0x00100000],
         [A6XXRegs.REG_A7XX_PC_UNKNOWN_9E24, 0x21585600],
@@ -1115,7 +1107,7 @@ add_gpus([
     ], A6xxGPUInfo(
         CHIP.A7XX,
         [a7xx_base, a7xx_gen1],
-        num_ccu = 1,
+        num_ccu = 2,
         tile_align_w = 64,
         tile_align_h = 16,
         tile_max_w = 1024,
@@ -1168,7 +1160,8 @@ add_gpus([
 
 add_gpus([
         GPUId(chip_id=0xffff43030c00, name="Adreno X1-45"),
-        GPUId(chip_id=0x43030B00, name="FD735")
+        GPUId(chip_id=0xffff43030B00, name="FD735"),
+        GPUId(chip_id=0xffff43030E01, name="Adreno (TM) 735"),
     ], A6xxGPUInfo(
         CHIP.A7XX,
         [a7xx_base, a7xx_gen2, GPUProps(enable_tp_ubwc_flag_hint = True)],
@@ -1330,10 +1323,12 @@ add_gpus([
 add_gpus([
         GPUId(chip_id=0x43051401, name="FD750"), # KGSL, no speedbin data
         GPUId(chip_id=0xffff43051401, name="FD750"), # Default no-speedbin fallback
+        GPUId(chip_id=0xffff43051701, name="Adreno (TM) 753"),
     ], A6xxGPUInfo(
         CHIP.A7XX,
         [a7xx_base, a7xx_gen3, GPUProps(
             QCTDD10789828 = True,
+            has_independent_icache_miss = True,
         )],
         num_ccu = 6,
         tile_align_w = 96,
@@ -1396,7 +1391,6 @@ add_gpus([
 a8xx_base = GPUProps(
         has_dp2acc = False,
         reg_size_vec4 = 96,
-        has_rt_workaround = False,
         supports_double_threadsize = False,
         has_dual_wave_dispatch = True,
         round_robin_errata = False,
@@ -1404,6 +1398,7 @@ a8xx_base = GPUProps(
         max_storage_buffer_range_bytes = (1 << 31) - 1,
 
         QCTDD10204462 = False,
+        QCTDD10497382 = False,
         QCTDD11147232 = False,
     )
 
@@ -1441,16 +1436,10 @@ a8xx_base_raw_magic_regs = [
 
 a8xx_gen1 = GPUProps(
         reg_size_vec4 = 96,
-        sysmem_vpc_attr_buf_size = 131072,
-        sysmem_vpc_pos_buf_size = 65536,
-        sysmem_vpc_bv_pos_buf_size = 32768,
         sysmem_ccu_color_cache_fraction = CCUColorCacheFraction.FULL.value,
         sysmem_per_ccu_color_cache_size = 128 * 1024,
         sysmem_ccu_depth_cache_fraction = CCUColorCacheFraction.FULL.value,
         sysmem_per_ccu_depth_cache_size = 256 * 1024,
-        gmem_vpc_attr_buf_size = 49152,
-        gmem_vpc_pos_buf_size = 24576,
-        gmem_vpc_bv_pos_buf_size = 32768,
         gmem_ccu_color_cache_fraction = CCUColorCacheFraction.EIGHTH.value,
         gmem_per_ccu_color_cache_size = 16 * 1024,
         gmem_ccu_depth_cache_fraction = CCUColorCacheFraction.FULL.value,
@@ -1461,33 +1450,50 @@ a8xx_gen1 = GPUProps(
 
 a8xx_gen2 = GPUProps(
         reg_size_vec4 = 128,
-        sysmem_vpc_attr_buf_size = 131072,
-        sysmem_vpc_pos_buf_size = 65536,
-        sysmem_vpc_bv_pos_buf_size = 32768,
         sysmem_ccu_color_cache_fraction = CCUColorCacheFraction.FULL.value,
         sysmem_per_ccu_color_cache_size = 128 * 1024,
         sysmem_ccu_depth_cache_fraction = CCUColorCacheFraction.THREE_QUARTER.value,
         sysmem_per_ccu_depth_cache_size = 192 * 1024,
-        gmem_vpc_attr_buf_size = 49152,
-        gmem_vpc_pos_buf_size = 24576,
-        gmem_vpc_bv_pos_buf_size = 32768,
         gmem_ccu_color_cache_fraction = CCUColorCacheFraction.EIGHTH.value,
         gmem_per_ccu_color_cache_size = 16 * 1024,
         gmem_ccu_depth_cache_fraction = CCUColorCacheFraction.FULL.value,
         gmem_per_ccu_depth_cache_size = 256 * 1024,
         has_fs_tex_prefetch = False,
-
         has_salu_int_narrowing_quirk = True
+)
+
+a8xx_vpc_cache_lg = GPUProps(
+        sysmem_vpc_attr_buf_size = 128 * 1024,
+        sysmem_vpc_pos_buf_size = 64 * 1024,
+        sysmem_vpc_bv_pos_buf_size = 32 * 1024,
+        gmem_vpc_attr_buf_size = 48 * 1024,
+        gmem_vpc_pos_buf_size = 24 * 1024,
+        gmem_vpc_bv_pos_buf_size = 32 * 1024,
+)
+
+a8xx_vpc_cache_med = GPUProps(
+        sysmem_vpc_attr_buf_size = 128 * 1024,
+        sysmem_vpc_pos_buf_size = 48 * 1024,
+        sysmem_vpc_bv_pos_buf_size = 24 * 1024,
+        gmem_vpc_attr_buf_size = 48 * 1024,
+        gmem_vpc_pos_buf_size = 24 * 1024,
+        gmem_vpc_bv_pos_buf_size = 24 * 1024,
+)
+
+a8xx_vpc_cache_sm = GPUProps(
+        sysmem_vpc_attr_buf_size = 32 * 1024,
+        sysmem_vpc_pos_buf_size = 12 * 1024,
+        sysmem_vpc_bv_pos_buf_size = 20 * 1024,
+        gmem_vpc_attr_buf_size = 16 * 1024,
+        gmem_vpc_pos_buf_size = 12 * 1024,
+        gmem_vpc_bv_pos_buf_size = 20 * 1024,
 )
 
 add_gpus([
        GPUId(chip_id=0xffff44010000, name="Adreno (TM) 810"),
     ], A6xxGPUInfo(
         CHIP.A8XX,
-        [a7xx_base, a7xx_gen3, a8xx_base, a8xx_gen1, GPUProps(
-            gmem_vpc_attr_buf_size = 16384,
-            gmem_vpc_pos_buf_size = 12288,
-            gmem_vpc_bv_pos_buf_size = 20480,
+        [a7xx_base, a7xx_gen3, a8xx_base, a8xx_gen1, a8xx_vpc_cache_sm, GPUProps(
             # This is possibly also needed for a830 (and all of a8xx),
             # move to a8xx_base if confirmed needed for a830.
             has_fs_tex_prefetch = False,
@@ -1509,9 +1515,10 @@ add_gpus([
         GPUId(chip_id=0xffff44050000, name="Adreno (TM) 830"),
         GPUId(chip_id=0xffff44050001, name="Adreno (TM) 830v1"),
         GPUId(chip_id=0x44050001, name="Adreno (TM) 830"), # KGSL
+        GPUId(chip_id=0x44050100, name="Adreno (TM) 831"), # KGSL
     ], A6xxGPUInfo(
         CHIP.A8XX,
-        [a7xx_base, a7xx_gen3, a8xx_base, a8xx_gen1],
+        [a7xx_base, a7xx_gen3, a8xx_base, a8xx_gen1, a8xx_vpc_cache_lg],
         num_ccu = 6,
         num_slices = 3,
         tile_align_w = 96,
@@ -1526,13 +1533,13 @@ add_gpus([
     ))
 
 add_gpus([
+        GPUId(chip_id=0xffff44030a20, name="Adreno (TM) 829"),
         GPUId(chip_id=0x44030a20, name="Adreno (TM) 829"), # KGSL
     ], A6xxGPUInfo(
         CHIP.A8XX,
-        [a7xx_base, a7xx_gen3, a8xx_base, a8xx_gen2,
+        [a7xx_base, a7xx_gen3, a8xx_base, a8xx_gen2, a8xx_vpc_cache_med,
          GPUProps(
             shading_rate_matches_vk = True,  # TODO confirm this
-            sysmem_vpc_bv_pos_buf_size = 24576,
          )],
         num_ccu = 4,
         num_slices = 2,
@@ -1551,7 +1558,7 @@ add_gpus([
         GPUId(chip_id=0xffff44050A31, name="Adreno (TM) 840"),
     ], A6xxGPUInfo(
         CHIP.A8XX,
-        [a7xx_base, a7xx_gen3, a8xx_base, a8xx_gen2,
+        [a7xx_base, a7xx_gen3, a8xx_base, a8xx_gen2, a8xx_vpc_cache_lg,
          GPUProps(shading_rate_matches_vk = True)],
         num_ccu = 6,
         num_slices = 3,
@@ -1566,12 +1573,32 @@ add_gpus([
         raw_magic_regs = a8xx_base_raw_magic_regs,
     ))
 
+# 2 slice configuration of a840
+add_gpus([
+        GPUId(chip_id=0xffff44050A21, name="Adreno (TM) 840"),
+    ], A6xxGPUInfo(
+        CHIP.A8XX,
+        [a7xx_base, a7xx_gen3, a8xx_base, a8xx_gen2, a8xx_vpc_cache_lg,
+         GPUProps(shading_rate_matches_vk = True)],
+        num_ccu = 4,
+        num_slices = 2,
+        tile_align_w = 64,
+        tile_align_h = 32,
+        tile_max_w = 16384,
+        tile_max_h = 16384,
+        num_vsc_pipes = 32,
+        cs_shared_mem_size = 32 * 1024,
+        wave_granularity = 2,
+        fibers_per_sp = 128 * 2 * 16,
+        raw_magic_regs = a8xx_base_raw_magic_regs,
+    ))
+
 add_gpus([
         GPUId(chip_id=0xffff44070031, name="Adreno (TM) X2-85"),
         GPUId(chip_id=0xffff44060030, name="Adreno (TM) X2-85"),
     ], A6xxGPUInfo(
         CHIP.A8XX,
-        [a7xx_base, a7xx_gen3, a8xx_base, a8xx_gen2],
+        [a7xx_base, a7xx_gen3, a8xx_base, a8xx_gen2, a8xx_vpc_cache_lg],
         num_ccu = 6,
         num_slices = 3,
         tile_align_w = 96,
@@ -1589,7 +1616,7 @@ add_gpus([
         GPUId(chip_id=0xffff44070041, name="Adreno (TM) X2-90"),
     ], A6xxGPUInfo(
         CHIP.A8XX,
-        [a7xx_base, a7xx_gen3, a8xx_base, a8xx_gen2],
+        [a7xx_base, a7xx_gen3, a8xx_base, a8xx_gen2, a8xx_vpc_cache_lg],
         num_ccu = 8,
         num_slices = 4,
         tile_align_w = 64,

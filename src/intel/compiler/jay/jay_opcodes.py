@@ -148,20 +148,24 @@ for n in ['brd', 'illegal', 'goto', 'join', 'if', 'else',
 op('halt', 0, None, Props.NO_DEST, ['bool predicate_all'])
 
 op('send', 4, None, Props.SIDE_EFFECTS, [
+    'uint32_t desc_imm',
+    'uint32_t ex_desc_imm',
     'gen_sfid sfid',
     'bool eot',
     'bool check_tdr',
     'bool bindless',
     'bool pure',
     'bool skip_helpers',
+    'bool has_header',
     'enum jay_type type_0',
     'enum jay_type type_1',
-    'uint8_t mlen',
-    'uint8_t ex_mlen',
     'uint8_t explicit_simd_width',
-    'bool pad[1]',
-    'uint32_t ex_desc_imm',
+    'bool pad[2]',
 ])
+
+# Used during RA to model the register cost for packing mlen/ex_mlen
+# src0 = indirect descriptor, src1 = null
+op('pack_mlen', 2, 'u32', Props.NEGATE)
 
 op('reloc',   0, 'u32 u64', 0, ['unsigned param', 'unsigned base'])
 op('preload', 0, 'u32',     0, ['unsigned reg'])
@@ -178,7 +182,7 @@ op('zip', 4, 'u32')
 op('extract_byte_per_8lanes', 2, 'u32')
 op('shr_odd_subspans_by_4', 1, 'u16')
 op('and_u32_u16', 2, 'u32')
-op('and_sN_s32', 2, 's32', 0, ['unsigned n'])
+op('and_sN', 2, 's16 s32', 0, ['unsigned n'])
 
 # Pixel coord calculations. expand_quad replicates out the per-2x2 values from
 # its source g0.[10...13] and - in the case of SIMD32 - g1.[10...13] into a
@@ -213,17 +217,17 @@ op('extract_subspan_info', 2, 'u32', Props.CMOD, ['uint16_t mask'])
 # indicate that the r3 phi's value is r1 when coming from B1, and r2 when coming
 # from B2. This would traditionally be written r3 = 𝜙(r1, r2).
 #
-# Phis operate on whole 32-bit lane values. Phis are not allowed to mix files.
-op('phi_src', 1, 'u1 u32', Props.NO_DEST, ['uint32_t index'])
-op('phi_dst', 0, 'u1 u32')
+# Phis are not allowed to mix files.
+op('phi_src', 1, 'u1 u16 u32', Props.NO_DEST, ['uint32_t index'])
+op('phi_dst', 0, 'u1 u16 u32')
 
 # Output from a unit test to prevent dead code elimination.
 op('unit_test', 1, 'u32', Props.NO_DEST)
 
 # Produces a unstable indeterminate value. Undef in LLVM parlance.
-op('undef', 0, 'u1 u32')
+op('undef', 0, 'u1 u16 u32')
 
-op('not', 1, 'u1 u32', Props.CMOD)
+op('not', 1, 'u1 u16 u32 s16 s32', Props.CMOD)
 
 op('mov_imm64', 0, 'u64', 0, ['uint64_t imm'])
 
@@ -261,6 +265,9 @@ op('demote', 2, 'u1 u16 u32 u64 s16 s32 s64 f16 f32 f64', Props.NEGATE | Props.N
 
 # Copy the is_helper flag.
 op('is_helper', 0, 'u1 u32')
+
+# Swap two registers. Pseudo-instruction during RA.
+op('swap', 2, 'u32', Props.NO_DEST)
 
 OPCODES = _opcodes
 

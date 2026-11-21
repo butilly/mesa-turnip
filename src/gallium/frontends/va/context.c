@@ -160,8 +160,6 @@ VA_DRIVER_INIT_FUNC(VADriverContextP ctx)
 #endif
       if (!drv->vscreen)
          drv->vscreen = vl_dri3_screen_create(ctx->native_dpy, ctx->x11_screen);
-      if (!drv->vscreen)
-         drv->vscreen = vl_xlib_swrast_screen_create(ctx->native_dpy, ctx->x11_screen);
       break;
    case VA_DISPLAY_WAYLAND:
    case VA_DISPLAY_DRM:
@@ -188,7 +186,11 @@ VA_DRIVER_INIT_FUNC(VADriverContextP ctx)
           * so don't try to override them.
           */
          bool honor_dri_prime = ctx->display_type == VA_DISPLAY_WAYLAND;
-         drv->vscreen = vl_drm_screen_create(drm_info->fd, honor_dri_prime);
+         bool use_zink = false;
+#ifdef GALLIUM_ZINK
+         use_zink = zink;
+#endif
+         drv->vscreen = vl_drm_screen_create(drm_info->fd, honor_dri_prime, use_zink);
       }
       break;
    }
@@ -542,8 +544,6 @@ vlVaTerminate(VADriverContextP ctx)
 
    drv = ctx->pDriverData;
    pipe_video_codec_reference(&drv->proc, NULL);
-   if (drv->pipe2)
-      drv->pipe2->destroy(drv->pipe2);
    drv->pipe->destroy(drv->pipe);
    drv->vscreen->destroy(drv->vscreen);
    handle_table_destroy(drv->htab);

@@ -14,6 +14,10 @@
 
 #include "util/memstream.h"
 
+#if AMD_LLVM_AVAILABLE
+#include "ac_llvm_util.h"
+#endif
+
 struct user_sgpr_info {
    uint64_t inline_push_constant_mask;
    bool inlined_all_push_consts;
@@ -206,11 +210,11 @@ declare_vs_specific_input_sgprs(struct radv_shader_args_state *state, const stru
       }
 
       RADV_ADD_UD_ARG(state, 1, AC_ARG_VALUE, ac.base_vertex, AC_UD_VS_BASE_VERTEX_START_INSTANCE);
-      if (info->vs.needs_draw_id) {
-         RADV_ADD_UD_ARG(state, 1, AC_ARG_VALUE, ac.draw_id, AC_UD_VS_BASE_VERTEX_START_INSTANCE);
-      }
       if (info->vs.needs_base_instance) {
          RADV_ADD_UD_ARG(state, 1, AC_ARG_VALUE, ac.start_instance, AC_UD_VS_BASE_VERTEX_START_INSTANCE);
+      }
+      if (info->needs_draw_id) {
+         RADV_ADD_UD_ARG(state, 1, AC_ARG_VALUE, ac.draw_id, AC_UD_VS_BASE_VERTEX_START_INSTANCE);
       }
    }
 }
@@ -311,7 +315,7 @@ declare_ms_input_sgprs(struct radv_shader_args_state *state, const struct radv_s
    if (info->cs.uses_grid_size) {
       RADV_ADD_UD_ARG(state, 3, AC_ARG_VALUE, ac.num_work_groups, AC_UD_VS_BASE_VERTEX_START_INSTANCE);
    }
-   if (info->vs.needs_draw_id) {
+   if (info->needs_draw_id) {
       RADV_ADD_UD_ARG(state, 1, AC_ARG_VALUE, ac.draw_id, AC_UD_VS_BASE_VERTEX_START_INSTANCE);
    }
    if (info->ms.has_task) {
@@ -445,8 +449,8 @@ declare_unmerged_vs_tcs_args(struct radv_shader_args_state *state, const enum am
    RADV_ADD_UD_ARG(state, 2, AC_ARG_VALUE, prolog_inputs, AC_UD_VS_PROLOG_INPUTS);
    RADV_ADD_UD_ARG(state, 1, AC_ARG_CONST_ADDR, ac.vertex_buffers, AC_UD_VS_VERTEX_BUFFERS);
    RADV_ADD_UD_ARG(state, 1, AC_ARG_VALUE, ac.base_vertex, AC_UD_VS_BASE_VERTEX_START_INSTANCE);
-   RADV_ADD_UD_ARG(state, 1, AC_ARG_VALUE, ac.draw_id, AC_UD_VS_BASE_VERTEX_START_INSTANCE);
    RADV_ADD_UD_ARG(state, 1, AC_ARG_VALUE, ac.start_instance, AC_UD_VS_BASE_VERTEX_START_INSTANCE);
+   RADV_ADD_UD_ARG(state, 1, AC_ARG_VALUE, ac.draw_id, AC_UD_VS_BASE_VERTEX_START_INSTANCE);
 
    declare_global_input_sgprs(state, gfx_level, info, user_sgpr_info);
 
@@ -494,8 +498,8 @@ declare_unmerged_vs_tes_gs_args(struct radv_shader_args_state *state, const enum
    RADV_ADD_UD_ARG(state, 2, AC_ARG_VALUE, prolog_inputs, AC_UD_VS_PROLOG_INPUTS);
    RADV_ADD_UD_ARG(state, 1, AC_ARG_CONST_ADDR, ac.vertex_buffers, AC_UD_VS_VERTEX_BUFFERS);
    RADV_ADD_UD_ARG(state, 1, AC_ARG_VALUE, ac.base_vertex, AC_UD_VS_BASE_VERTEX_START_INSTANCE);
-   RADV_ADD_UD_ARG(state, 1, AC_ARG_VALUE, ac.draw_id, AC_UD_VS_BASE_VERTEX_START_INSTANCE);
    RADV_ADD_UD_ARG(state, 1, AC_ARG_VALUE, ac.start_instance, AC_UD_VS_BASE_VERTEX_START_INSTANCE);
+   RADV_ADD_UD_ARG(state, 1, AC_ARG_VALUE, ac.draw_id, AC_UD_VS_BASE_VERTEX_START_INSTANCE);
 
    declare_global_input_sgprs(state, gfx_level, info, user_sgpr_info);
 
@@ -607,7 +611,13 @@ declare_shader_args(const struct radv_compiler_info *compiler_info, struct radv_
       return;
    }
 
-   if (gfx_level < GFX11 || (stage != MESA_SHADER_COMPUTE && stage != MESA_SHADER_TASK)) {
+   /* LLVM may reserve s[0:1] for the ring offsets, even if they are unused. */
+   bool llvm_reserves_ring_offsets = false;
+#if AMD_LLVM_AVAILABLE
+   llvm_reserves_ring_offsets = compiler_info->key.use_llvm && ac_llvm_reserves_ring_offsets(gfx_level);
+#endif
+
+   if (gfx_level < GFX11 || llvm_reserves_ring_offsets || (stage != MESA_SHADER_COMPUTE && stage != MESA_SHADER_TASK)) {
       RADV_ADD_UD_ARG(state, 2, AC_ARG_CONST_ADDR, ac.ring_offsets, AC_UD_SCRATCH_RING_OFFSETS);
    }
    if (stage == MESA_SHADER_TASK) {
@@ -649,7 +659,7 @@ declare_shader_args(const struct radv_compiler_info *compiler_info, struct radv_
                RADV_ADD_UD_ARG(state, 1, AC_ARG_VALUE, cs_state, AC_UD_CS_STATE);
          } else {
             assert(stage == MESA_SHADER_TASK);
-            if (info->vs.needs_draw_id) {
+            if (info->needs_draw_id) {
                RADV_ADD_UD_ARG(state, 1, AC_ARG_VALUE, ac.draw_id, AC_UD_CS_TASK_DRAW_ID);
             }
 
@@ -909,6 +919,9 @@ declare_shader_args(const struct radv_compiler_info *compiler_info, struct radv_
 
       if (radv_ps_needs_state_sgpr(info, gfx_state))
          RADV_ADD_UD_ARG(state, 1, AC_ARG_VALUE, ps_state, AC_UD_PS_STATE);
+
+      if (info->ps.reads_msrtss_inputs)
+         RADV_ADD_UD_ARG(state, 1, AC_ARG_CONST_ADDR, ps_msrtss_inputs, AC_UD_PS_MSRTSS_INPUTS);
 
       if (info->uses_view_index)
          RADV_ADD_UD_ARG(state, 1, AC_ARG_VALUE, ac.view_index, AC_UD_VIEW_INDEX);

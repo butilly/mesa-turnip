@@ -63,6 +63,7 @@ The three GitLab CI systems currently integrated are:
    :maxdepth: 1
 
    bare-metal
+   ci-tron
    LAVA
    docker
 
@@ -330,6 +331,14 @@ usually composed of: ``all``, ``${mesa_driver_name}``, and
 
 You may view the list of available tags at the top of the
 ``.gitlab-ci.yml`` file.
+
+Checking for regressions only (ignore improvements)
+---------------------------------------------------
+
+Another CI input available is ``allow_improvements_over_expectations``.
+Normally, a test not matching its expected result fails the job.
+This option allows ``UnexpectedImprovement`` to be considered as ``Pass``,
+and only regressions are marked as failures.
 
 Running specific CI jobs
 ------------------------

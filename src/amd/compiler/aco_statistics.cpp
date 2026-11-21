@@ -482,6 +482,9 @@ BlockCycleEstimator::add(aco_ptr<Instruction>& instr)
 
    int32_t result_available = start + perf.latency;
    for (Definition& def : instr->definitions) {
+      if (def.physReg() == sgpr_null)
+         continue;
+
       int32_t* available = &reg_available[def.physReg().reg()];
       for (unsigned i = 0; i < def.size(); i++)
          available[i] = MAX2(available[i], result_available);
@@ -590,8 +593,7 @@ collect_preasm_stats(Program* program)
             program->statistics.vopd++;
 
          if ((instr->isVMEM() || instr->isFlatLike()) && !instr->operands.empty()) {
-            if (std::none_of(vmem_clause.begin(), vmem_clause.end(),
-                             [&](Instruction* other)
+            if (std::none_of(vmem_clause.begin(), vmem_clause.end(), [&](Instruction* other)
                              { return should_form_clause(instr.get(), other); }))
                program->statistics.vclause++;
             vmem_clause.insert(instr.get());
@@ -602,8 +604,7 @@ collect_preasm_stats(Program* program)
          }
 
          if (instr->isSMEM() && !instr->operands.empty()) {
-            if (std::none_of(smem_clause.begin(), smem_clause.end(),
-                             [&](Instruction* other)
+            if (std::none_of(smem_clause.begin(), smem_clause.end(), [&](Instruction* other)
                              { return should_form_clause(instr.get(), other); }))
                program->statistics.sclause++;
             smem_clause.insert(instr.get());

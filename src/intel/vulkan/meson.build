@@ -20,7 +20,7 @@ anv_entrypoints = custom_target(
   command : [
     prog_python, '@INPUT0@', '--xml', '@INPUT1@', '--proto', '--weak',
     '--out-h', '@OUTPUT0@', '--out-c', '@OUTPUT1@', '--prefix', 'anv',
-    '--beta', with_vulkan_beta.to_string(),
+    vulkan_gen_beta_arg,
     '--device-prefix', 'gfx9',
     '--device-prefix', 'gfx11',
     '--device-prefix', 'gfx12',
@@ -135,7 +135,6 @@ anv_per_hw_ver_files = files(
   'genX_gfx_state.c',
   'genX_gpu_memcpy.c',
   'genX_init_state.c',
-  'genX_internal_kernels.c',
   'genX_query.c',
   'genX_simple_shader.c',
   'genX_shader.c',
@@ -247,6 +246,7 @@ libanv_files = files(
   'anv_utrace.c',
   'anv_va.c',
   'anv_video.c',
+  'anv_video_brc_tables.c',
   'anv_wsi.c',
   'bvh/anv_bvh_defines.h',
 )

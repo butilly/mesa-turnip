@@ -20,11 +20,10 @@
 
 """Tests for pick's core data structures and routines."""
 
-from unittest import mock
 import textwrap
-import typing
+from dataclasses import dataclass
+from unittest import mock
 
-import attr
 import pytest
 
 from . import core
@@ -287,19 +286,19 @@ class TestRE:
 
 class TestResolveNomination:
 
-    @attr.s(slots=True)
+    @dataclass(slots=True)
     class FakeSubprocess:
 
         """A fake asyncio.subprocess like class for use with mock."""
 
-        out: typing.Optional[bytes] = attr.ib(None)
-        returncode: int = attr.ib(0)
+        out: bytes | None = None
+        returncode: int = 0
 
         async def mock(self, *_, **__):
             """A dirtly little helper for mocking."""
             return self
 
-        async def communicate(self) -> typing.Tuple[bytes, bytes]:
+        async def communicate(self) -> tuple[bytes, bytes]:
             assert self.out is not None
             return self.out, b''
 

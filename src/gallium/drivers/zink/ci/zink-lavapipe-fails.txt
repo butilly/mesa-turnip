@@ -38,8 +38,6 @@ spec@!opengl 1.1@polygon-mode-offset@config 6: Expected white pixel on top edge,
 spec@arb_fragment_shader_interlock@arb_fragment_shader_interlock-image-load-store,Fail
 spec@arb_framebuffer_object@execution@msaa-alpha-to-coverage_alpha-to-one_write-z,Fail
 spec@arb_gpu_shader_fp64@execution@arb_gpu_shader_fp64-tf-separate,Fail
-spec@arb_program_interface_query@arb_program_interface_query-getprogramresourceindex,Fail
-spec@arb_program_interface_query@arb_program_interface_query-getprogramresourceindex@'vs_input2[1][0]' on GL_PROGRAM_INPUT,Fail
 spec@arb_sample_shading@samplemask 2,Fail
 spec@arb_sample_shading@samplemask 2@0.250000 mask_in_one,Fail
 spec@arb_sample_shading@samplemask 2@0.500000 mask_in_one,Fail
@@ -117,17 +115,17 @@ spec@khr_texture_compression_astc@sliced-3d-miptree-gl srgb-fp@sRGB decode full 
 spec@!opengl 3.0@clearbuffer-depth-cs-probe,Fail
 spec@arb_post_depth_coverage@arb_post_depth_coverage-multisampling,Fail
 
-#literally no driver can pass these
-spec@!opengl 1.0@rasterpos,Fail
-spec@!opengl 1.0@rasterpos@glsl_vs_gs_linked,Fail
-spec@!opengl 1.0@rasterpos@glsl_vs_tes_linked,Fail
-
 spec@ext_transform_feedback@tessellation quads wireframe,Fail
 
 # Debian 12 CI update, see https://gitlab.freedesktop.org/mesa/mesa/-/issues/9072
 spec@ext_transform_feedback@tessellation quad_strip wireframe,Fail
 
 # uprev Piglit in Mesa
+spec@!opengl 1.5@gl-1.5-gen-buffers-unique,Crash
+spec@ext_multisampled_render_to_texture@render,Crash
+spec@ext_multisampled_render_to_texture@render@mipmap level 1,Fail
+spec@ext_multisampled_render_to_texture@valid-usage,Crash
+spec@ext_multisampled_render_to_texture2@valid-usage,Crash
 spec@khr_texture_compression_astc@sliced-3d-miptree-gles srgb-fp,Fail
 spec@khr_texture_compression_astc@sliced-3d-miptree-gles srgb-fp@sRGB decode full precision,Fail
 

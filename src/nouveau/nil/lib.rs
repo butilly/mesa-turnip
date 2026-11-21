@@ -1,6 +1,7 @@
 // Copyright © 2024 Collabora, Ltd.
 // SPDX-License-Identifier: MIT
 
+extern crate mesa_util;
 extern crate nil_rs_bindings;
 extern crate nvidia_headers;
 
@@ -20,11 +21,7 @@ pub trait ILog2Ceil {
 
 impl ILog2Ceil for u32 {
     fn ilog2_ceil(self) -> Self {
-        if self <= 1 {
-            0
-        } else {
-            (self - 1).ilog2() + 1
-        }
+        if self <= 1 { 0 } else { (self - 1).ilog2() + 1 }
     }
 }
 

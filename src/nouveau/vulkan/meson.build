@@ -90,8 +90,6 @@ nvk_files = files(
   'nvk_video_session.h',
   'nvk_wsi.c',
   'nvk_wsi.h',
-  'layers/nvk_app_workarounds.c',
-  'layers/nvk_app_workarounds.h',
   'nvkmd/nouveau/nvkmd_nouveau.h',
   'nvkmd/nouveau/nvkmd_nouveau_ctx.c',
   'nvkmd/nouveau/nvkmd_nouveau_dev.c',
@@ -114,7 +112,7 @@ nvk_entrypoints = custom_target(
   command : [
     prog_python, '@INPUT0@', '--xml', '@INPUT1@', '--proto', '--weak',
     '--out-h', '@OUTPUT0@', '--out-c', '@OUTPUT1@', '--prefix', 'nvk',
-    '--beta', with_vulkan_beta.to_string(),
+    vulkan_gen_beta_arg,
   ],
   depend_files : vk_entrypoints_gen_depend_files,
 )
@@ -189,6 +187,7 @@ nvk_bindings_rs_gen = rust.bindgen(
   ],
   args: [
     bindgen_output_args,
+    util_rs_bindgen_args,
     '--no-prepend-enum-name',
     '--with-derive-default',
     '--allowlist-type', 'Std.*|vk_video.*|.*nv.*|Vk.*|vk.*',
@@ -217,6 +216,7 @@ libnvk_bindings_rs = static_library(
   link_with : [libnvk_bindings_rs_extern],
   gnu_symbol_visibility: 'hidden',
   rust_abi: 'rust',
+  dependencies: idep_mesa_util_rs,
 )
 
 libnvk_rs = static_library(
@@ -238,7 +238,7 @@ libnvk_rs = static_library(
 
 # TODO: Linking Rust executables (such as unit tests) doesn't play nicely
 # with the sanitizers because meson doesn't know to pass -fsanitize to the
-# Rust linker.  See also https://github.com/mesonbuild/meson/issues/11741
+# Rust linker.  See also https://github.com/mesonbuild/meson/issues/15222
 if with_tests and get_option('b_sanitize') == 'none' and not with_platform_android
   rust.test(
     'nvk_rs',

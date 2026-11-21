@@ -49,9 +49,9 @@
  * Parse the list of surface attributes and return the proper error code.
  */
 static EGLint
-_eglParseSurfaceAttribList(_EGLSurface *surf, const EGLint *attrib_list)
+_eglParseSurfaceAttribList(struct _egl_surface *surf, const EGLint *attrib_list)
 {
-   _EGLDisplay *disp = surf->Resource.Display;
+   struct _egl_display *disp = surf->Resource.Display;
    EGLint type = surf->Type;
    EGLint texture_type = EGL_PBUFFER_BIT;
    EGLint i, err = EGL_SUCCESS;
@@ -353,12 +353,12 @@ _eglParseSurfaceAttribList(_EGLSurface *surf, const EGLint *attrib_list)
 }
 
 /**
- * Do error check on parameters and initialize the given _EGLSurface object.
+ * Do error check on parameters and initialize the given struct _egl_surface object.
  * \return EGL_TRUE if no errors, EGL_FALSE otherwise.
  */
 EGLBoolean
-_eglInitSurface(_EGLSurface *surf, _EGLDisplay *disp, EGLint type,
-                _EGLConfig *conf, const EGLint *attrib_list,
+_eglInitSurface(struct _egl_surface *surf, struct _egl_display *disp, EGLint type,
+                struct _egl_config *conf, const EGLint *attrib_list,
                 void *native_surface)
 {
    const char *func;
@@ -454,7 +454,7 @@ _eglInitSurface(_EGLSurface *surf, _EGLDisplay *disp, EGLint type,
 }
 
 EGLBoolean
-_eglQuerySurface(_EGLDisplay *disp, _EGLSurface *surface, EGLint attribute,
+_eglQuerySurface(struct _egl_display *disp, struct _egl_surface *surface, EGLint attribute,
                  EGLint *value)
 {
    switch (attribute) {
@@ -555,12 +555,12 @@ _eglQuerySurface(_EGLDisplay *disp, _EGLSurface *surface, EGLint attribute,
           !disp->Extensions.KHR_partial_update)
          return _eglError(EGL_BAD_ATTRIBUTE, "eglQuerySurface");
 
-      _EGLContext *ctx = _eglGetCurrentContext();
+      struct _egl_context *ctx = _eglGetCurrentContext();
       if (_eglGetContextHandle(ctx) == EGL_NO_CONTEXT ||
           ctx->DrawSurface != surface)
          return _eglError(EGL_BAD_SURFACE, "eglQuerySurface");
 
-      EGLint result = disp->Driver->QueryBufferAge(disp, surface);
+      EGLint result = Driver.QueryBufferAge(disp, surface);
       if (result < 0)
          return EGL_FALSE;
 
@@ -637,7 +637,7 @@ _eglQuerySurface(_EGLDisplay *disp, _EGLSurface *surface, EGLint attribute,
  * Default fallback routine - drivers might override this.
  */
 EGLBoolean
-_eglSurfaceAttrib(_EGLDisplay *disp, _EGLSurface *surface, EGLint attribute,
+_eglSurfaceAttrib(struct _egl_display *disp, struct _egl_surface *surface, EGLint attribute,
                   EGLint value)
 {
    EGLint confval;
@@ -760,7 +760,7 @@ _eglSurfaceAttrib(_EGLDisplay *disp, _EGLSurface *surface, EGLint attribute,
 }
 
 EGLBoolean
-_eglBindTexImage(_EGLDisplay *disp, _EGLSurface *surface, EGLint buffer)
+_eglBindTexImage(struct _egl_display *disp, struct _egl_surface *surface, EGLint buffer)
 {
    EGLint texture_type = EGL_PBUFFER_BIT;
 
@@ -789,7 +789,7 @@ _eglBindTexImage(_EGLDisplay *disp, _EGLSurface *surface, EGLint buffer)
 }
 
 EGLBoolean
-_eglReleaseTexImage(_EGLDisplay *disp, _EGLSurface *surf, EGLint buffer)
+_eglReleaseTexImage(struct _egl_display *disp, struct _egl_surface *surf, EGLint buffer)
 {
    /* Just do basic error checking and return success/fail.
     * Drivers must implement the real stuff.
@@ -823,14 +823,14 @@ _eglReleaseTexImage(_EGLDisplay *disp, _EGLSurface *surf, EGLint buffer)
 }
 
 EGLBoolean
-_eglSurfaceHasMutableRenderBuffer(_EGLSurface *surf)
+_eglSurfaceHasMutableRenderBuffer(struct _egl_surface *surf)
 {
    return surf->Type == EGL_WINDOW_BIT && surf->Config &&
           (surf->Config->SurfaceType & EGL_MUTABLE_RENDER_BUFFER_BIT_KHR);
 }
 
 EGLBoolean
-_eglSurfaceInSharedBufferMode(_EGLSurface *surf)
+_eglSurfaceInSharedBufferMode(struct _egl_surface *surf)
 {
    return _eglSurfaceHasMutableRenderBuffer(surf) &&
           surf->ActiveRenderBuffer == EGL_SINGLE_BUFFER;

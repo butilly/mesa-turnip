@@ -7,11 +7,12 @@ libpan_shader_files = files(
   'query_pool.cl',
   'draw_helper.cl',
   'indirect_dispatch.cl',
+  'geometry.cl',
 )
 
 idep_libpan_per_arch = {}
 
-foreach ver : ['4', '5', '6', '7', '9', '10', '11', '12', '13', '14']
+foreach ver : ['6', '7', '9', '10', '11', '12', '13', '14']
   libpan_spv = custom_target(
     input : libpan_shader_files,
     output : 'libpan_v' + ver + '.spv',

@@ -68,7 +68,7 @@ cmd_copy_data(struct cs_builder *b, uint64_t dst_addr, uint64_t src_addr,
          const struct cs_index reg = cs_scratch_reg_tuple(b, 4, count);
 
          cs_load_to(b, reg, src_addr_reg, BITFIELD_MASK(count), offset);
-         cs_wait_slot(b, SB_ID(LS));
+         cs_wait_ls(b);
          cs_store(b, reg, dst_addr_reg, BITFIELD_MASK(count), offset);
 
          copy_count -= count;
@@ -139,9 +139,12 @@ panvk_utrace_record_ts(struct u_trace *ut, void *cs, void *timestamps,
    struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
    struct cs_builder *b = get_builder(cmdbuf, ut);
    const struct panvk_utrace_buf *buf = timestamps;
-   const uint64_t addr = buf->dev + offset_B;
 
-   cmd_write_timestamp(dev, b, addr, *cs_info->ts_async_op);
+   /* The buf might be NULL if create_buffer fails. */
+   if (buf) {
+      const uint64_t addr = buf->dev + offset_B;
+      cmd_write_timestamp(dev, b, addr, *cs_info->ts_async_op);
+   }
 
    return true;
 }
@@ -156,6 +159,11 @@ panvk_utrace_capture_data(struct u_trace *ut, void *cs, void *dst_buffer,
    struct panvk_utrace_cs_info *cs_info = cs;
    struct cs_builder *b = get_builder(cs_info->cmdbuf, ut);
    const struct panvk_utrace_buf *dst_buf = dst_buffer;
+
+   /* The buf might be NULL if create_buffer fails. */
+   if (!dst_buf)
+      return;
+
    const uint64_t dst_addr = dst_buf->dev + dst_offset_B;
    const uint64_t src_addr = src_offset_B;
 
@@ -171,12 +179,6 @@ panvk_utrace_capture_data(struct u_trace *ut, void *cs, void *dst_buffer,
                     cs_info->capture_data_wait_for_ts);
 }
 
-static uint32_t
-get_utrace_clone_mem_size()
-{
-   return debug_get_num_option("PANVK_UTRACE_CLONE_MEM_SIZE", 0xa00000);
-}
-
 VkResult
 panvk_per_arch(utrace_context_init)(struct panvk_device *dev)
 {
@@ -187,21 +189,7 @@ panvk_per_arch(utrace_context_init)(struct panvk_device *dev)
                         panvk_utrace_capture_data, panvk_utrace_get_data,
                         panvk_utrace_delete_flush_data);
 
-   VkResult result = panvk_priv_bo_create(dev, get_utrace_clone_mem_size(), 0,
-                                          VK_SYSTEM_ALLOCATION_SCOPE_OBJECT,
-                                          &dev->utrace.copy_buf_heap_bo);
-   if (result != VK_SUCCESS) {
-      u_trace_context_fini(&dev->utrace.utctx);
-      return result;
-   }
-
    simple_mtx_init(&dev->utrace.copy_buf_heap_lock, mtx_plain);
-
-   simple_mtx_lock(&dev->utrace.copy_buf_heap_lock);
-   util_vma_heap_init(&dev->utrace.copy_buf_heap,
-                      dev->utrace.copy_buf_heap_bo->addr.dev,
-                      dev->utrace.copy_buf_heap_bo->bo->size);
-   simple_mtx_unlock(&dev->utrace.copy_buf_heap_lock);
 
    return VK_SUCCESS;
 }
@@ -212,7 +200,10 @@ panvk_per_arch(utrace_context_fini)(struct panvk_device *dev)
    u_trace_context_fini(&dev->utrace.utctx);
 
    simple_mtx_lock(&dev->utrace.copy_buf_heap_lock);
-   util_vma_heap_finish(&dev->utrace.copy_buf_heap);
+
+   if (dev->utrace.copy_buf_heap_bo)
+      util_vma_heap_finish(&dev->utrace.copy_buf_heap);
+
    simple_mtx_unlock(&dev->utrace.copy_buf_heap_lock);
 
    panvk_priv_bo_unref(dev->utrace.copy_buf_heap_bo);

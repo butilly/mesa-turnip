@@ -57,7 +57,6 @@ const struct nir_shader_compiler_options brw_scalar_nir_options = {
    .lower_pack_64_2x32 = true,
    .lower_scmp = true,
    .lower_to_scalar = true,
-   .lower_uadd_carry = true,
    .lower_ufind_msb = true,
    .lower_ifind_msb = true,
    .lower_uniforms_to_ubo = true,
@@ -66,7 +65,6 @@ const struct nir_shader_compiler_options brw_scalar_nir_options = {
    .lower_unpack_snorm_4x8 = true,
    .lower_unpack_unorm_2x16 = true,
    .lower_unpack_unorm_4x8 = true,
-   .lower_usub_borrow = true,
    .max_unroll_iterations = 32,
    .support_16bit_alu = true,
    .vectorize_tess_levels = true,
@@ -93,7 +91,7 @@ brw_compiler_create(void *mem_ctx, const struct intel_device_info *devinfo)
    brw_init_isa_info(&compiler->isa, devinfo);
 
    brw_alloc_reg_sets(compiler, 0);
-   if (intel_threads_per_eu_min != -1)
+   if (intel_threads_per_eu_min != -1 || intel_threads_per_eu_set != -1)
       brw_alloc_reg_sets(compiler, 1);
 
    compiler->precise_trig = debug_get_bool_option("INTEL_PRECISE_TRIG", false);
@@ -211,7 +209,7 @@ brw_compiler_create(void *mem_ctx, const struct intel_device_info *devinfo)
 
    if (devinfo->ver < 12)
       nir_options->divergence_analysis_options |=
-         nir_divergence_single_prim_per_subgroup;
+         nir_divergence_single_prim_per_fs_subgroup;
 
    nir_options->has_tanh = devinfo->ver >= 35;
 
@@ -224,6 +222,16 @@ brw_compiler_create(void *mem_ctx, const struct intel_device_info *devinfo)
 
       stage_options->force_indirect_unrolling |= brw_nir_no_indirect_mask(i);
    }
+
+   compiler->nir_options_fs_single_prim =
+      compiler->nir_options[MESA_SHADER_FRAGMENT];
+   compiler->nir_options_fs_single_prim.divergence_analysis_options |=
+      nir_divergence_single_prim_per_fs_subgroup;
+
+   compiler->nir_options_cs_uniform_local_id_z =
+      compiler->nir_options[MESA_SHADER_COMPUTE];
+   compiler->nir_options_cs_uniform_local_id_z.divergence_analysis_options |=
+      nir_divergence_uniform_local_invocation_id_z;
 
    /* Build a list of storage format compatible in component bit size &
     * isl_base_type. We can apply the same lowering to those.
@@ -323,30 +331,6 @@ brw_device_blake3(char *hex,
 }
 
 unsigned
-brw_prog_data_size(mesa_shader_stage stage)
-{
-   static const size_t stage_sizes[] = {
-      [MESA_SHADER_VERTEX]       = sizeof(struct brw_vs_prog_data),
-      [MESA_SHADER_TESS_CTRL]    = sizeof(struct brw_tcs_prog_data),
-      [MESA_SHADER_TESS_EVAL]    = sizeof(struct brw_tes_prog_data),
-      [MESA_SHADER_GEOMETRY]     = sizeof(struct brw_gs_prog_data),
-      [MESA_SHADER_FRAGMENT]     = sizeof(struct brw_fs_prog_data),
-      [MESA_SHADER_COMPUTE]      = sizeof(struct brw_cs_prog_data),
-      [MESA_SHADER_TASK]         = sizeof(struct brw_task_prog_data),
-      [MESA_SHADER_MESH]         = sizeof(struct brw_mesh_prog_data),
-      [MESA_SHADER_RAYGEN]       = sizeof(struct brw_bs_prog_data),
-      [MESA_SHADER_ANY_HIT]      = sizeof(struct brw_bs_prog_data),
-      [MESA_SHADER_CLOSEST_HIT]  = sizeof(struct brw_bs_prog_data),
-      [MESA_SHADER_MISS]         = sizeof(struct brw_bs_prog_data),
-      [MESA_SHADER_INTERSECTION] = sizeof(struct brw_bs_prog_data),
-      [MESA_SHADER_CALLABLE]     = sizeof(struct brw_bs_prog_data),
-      [MESA_SHADER_KERNEL]       = sizeof(struct brw_cs_prog_data),
-   };
-   assert((int)stage >= 0 && stage < ARRAY_SIZE(stage_sizes));
-   return stage_sizes[stage];
-}
-
-unsigned
 brw_prog_key_size(mesa_shader_stage stage)
 {
    static const size_t stage_sizes[] = {
@@ -373,17 +357,17 @@ brw_prog_key_size(mesa_shader_stage stage)
 void
 brw_write_shader_relocs(const struct brw_isa_info *isa,
                         void *program,
-                        const struct brw_stage_prog_data *prog_data,
+                        const intel_shader_bin *bin,
                         struct intel_shader_reloc_value *values,
                         unsigned num_values)
 {
-   for (unsigned i = 0; i < prog_data->num_relocs; i++) {
-      assert(prog_data->relocs[i].offset % 8 == 0);
-      void *dst = program + prog_data->relocs[i].offset;
+   for (unsigned i = 0; i < bin->num_relocs; i++) {
+      assert(bin->relocs[i].offset % 8 == 0);
+      void *dst = program + bin->relocs[i].offset;
       for (unsigned j = 0; j < num_values; j++) {
-         if (prog_data->relocs[i].id == values[j].id) {
-            uint32_t value = values[j].value + prog_data->relocs[i].delta;
-            switch (prog_data->relocs[i].type) {
+         if (bin->relocs[i].id == values[j].id) {
+            uint32_t value = values[j].value + bin->relocs[i].delta;
+            switch (bin->relocs[i].type) {
             case INTEL_SHADER_RELOC_TYPE_U32:
                *(uint32_t *)dst = value;
                break;

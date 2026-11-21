@@ -175,7 +175,7 @@ tu_bo_sync_cache(struct tu_device *dev,
                  VkDeviceSize size,
                  enum tu_mem_sync_op op)
 {
-   char *start = (char *) bo->map + offset;
+   char *start = static_cast<char *>(bo->map) + offset;
 
    size = size == VK_WHOLE_SIZE ? (bo->size - offset) : size;
    if (op == TU_MEM_SYNC_CACHE_TO_GPU) {
@@ -250,6 +250,19 @@ tu_device_get_gpu_timestamp(struct tu_device *dev,
                             uint64_t *ts)
 {
    return dev->instance->knl->device_get_gpu_timestamp(dev, ts);
+}
+
+VkResult
+tu_device_get_calibrated_timestamps(struct tu_device *dev,
+                                    uint32_t count,
+                                    const VkCalibratedTimestampInfoKHR *infos,
+                                    uint64_t *ts,
+                                    uint64_t *max_deviation)
+{
+   if (!dev->instance->knl->device_get_calibrated_timestamps)
+      return VK_ERROR_FEATURE_NOT_PRESENT;
+
+   return dev->instance->knl->device_get_calibrated_timestamps(dev, count, infos, ts, max_deviation);
 }
 
 int

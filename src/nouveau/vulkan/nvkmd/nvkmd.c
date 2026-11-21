@@ -143,7 +143,7 @@ nvkmd_dev_alloc_mapped_mem(struct nvkmd_dev *dev,
    assert(!(map_flags & NVKMD_MEM_MAP_FIXED));
    result = nvkmd_mem_map(mem, log_obj, map_flags, NULL, NULL);
    if (result != VK_SUCCESS) {
-      mem->ops->free(mem);
+      nvkmd_mem_unref(mem);
       return result;
    }
 
@@ -155,9 +155,11 @@ nvkmd_dev_alloc_mapped_mem(struct nvkmd_dev *dev,
 VkResult MUST_CHECK
 nvkmd_dev_import_dma_buf(struct nvkmd_dev *dev,
                          struct vk_object_base *log_obj,
-                         int fd, struct nvkmd_mem **mem_out)
+                         int fd, uint64_t va_align_B,
+                         struct nvkmd_mem **mem_out)
 {
-   VkResult result = dev->ops->import_dma_buf(dev, log_obj, fd, mem_out);
+   VkResult result =
+      dev->ops->import_dma_buf(dev, log_obj, fd, va_align_B, mem_out);
    if (result == VK_SUCCESS)
       nvkmd_dev_add_mem(dev, *mem_out);
 
@@ -335,7 +337,6 @@ nvkmd_ctx_bind(struct nvkmd_ctx *ctx,
       assert(binds[i].va_offset_B <= binds[i].va->size_B);
       assert(binds[i].va_offset_B + binds[i].range_B <= binds[i].va->size_B);
       if (binds[i].op == NVKMD_BIND_OP_BIND) {
-         assert(binds[i].mem_offset_B % binds[i].mem->bind_align_B == 0);
          assert(binds[i].mem_offset_B <= binds[i].mem->size_B);
          assert(binds[i].mem_offset_B + binds[i].range_B <=
                 binds[i].mem->size_B);
@@ -405,7 +406,6 @@ nvkmd_mem_map(struct nvkmd_mem *mem, struct vk_object_base *log_obj,
       simple_mtx_lock(&mem->map_mutex);
 
       assert((mem->map_cnt == 0) == (mem->map == NULL));
-      mem->map_cnt++;
 
       VkResult result = VK_SUCCESS;
       if (mem->map == NULL) {
@@ -419,6 +419,9 @@ nvkmd_mem_map(struct nvkmd_mem *mem, struct vk_object_base *log_obj,
       } else {
          map = mem->map;
       }
+
+      if (result == VK_SUCCESS)
+         mem->map_cnt++;
 
       simple_mtx_unlock(&mem->map_mutex);
 

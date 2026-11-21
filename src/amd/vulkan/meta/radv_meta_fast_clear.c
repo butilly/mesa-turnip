@@ -506,7 +506,7 @@ radv_decompress_dcc_compute(struct radv_cmd_buffer *cmd_buffer, struct radv_imag
                                  .flags = VK_IMAGE_VIEW_CREATE_DRIVER_INTERNAL_BIT_MESA,
                                  .image = radv_image_to_handle(image),
                                  .viewType = VK_IMAGE_VIEW_TYPE_2D,
-                                 .format = image->vk.format,
+                                 .format = vk_format_no_srgb(image->vk.format),
                                  .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                                                       .baseMipLevel = subresourceRange->baseMipLevel + l,
                                                       .levelCount = 1,
@@ -527,7 +527,7 @@ radv_decompress_dcc_compute(struct radv_cmd_buffer *cmd_buffer, struct radv_imag
                                  .flags = VK_IMAGE_VIEW_CREATE_DRIVER_INTERNAL_BIT_MESA,
                                  .image = radv_image_to_handle(image),
                                  .viewType = VK_IMAGE_VIEW_TYPE_2D,
-                                 .format = image->vk.format,
+                                 .format = vk_format_no_srgb(image->vk.format),
                                  .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                                                       .baseMipLevel = subresourceRange->baseMipLevel + l,
                                                       .levelCount = 1,
@@ -573,30 +573,58 @@ void
 radv_decompress_dcc(struct radv_cmd_buffer *cmd_buffer, struct radv_image *image,
                     const VkImageSubresourceRange *subresourceRange)
 {
+   const bool use_gang = cmd_buffer->qf == RADV_QUEUE_TRANSFER;
    struct radv_barrier_data barrier = {0};
 
-   if (cmd_buffer->qf != RADV_QUEUE_GENERAL && cmd_buffer->qf != RADV_QUEUE_COMPUTE &&
-       !radv_cmd_buffer_is_transfer_gang(cmd_buffer))
+   if (cmd_buffer->qf != RADV_QUEUE_GENERAL && cmd_buffer->qf != RADV_QUEUE_COMPUTE && !use_gang)
       return;
+
+   enum ac_barrier_flags *flush_bits = use_gang ? &cmd_buffer->gang.flush_bits : &cmd_buffer->state.flush_bits;
 
    barrier.layout_transitions.dcc_decompress = 1;
    radv_describe_layout_transition(cmd_buffer, &barrier);
 
-   if (cmd_buffer->qf == RADV_QUEUE_GENERAL) {
+   /* We can only do draw-based decompression outside render passes. */
+   if (cmd_buffer->qf == RADV_QUEUE_GENERAL && !cmd_buffer->state.render.active) {
       radv_process_color_image(cmd_buffer, image, subresourceRange, DCC_DECOMPRESS);
 
-      cmd_buffer->state.flush_bits |= AC_BARRIER_SYNC_AND_INV_CB | AC_BARRIER_SYNC_AND_INV_CB_META;
+      *flush_bits |= AC_BARRIER_SYNC_AND_INV_CB | AC_BARRIER_SYNC_AND_INV_CB_META;
    } else {
-      cmd_buffer->state.flush_bits |= radv_dst_access_flush(cmd_buffer, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                                            VK_ACCESS_2_SHADER_READ_BIT, 0, image, subresourceRange);
+      /* Fallback to compute because DCC decopmression on SDMA isn't possible. */
+      if (use_gang) {
+         if (!radv_gang_init(cmd_buffer))
+            return;
+
+         /* Wait for all pending work on SDMA. */
+         cmd_buffer->gang.sem.leader_value++;
+         if (radv_flush_gang_leader_semaphore(cmd_buffer)) {
+            radv_wait_gang_leader(cmd_buffer);
+            cmd_buffer->gang.flush_bits |= AC_BARRIER_INV_L2;
+         }
+
+         /* Emit pending cache fluses on ACE. */
+         radv_gang_cache_flush(cmd_buffer);
+      }
+
+      *flush_bits |= radv_dst_access_flush(cmd_buffer, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                           VK_ACCESS_2_SHADER_READ_BIT, 0, image, subresourceRange);
 
       radv_decompress_dcc_compute(cmd_buffer, image, subresourceRange);
 
-      cmd_buffer->state.flush_bits |= AC_BARRIER_SYNC_CS | AC_BARRIER_INV_VMEM |
-                                      radv_src_access_flush(cmd_buffer, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                                            VK_ACCESS_2_SHADER_WRITE_BIT, 0, image, subresourceRange);
+      *flush_bits |= AC_BARRIER_SYNC_CS | AC_BARRIER_INV_VMEM |
+                     radv_src_access_flush(cmd_buffer, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                           VK_ACCESS_2_SHADER_WRITE_BIT, 0, image, subresourceRange);
+
+      if (use_gang) {
+         /* Wait on SDMA for the ACE decompression to finish before clearing DCC metadata.
+          * The follower semaphore is written at bottom-of-pipe with a L2 writeback.
+          */
+         cmd_buffer->gang.sem.follower_value++;
+         if (radv_flush_gang_follower_semaphore(cmd_buffer))
+            radv_wait_gang_follower(cmd_buffer);
+      }
 
       /* Initialize the DCC metadata as "fully expanded". */
-      cmd_buffer->state.flush_bits |= radv_clear_dcc(cmd_buffer, image, subresourceRange, DCC_UNCOMPRESSED);
+      *flush_bits |= radv_clear_dcc(cmd_buffer, image, subresourceRange, DCC_UNCOMPRESSED);
    }
 }

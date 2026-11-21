@@ -17,7 +17,7 @@
 #include "intel/blorp/blorp.h"
 #include "intel/dev/intel_debug.h"
 #include "intel/common/intel_l3_config.h"
-#include "intel/compiler/intel_shader_enums.h"
+#include "intel/compiler/intel_shader.h"
 #include "intel/ds/intel_driver_ds.h"
 #include "iris_batch.h"
 #include "iris_binder.h"
@@ -358,15 +358,15 @@ struct iris_cs_data {
 };
 
 static inline uint32_t
-iris_cs_data_prog_offset(const struct iris_cs_data *prog_data,
+iris_cs_data_prog_offset(const struct iris_cs_data *cs_data,
                          unsigned dispatch_width)
 {
    assert(dispatch_width == 8 ||
           dispatch_width == 16 ||
           dispatch_width == 32);
    const unsigned index = dispatch_width / 16;
-   assert(prog_data->prog_mask & (1 << index));
-   return prog_data->prog_offset[index];
+   assert(cs_data->prog_mask & (1 << index));
+   return cs_data->prog_offset[index];
 }
 
 struct iris_vue_data {
@@ -474,7 +474,7 @@ enum pipe_control_flags
    PIPE_CONTROL_L3_READ_ONLY_CACHE_INVALIDATE   = (1 << 28),
    PIPE_CONTROL_UNTYPED_DATAPORT_CACHE_FLUSH    = (1 << 29),
    PIPE_CONTROL_CCS_CACHE_FLUSH                 = (1 << 30),
-   PIPE_CONTROL_L3_FABRIC_FLUSH                 = (1 << 31),
+   PIPE_CONTROL_L3_FABRIC_FLUSH                 = (1u << 31),
 };
 
 #define PIPE_CONTROL_CACHE_FLUSH_BITS \
@@ -677,8 +677,10 @@ struct iris_compiled_shader {
    /** Pointer to the assembly in the BO's map. */
    void *map;
 
+   /** Compiler-derived shader metadata. */
+   struct intel_shader_info info;
+
    /** The program data (owned by the program cache hash table) */
-   struct brw_stage_prog_data *brw_prog_data;
    struct elk_stage_prog_data *elk_prog_data;
 
    /** A list of system values to be uploaded as uniforms. */
@@ -704,7 +706,7 @@ struct iris_compiled_shader {
    struct iris_ubo_range ubo_ranges[4];
 
    /**
-    * Data derived from BRW prog_data.
+    * Data derived from the compiled shader metadata.
     */
    uint16_t push_sizes[4];
 
@@ -735,8 +737,8 @@ struct iris_compiled_shader {
    };
 
    /**
-    * Shader packets and other data derived from prog_data.  These must be
-    * completely determined from prog_data.
+    * Shader packets and other data derived from the compiled shader
+    * metadata.  These must be completely determined from that metadata.
     */
    uint8_t derived_data[0];
 };
@@ -1395,9 +1397,9 @@ uint32_t iris_group_index_to_bti(const struct iris_binding_table *bt,
 uint32_t iris_bti_to_group_index(const struct iris_binding_table *bt,
                                  enum iris_surface_group group,
                                  uint32_t bti);
-void iris_apply_brw_prog_data(struct iris_compiled_shader *shader,
-                              struct brw_stage_prog_data *prog_data,
-                              struct iris_ubo_range *ubo_ranges);
+void iris_apply_shader_bin(struct iris_compiled_shader *shader,
+                           const intel_shader_bin *bin,
+                           struct iris_ubo_range *ubo_ranges);
 void iris_apply_elk_prog_data(struct iris_compiled_shader *shader,
                               struct elk_stage_prog_data *prog_data);
 struct intel_cs_dispatch_info
@@ -1419,6 +1421,7 @@ iris_get_compiler_options(struct pipe_screen *pscreen,
 void iris_disk_cache_store(struct disk_cache *cache,
                            const struct iris_uncompiled_shader *ish,
                            const struct iris_compiled_shader *shader,
+                           const intel_shader_bin *bin,
                            const void *prog_key,
                            uint32_t prog_key_size);
 bool
@@ -1460,7 +1463,8 @@ void iris_upload_shader(struct iris_screen *screen,
                         enum iris_program_cache_id,
                         uint32_t key_size,
                         const void *key,
-                        const void *assembly);
+                        const void *assembly,
+                        const intel_shader_bin *bin);
 void iris_delete_shader_variant(struct iris_compiled_shader *shader);
 
 void iris_destroy_shader_state(struct pipe_context *ctx, void *state);
@@ -1499,14 +1503,17 @@ bool iris_blorp_lookup_shader(struct blorp_batch *blorp_batch,
                               const void *key,
                               uint32_t key_size,
                               uint64_t *kernel_out,
-                              void *prog_data_out);
+                              void *prog_data_out,
+                              const struct intel_shader_info **info_out);
 bool iris_blorp_upload_shader(struct blorp_batch *blorp_batch, uint32_t stage,
                               const void *key, uint32_t key_size,
                               const void *kernel, uint32_t kernel_size,
                               const void *prog_data,
                               uint32_t prog_data_size,
+                              const intel_shader_bin *src_bin,
                               uint64_t *kernel_out,
-                              void *prog_data_out);
+                              void *prog_data_out,
+                              const struct intel_shader_info **info_out);
 
 void iris_ensure_indirect_generation_shader(struct iris_batch *batch);
 

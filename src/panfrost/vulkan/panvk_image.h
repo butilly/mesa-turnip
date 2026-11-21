@@ -48,6 +48,9 @@ struct panvk_image {
    /* If an image can track validity of CRC even when external access is
     * possible. */
    bool crc_safe_external;
+
+   /* Whether this image is part of a WSI swapchain. */
+   bool wsi_swapchain_image;
 };
 
 VK_DEFINE_NONDISP_HANDLE_CASTS(panvk_image, vk.base, VkImage,
@@ -92,6 +95,8 @@ panvk_image_use_yuv_tex(unsigned arch, VkFormat format)
       return false;
 
    switch (format) {
+   case VK_FORMAT_G8B8G8R8_422_UNORM:
+   case VK_FORMAT_B8G8R8G8_422_UNORM:
    case VK_FORMAT_G8_B8R8_2PLANE_420_UNORM:
    case VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM:
    case VK_FORMAT_G8_B8R8_2PLANE_422_UNORM:

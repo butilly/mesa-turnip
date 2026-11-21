@@ -13,8 +13,6 @@
 #include "radv_device_memory.h"
 #include "radv_entrypoints.h"
 #include "radv_physical_device.h"
-#include "radv_pipeline.h"
-#include "radv_pipeline_compute.h"
 #include "radv_queue.h"
 #include "radv_shader.h"
 
@@ -75,6 +73,10 @@ radv_wsi_get_prime_blit_queue(VkDevice _device)
 
       device->private_sdma_queue =
          vk_zalloc(&device->vk.alloc, sizeof(struct radv_queue), 8, VK_SYSTEM_ALLOCATION_SCOPE_DEVICE);
+      if (!device->private_sdma_queue) {
+         simple_mtx_unlock(&device->blit_queue_mtx);
+         return NULL;
+      }
 
       VkResult result = radv_queue_init(device, device->private_sdma_queue, 0, &queue_create, NULL);
       if (result == VK_SUCCESS) {

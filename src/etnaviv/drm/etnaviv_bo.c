@@ -26,6 +26,7 @@
 
 #include "util/os_mman.h"
 #include "util/hash_table.h"
+#include "util/perf/cpu_trace.h"
 
 #include "etnaviv_priv.h"
 #include "etnaviv_drmif.h"
@@ -158,14 +159,15 @@ static struct etna_bo *bo_from_handle(struct etna_device *dev,
 
 	simple_mtx_assert_locked(&etna_device_lock);
 
-	if (!bo) {
-		struct drm_gem_close req = {
-			.handle = handle,
-		};
+	if (!bo)
+		goto fail;
 
-		drmIoctl(dev->fd, DRM_IOCTL_GEM_CLOSE, &req);
-
-		return NULL;
+	if (dev->use_softpin) {
+		bo->va = util_vma_heap_alloc(&dev->address_space, size, 4096);
+		if (!bo->va) {
+			ERROR_MSG("no GPU address space left for %u bytes", size);
+			goto fail;
+		}
 	}
 
 	bo->dev = etna_device_ref(dev);
@@ -176,16 +178,26 @@ static struct etna_bo *bo_from_handle(struct etna_device *dev,
 	/* add ourselves to the handle table: */
 	_mesa_hash_table_insert(dev->handle_table, &bo->handle, bo);
 
-	if (dev->use_softpin)
-		bo->va = util_vma_heap_alloc(&dev->address_space, bo->size, 4096);
-
 	return bo;
+
+fail:
+	free(bo);
+
+	struct drm_gem_close req = {
+		.handle = handle,
+	};
+
+	drmIoctl(dev->fd, DRM_IOCTL_GEM_CLOSE, &req);
+
+	return NULL;
 }
 
 /* allocate a new (un-tiled) buffer object */
 struct etna_bo *etna_bo_new(struct etna_device *dev, uint32_t size,
 		uint32_t flags)
 {
+	MESA_TRACE_FUNC();
+	MESA_TRACE_SET_COUNTER("etna_bo_new size", size);
 	struct etna_bo *bo;
 	int ret;
 	struct drm_etnaviv_gem_new req = {
@@ -204,8 +216,12 @@ struct etna_bo *etna_bo_new(struct etna_device *dev, uint32_t size,
 
 	simple_mtx_lock(&etna_device_lock);
 	bo = bo_from_handle(dev, size, req.handle, flags);
-	bo->reuse = 1;
 	simple_mtx_unlock(&etna_device_lock);
+
+	if (!bo)
+		return NULL;
+
+	bo->reuse = 1;
 
 	DEBUG_BO("New bo:", bo);
 	VG_BO_ALLOC(bo);
@@ -289,9 +305,10 @@ struct etna_bo *etna_bo_from_dmabuf(struct etna_device *dev, int fd)
 	lseek(fd, 0, SEEK_CUR);
 
 	bo = bo_from_handle(dev, size, handle, 0);
-
-	DEBUG_BO("New from dmabuf:", bo);
-	VG_BO_ALLOC(bo);
+	if (bo) {
+		DEBUG_BO("New from dmabuf:", bo);
+		VG_BO_ALLOC(bo);
+	}
 
 out_unlock:
 	simple_mtx_unlock(&etna_device_lock);
@@ -414,12 +431,13 @@ void *etna_bo_map(struct etna_bo *bo)
 
 int etna_bo_cpu_prep(struct etna_bo *bo, uint32_t op)
 {
+	MESA_TRACE_FUNC();
 	struct drm_etnaviv_gem_cpu_prep req = {
 		.handle = bo->handle,
 		.op = op,
 	};
 
-	get_abs_timeout(&req.timeout, 5000000000);
+	get_abs_timeout(&req.timeout, OS_TIMEOUT_INFINITE);
 
 	return drmCommandWrite(bo->dev->fd, DRM_ETNAVIV_GEM_CPU_PREP,
 			&req, sizeof(req));

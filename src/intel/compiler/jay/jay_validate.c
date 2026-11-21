@@ -25,6 +25,7 @@ struct validate_state {
    jay_function *func;
    BITSET_WORD *defs;
    enum jay_file *files;
+   enum jay_size *sizes;
    enum validate_block_state block_state;
 };
 
@@ -108,7 +109,7 @@ get_src_words(struct validate_state *validate, jay_inst *I, unsigned s)
    if (I->op == JAY_OPCODE_DPAS) {
       const unsigned dpas_exec_size = 8 * reg_unit(shader->devinfo);
       const unsigned grf_size = shader->devinfo->grf_size;
-      const unsigned acc_size_B = jay_type_size_bits(jay_dpas_acc_type(I)) / 8;
+      const unsigned acc_size_B = jay_type_size_B(jay_dpas_acc_type(I));
 
       unsigned bytes;
       switch (s) {
@@ -157,12 +158,15 @@ validate_ssa(struct validate_state *validate, jay_inst *I)
       CHECK(BITSET_TEST(validate->defs, ssa_index) && "defs dominate uses");
       CHECK(validate->files[ssa_index] == I->src[src_index].file &&
             "consistent files");
+      CHECK(validate->sizes[ssa_index] == I->src[src_index].size &&
+            "consistent sizes");
    }
 
    jay_foreach_dst_index(I, d, ssa_index) {
       CHECK(!BITSET_TEST(validate->defs, ssa_index) && "single definition");
       BITSET_SET(validate->defs, ssa_index);
       validate->files[ssa_index] = d.file;
+      validate->sizes[ssa_index] = d.size;
    }
 }
 
@@ -194,8 +198,6 @@ validate_def(struct validate_state *validate,
       CHECK(!def.num_values_m1);
       CHECK(!def.negate);
       CHECK(!def.abs);
-   } else if (def.file == ACCUM || def.hi) {
-      CHECK(validate->post_ra);
    } else {
       CHECK(jay_base_index(def) != JAY_SENTINEL || validate->post_ra);
    }
@@ -243,6 +245,12 @@ validate_inst(struct validate_state *validate, jay_inst *I)
       validate_ssa(validate, I);
    }
 
+   /* Check that the destination register is large enough to hold the
+    * destination type. This guards against silly things like "half = mov.u32"
+    */
+   CHECK(jay_is_null(I->dst) ||
+         (jay_type_size_bits(I->type) / 16) <= jay_num_regs(I->dst));
+
    CHECK(I->num_srcs <= JAY_MAX_SRCS);
 
    validate_flagness(validate, I->dst, I->type, "destination");
@@ -270,8 +278,7 @@ validate_inst(struct validate_state *validate, jay_inst *I)
 
    /* We should not be clobbering multiple flags in SIMD16 with a mov.u32 */
    CHECK(!(I->dst.file == FLAG &&
-           jay_type_size_bits(I->type) >
-              jay_type_size_bits(jay_flag_type(validate->func))));
+           jay_type_size_bits(I->type) > jay_flag_bits(validate->func)));
 
    unsigned num_srcs = I->num_srcs;
 
@@ -335,16 +342,13 @@ validate_inst(struct validate_state *validate, jay_inst *I)
    } else if (I->op == JAY_OPCODE_SYNC) {
       CHECK(validate->post_ra && "SYNC does not exist while scheduling");
    } else if (I->op == JAY_OPCODE_ZIP) {
-      unsigned ugpr_per_grf = jay_ugpr_per_grf(validate->func->shader);
       CHECK(I->dst.file == GPR);
 
       jay_foreach_src(I, s) {
-         if (s < jay_grf_per_gpr(validate->func->shader)) {
-            CHECK(I->src[s].file == UGPR &&
-                  jay_num_values(I->src[s]) == ugpr_per_grf);
-         } else {
-            CHECK(jay_is_null(I->src[s]));
-         }
+         bool is_null = s >= jay_grf_per_gpr(validate->func->shader);
+
+         CHECK(jay_is_null(I->src[s]) == is_null);
+         CHECK(I->src[s].file == UGPR || is_null);
       }
    } else if (I->op == JAY_OPCODE_SLICE_REPACK) {
       const bool unpack = jay_slice_repack_unpack(I);
@@ -364,6 +368,8 @@ jay_validate_function(struct validate_state *validate)
    validate->defs = BITSET_CALLOC(validate->func->ssa_alloc);
    validate->files =
       calloc(validate->func->ssa_alloc, sizeof(validate->files[0]));
+   validate->sizes =
+      calloc(validate->func->ssa_alloc, sizeof(validate->sizes[0]));
 
    BITSET_WORD *blocks = BITSET_CALLOC(validate->func->num_blocks);
    unsigned min_block = 0;
@@ -448,6 +454,7 @@ jay_validate_function(struct validate_state *validate)
 
    free(validate->defs);
    free(validate->files);
+   free(validate->sizes);
    free(blocks);
 }
 

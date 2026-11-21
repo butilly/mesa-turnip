@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: MIT
 
 use crate::{
-    api::{GetDebugFlags, DEBUG},
+    api::{DEBUG, GetDebugFlags},
     ir::*,
 };
-use compiler::bitset::BitSet;
+use mesa_util::bitset::BitSet;
 
 struct DeadCodePass {
     any_dead: bool,

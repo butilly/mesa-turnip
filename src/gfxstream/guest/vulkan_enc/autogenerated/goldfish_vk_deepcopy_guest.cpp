@@ -59,36 +59,26 @@ void deepcopy_extension_struct(Allocator* alloc, VkStructureType rootType,
 #ifdef VK_BASE_VERSION_1_0
 void deepcopy_VkExtent2D(Allocator* alloc, VkStructureType rootType, const VkExtent2D* from,
                          VkExtent2D* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkExtent3D(Allocator* alloc, VkStructureType rootType, const VkExtent3D* from,
                          VkExtent3D* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkOffset2D(Allocator* alloc, VkStructureType rootType, const VkOffset2D* from,
                          VkOffset2D* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkOffset3D(Allocator* alloc, VkStructureType rootType, const VkOffset3D* from,
                          VkOffset3D* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkRect2D(Allocator* alloc, VkStructureType rootType, const VkRect2D* from,
                        VkRect2D* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     deepcopy_VkOffset2D(alloc, rootType, &from->offset, (VkOffset2D*)(&to->offset));
     deepcopy_VkExtent2D(alloc, rootType, &from->extent, (VkExtent2D*)(&to->extent));
@@ -96,8 +86,6 @@ void deepcopy_VkRect2D(Allocator* alloc, VkStructureType rootType, const VkRect2
 
 void deepcopy_VkBaseInStructure(Allocator* alloc, VkStructureType rootType,
                                 const VkBaseInStructure* from, VkBaseInStructure* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -117,8 +105,6 @@ void deepcopy_VkBaseInStructure(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkBaseOutStructure(Allocator* alloc, VkStructureType rootType,
                                  const VkBaseOutStructure* from, VkBaseOutStructure* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -138,8 +124,6 @@ void deepcopy_VkBaseOutStructure(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkAllocationCallbacks(Allocator* alloc, VkStructureType rootType,
                                     const VkAllocationCallbacks* from, VkAllocationCallbacks* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     to->pUserData = nullptr;
     if (from->pUserData) {
@@ -149,8 +133,6 @@ void deepcopy_VkAllocationCallbacks(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkApplicationInfo(Allocator* alloc, VkStructureType rootType,
                                 const VkApplicationInfo* from, VkApplicationInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -178,24 +160,18 @@ void deepcopy_VkApplicationInfo(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkFormatProperties(Allocator* alloc, VkStructureType rootType,
                                  const VkFormatProperties* from, VkFormatProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkImageFormatProperties(Allocator* alloc, VkStructureType rootType,
                                       const VkImageFormatProperties* from,
                                       VkImageFormatProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     deepcopy_VkExtent3D(alloc, rootType, &from->maxExtent, (VkExtent3D*)(&to->maxExtent));
 }
 
 void deepcopy_VkInstanceCreateInfo(Allocator* alloc, VkStructureType rootType,
                                    const VkInstanceCreateInfo* from, VkInstanceCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -231,31 +207,23 @@ void deepcopy_VkInstanceCreateInfo(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkMemoryHeap(Allocator* alloc, VkStructureType rootType, const VkMemoryHeap* from,
                            VkMemoryHeap* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkMemoryType(Allocator* alloc, VkStructureType rootType, const VkMemoryType* from,
                            VkMemoryType* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkPhysicalDeviceFeatures(Allocator* alloc, VkStructureType rootType,
                                        const VkPhysicalDeviceFeatures* from,
                                        VkPhysicalDeviceFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkPhysicalDeviceLimits(Allocator* alloc, VkStructureType rootType,
                                      const VkPhysicalDeviceLimits* from,
                                      VkPhysicalDeviceLimits* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     memcpy(to->maxComputeWorkGroupCount, from->maxComputeWorkGroupCount, 3 * sizeof(uint32_t));
     memcpy(to->maxComputeWorkGroupSize, from->maxComputeWorkGroupSize, 3 * sizeof(uint32_t));
@@ -268,8 +236,6 @@ void deepcopy_VkPhysicalDeviceLimits(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkPhysicalDeviceMemoryProperties(Allocator* alloc, VkStructureType rootType,
                                                const VkPhysicalDeviceMemoryProperties* from,
                                                VkPhysicalDeviceMemoryProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     for (uint32_t i = 0; i < (uint32_t)VK_MAX_MEMORY_TYPES; ++i) {
         deepcopy_VkMemoryType(alloc, rootType, from->memoryTypes + i,
@@ -284,16 +250,12 @@ void deepcopy_VkPhysicalDeviceMemoryProperties(Allocator* alloc, VkStructureType
 void deepcopy_VkPhysicalDeviceSparseProperties(Allocator* alloc, VkStructureType rootType,
                                                const VkPhysicalDeviceSparseProperties* from,
                                                VkPhysicalDeviceSparseProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkPhysicalDeviceProperties(Allocator* alloc, VkStructureType rootType,
                                          const VkPhysicalDeviceProperties* from,
                                          VkPhysicalDeviceProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     memcpy(to->deviceName, from->deviceName, VK_MAX_PHYSICAL_DEVICE_NAME_SIZE * sizeof(char));
     memcpy(to->pipelineCacheUUID, from->pipelineCacheUUID, VK_UUID_SIZE * sizeof(uint8_t));
@@ -307,8 +269,6 @@ void deepcopy_VkPhysicalDeviceProperties(Allocator* alloc, VkStructureType rootT
 void deepcopy_VkQueueFamilyProperties(Allocator* alloc, VkStructureType rootType,
                                       const VkQueueFamilyProperties* from,
                                       VkQueueFamilyProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     deepcopy_VkExtent3D(alloc, rootType, &from->minImageTransferGranularity,
                         (VkExtent3D*)(&to->minImageTransferGranularity));
@@ -317,8 +277,6 @@ void deepcopy_VkQueueFamilyProperties(Allocator* alloc, VkStructureType rootType
 void deepcopy_VkDeviceQueueCreateInfo(Allocator* alloc, VkStructureType rootType,
                                       const VkDeviceQueueCreateInfo* from,
                                       VkDeviceQueueCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -343,8 +301,6 @@ void deepcopy_VkDeviceQueueCreateInfo(Allocator* alloc, VkStructureType rootType
 
 void deepcopy_VkDeviceCreateInfo(Allocator* alloc, VkStructureType rootType,
                                  const VkDeviceCreateInfo* from, VkDeviceCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -360,17 +316,14 @@ void deepcopy_VkDeviceCreateInfo(Allocator* alloc, VkStructureType rootType,
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pQueueCreateInfos = nullptr;
-        if (from->pQueueCreateInfos) {
-            to->pQueueCreateInfos = (VkDeviceQueueCreateInfo*)alloc->alloc(
-                from->queueCreateInfoCount * sizeof(const VkDeviceQueueCreateInfo));
-            to->queueCreateInfoCount = from->queueCreateInfoCount;
-            for (uint32_t i = 0; i < (uint32_t)from->queueCreateInfoCount; ++i) {
-                deepcopy_VkDeviceQueueCreateInfo(
-                    alloc, rootType, from->pQueueCreateInfos + i,
-                    (VkDeviceQueueCreateInfo*)(to->pQueueCreateInfos + i));
-            }
+    to->pQueueCreateInfos = nullptr;
+    if (from->pQueueCreateInfos) {
+        to->pQueueCreateInfos = (VkDeviceQueueCreateInfo*)alloc->alloc(
+            from->queueCreateInfoCount * sizeof(const VkDeviceQueueCreateInfo));
+        to->queueCreateInfoCount = from->queueCreateInfoCount;
+        for (uint32_t i = 0; i < (uint32_t)from->queueCreateInfoCount; ++i) {
+            deepcopy_VkDeviceQueueCreateInfo(alloc, rootType, from->pQueueCreateInfos + i,
+                                             (VkDeviceQueueCreateInfo*)(to->pQueueCreateInfos + i));
         }
     }
     to->ppEnabledLayerNames = nullptr;
@@ -394,16 +347,12 @@ void deepcopy_VkDeviceCreateInfo(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkExtensionProperties(Allocator* alloc, VkStructureType rootType,
                                     const VkExtensionProperties* from, VkExtensionProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     memcpy(to->extensionName, from->extensionName, VK_MAX_EXTENSION_NAME_SIZE * sizeof(char));
 }
 
 void deepcopy_VkLayerProperties(Allocator* alloc, VkStructureType rootType,
                                 const VkLayerProperties* from, VkLayerProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     memcpy(to->layerName, from->layerName, VK_MAX_EXTENSION_NAME_SIZE * sizeof(char));
     memcpy(to->description, from->description, VK_MAX_DESCRIPTION_SIZE * sizeof(char));
@@ -411,8 +360,6 @@ void deepcopy_VkLayerProperties(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkSubmitInfo(Allocator* alloc, VkStructureType rootType, const VkSubmitInfo* from,
                            VkSubmitInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -452,8 +399,6 @@ void deepcopy_VkSubmitInfo(Allocator* alloc, VkStructureType rootType, const VkS
 
 void deepcopy_VkMappedMemoryRange(Allocator* alloc, VkStructureType rootType,
                                   const VkMappedMemoryRange* from, VkMappedMemoryRange* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -473,8 +418,6 @@ void deepcopy_VkMappedMemoryRange(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkMemoryAllocateInfo(Allocator* alloc, VkStructureType rootType,
                                    const VkMemoryAllocateInfo* from, VkMemoryAllocateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -494,23 +437,17 @@ void deepcopy_VkMemoryAllocateInfo(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkMemoryRequirements(Allocator* alloc, VkStructureType rootType,
                                    const VkMemoryRequirements* from, VkMemoryRequirements* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkImageSubresource(Allocator* alloc, VkStructureType rootType,
                                  const VkImageSubresource* from, VkImageSubresource* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkSparseImageFormatProperties(Allocator* alloc, VkStructureType rootType,
                                             const VkSparseImageFormatProperties* from,
                                             VkSparseImageFormatProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     deepcopy_VkExtent3D(alloc, rootType, &from->imageGranularity,
                         (VkExtent3D*)(&to->imageGranularity));
@@ -519,8 +456,6 @@ void deepcopy_VkSparseImageFormatProperties(Allocator* alloc, VkStructureType ro
 void deepcopy_VkSparseImageMemoryBind(Allocator* alloc, VkStructureType rootType,
                                       const VkSparseImageMemoryBind* from,
                                       VkSparseImageMemoryBind* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     deepcopy_VkImageSubresource(alloc, rootType, &from->subresource,
                                 (VkImageSubresource*)(&to->subresource));
@@ -531,19 +466,15 @@ void deepcopy_VkSparseImageMemoryBind(Allocator* alloc, VkStructureType rootType
 void deepcopy_VkSparseImageMemoryBindInfo(Allocator* alloc, VkStructureType rootType,
                                           const VkSparseImageMemoryBindInfo* from,
                                           VkSparseImageMemoryBindInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
-    if (from) {
-        to->pBinds = nullptr;
-        if (from->pBinds) {
-            to->pBinds = (VkSparseImageMemoryBind*)alloc->alloc(
-                from->bindCount * sizeof(const VkSparseImageMemoryBind));
-            to->bindCount = from->bindCount;
-            for (uint32_t i = 0; i < (uint32_t)from->bindCount; ++i) {
-                deepcopy_VkSparseImageMemoryBind(alloc, rootType, from->pBinds + i,
-                                                 (VkSparseImageMemoryBind*)(to->pBinds + i));
-            }
+    to->pBinds = nullptr;
+    if (from->pBinds) {
+        to->pBinds = (VkSparseImageMemoryBind*)alloc->alloc(from->bindCount *
+                                                            sizeof(const VkSparseImageMemoryBind));
+        to->bindCount = from->bindCount;
+        for (uint32_t i = 0; i < (uint32_t)from->bindCount; ++i) {
+            deepcopy_VkSparseImageMemoryBind(alloc, rootType, from->pBinds + i,
+                                             (VkSparseImageMemoryBind*)(to->pBinds + i));
         }
     }
 }
@@ -551,8 +482,6 @@ void deepcopy_VkSparseImageMemoryBindInfo(Allocator* alloc, VkStructureType root
 void deepcopy_VkSparseImageMemoryRequirements(Allocator* alloc, VkStructureType rootType,
                                               const VkSparseImageMemoryRequirements* from,
                                               VkSparseImageMemoryRequirements* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     deepcopy_VkSparseImageFormatProperties(alloc, rootType, &from->formatProperties,
                                            (VkSparseImageFormatProperties*)(&to->formatProperties));
@@ -560,27 +489,21 @@ void deepcopy_VkSparseImageMemoryRequirements(Allocator* alloc, VkStructureType 
 
 void deepcopy_VkSparseMemoryBind(Allocator* alloc, VkStructureType rootType,
                                  const VkSparseMemoryBind* from, VkSparseMemoryBind* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkSparseBufferMemoryBindInfo(Allocator* alloc, VkStructureType rootType,
                                            const VkSparseBufferMemoryBindInfo* from,
                                            VkSparseBufferMemoryBindInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
-    if (from) {
-        to->pBinds = nullptr;
-        if (from->pBinds) {
-            to->pBinds = (VkSparseMemoryBind*)alloc->alloc(from->bindCount *
-                                                           sizeof(const VkSparseMemoryBind));
-            to->bindCount = from->bindCount;
-            for (uint32_t i = 0; i < (uint32_t)from->bindCount; ++i) {
-                deepcopy_VkSparseMemoryBind(alloc, rootType, from->pBinds + i,
-                                            (VkSparseMemoryBind*)(to->pBinds + i));
-            }
+    to->pBinds = nullptr;
+    if (from->pBinds) {
+        to->pBinds =
+            (VkSparseMemoryBind*)alloc->alloc(from->bindCount * sizeof(const VkSparseMemoryBind));
+        to->bindCount = from->bindCount;
+        for (uint32_t i = 0; i < (uint32_t)from->bindCount; ++i) {
+            deepcopy_VkSparseMemoryBind(alloc, rootType, from->pBinds + i,
+                                        (VkSparseMemoryBind*)(to->pBinds + i));
         }
     }
 }
@@ -588,27 +511,21 @@ void deepcopy_VkSparseBufferMemoryBindInfo(Allocator* alloc, VkStructureType roo
 void deepcopy_VkSparseImageOpaqueMemoryBindInfo(Allocator* alloc, VkStructureType rootType,
                                                 const VkSparseImageOpaqueMemoryBindInfo* from,
                                                 VkSparseImageOpaqueMemoryBindInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
-    if (from) {
-        to->pBinds = nullptr;
-        if (from->pBinds) {
-            to->pBinds = (VkSparseMemoryBind*)alloc->alloc(from->bindCount *
-                                                           sizeof(const VkSparseMemoryBind));
-            to->bindCount = from->bindCount;
-            for (uint32_t i = 0; i < (uint32_t)from->bindCount; ++i) {
-                deepcopy_VkSparseMemoryBind(alloc, rootType, from->pBinds + i,
-                                            (VkSparseMemoryBind*)(to->pBinds + i));
-            }
+    to->pBinds = nullptr;
+    if (from->pBinds) {
+        to->pBinds =
+            (VkSparseMemoryBind*)alloc->alloc(from->bindCount * sizeof(const VkSparseMemoryBind));
+        to->bindCount = from->bindCount;
+        for (uint32_t i = 0; i < (uint32_t)from->bindCount; ++i) {
+            deepcopy_VkSparseMemoryBind(alloc, rootType, from->pBinds + i,
+                                        (VkSparseMemoryBind*)(to->pBinds + i));
         }
     }
 }
 
 void deepcopy_VkBindSparseInfo(Allocator* alloc, VkStructureType rootType,
                                const VkBindSparseInfo* from, VkBindSparseInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -629,43 +546,37 @@ void deepcopy_VkBindSparseInfo(Allocator* alloc, VkStructureType rootType,
         to->pWaitSemaphores = (VkSemaphore*)alloc->dupArray(
             from->pWaitSemaphores, from->waitSemaphoreCount * sizeof(const VkSemaphore));
     }
-    if (from) {
-        to->pBufferBinds = nullptr;
-        if (from->pBufferBinds) {
-            to->pBufferBinds = (VkSparseBufferMemoryBindInfo*)alloc->alloc(
-                from->bufferBindCount * sizeof(const VkSparseBufferMemoryBindInfo));
-            to->bufferBindCount = from->bufferBindCount;
-            for (uint32_t i = 0; i < (uint32_t)from->bufferBindCount; ++i) {
-                deepcopy_VkSparseBufferMemoryBindInfo(
-                    alloc, rootType, from->pBufferBinds + i,
-                    (VkSparseBufferMemoryBindInfo*)(to->pBufferBinds + i));
-            }
+    to->pBufferBinds = nullptr;
+    if (from->pBufferBinds) {
+        to->pBufferBinds = (VkSparseBufferMemoryBindInfo*)alloc->alloc(
+            from->bufferBindCount * sizeof(const VkSparseBufferMemoryBindInfo));
+        to->bufferBindCount = from->bufferBindCount;
+        for (uint32_t i = 0; i < (uint32_t)from->bufferBindCount; ++i) {
+            deepcopy_VkSparseBufferMemoryBindInfo(
+                alloc, rootType, from->pBufferBinds + i,
+                (VkSparseBufferMemoryBindInfo*)(to->pBufferBinds + i));
         }
     }
-    if (from) {
-        to->pImageOpaqueBinds = nullptr;
-        if (from->pImageOpaqueBinds) {
-            to->pImageOpaqueBinds = (VkSparseImageOpaqueMemoryBindInfo*)alloc->alloc(
-                from->imageOpaqueBindCount * sizeof(const VkSparseImageOpaqueMemoryBindInfo));
-            to->imageOpaqueBindCount = from->imageOpaqueBindCount;
-            for (uint32_t i = 0; i < (uint32_t)from->imageOpaqueBindCount; ++i) {
-                deepcopy_VkSparseImageOpaqueMemoryBindInfo(
-                    alloc, rootType, from->pImageOpaqueBinds + i,
-                    (VkSparseImageOpaqueMemoryBindInfo*)(to->pImageOpaqueBinds + i));
-            }
+    to->pImageOpaqueBinds = nullptr;
+    if (from->pImageOpaqueBinds) {
+        to->pImageOpaqueBinds = (VkSparseImageOpaqueMemoryBindInfo*)alloc->alloc(
+            from->imageOpaqueBindCount * sizeof(const VkSparseImageOpaqueMemoryBindInfo));
+        to->imageOpaqueBindCount = from->imageOpaqueBindCount;
+        for (uint32_t i = 0; i < (uint32_t)from->imageOpaqueBindCount; ++i) {
+            deepcopy_VkSparseImageOpaqueMemoryBindInfo(
+                alloc, rootType, from->pImageOpaqueBinds + i,
+                (VkSparseImageOpaqueMemoryBindInfo*)(to->pImageOpaqueBinds + i));
         }
     }
-    if (from) {
-        to->pImageBinds = nullptr;
-        if (from->pImageBinds) {
-            to->pImageBinds = (VkSparseImageMemoryBindInfo*)alloc->alloc(
-                from->imageBindCount * sizeof(const VkSparseImageMemoryBindInfo));
-            to->imageBindCount = from->imageBindCount;
-            for (uint32_t i = 0; i < (uint32_t)from->imageBindCount; ++i) {
-                deepcopy_VkSparseImageMemoryBindInfo(
-                    alloc, rootType, from->pImageBinds + i,
-                    (VkSparseImageMemoryBindInfo*)(to->pImageBinds + i));
-            }
+    to->pImageBinds = nullptr;
+    if (from->pImageBinds) {
+        to->pImageBinds = (VkSparseImageMemoryBindInfo*)alloc->alloc(
+            from->imageBindCount * sizeof(const VkSparseImageMemoryBindInfo));
+        to->imageBindCount = from->imageBindCount;
+        for (uint32_t i = 0; i < (uint32_t)from->imageBindCount; ++i) {
+            deepcopy_VkSparseImageMemoryBindInfo(
+                alloc, rootType, from->pImageBinds + i,
+                (VkSparseImageMemoryBindInfo*)(to->pImageBinds + i));
         }
     }
     to->pSignalSemaphores = nullptr;
@@ -677,8 +588,6 @@ void deepcopy_VkBindSparseInfo(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkFenceCreateInfo(Allocator* alloc, VkStructureType rootType,
                                 const VkFenceCreateInfo* from, VkFenceCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -698,8 +607,6 @@ void deepcopy_VkFenceCreateInfo(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkSemaphoreCreateInfo(Allocator* alloc, VkStructureType rootType,
                                     const VkSemaphoreCreateInfo* from, VkSemaphoreCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -719,8 +626,6 @@ void deepcopy_VkSemaphoreCreateInfo(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkQueryPoolCreateInfo(Allocator* alloc, VkStructureType rootType,
                                     const VkQueryPoolCreateInfo* from, VkQueryPoolCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -740,8 +645,6 @@ void deepcopy_VkQueryPoolCreateInfo(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkBufferCreateInfo(Allocator* alloc, VkStructureType rootType,
                                  const VkBufferCreateInfo* from, VkBufferCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -766,8 +669,6 @@ void deepcopy_VkBufferCreateInfo(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkImageCreateInfo(Allocator* alloc, VkStructureType rootType,
                                 const VkImageCreateInfo* from, VkImageCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -793,30 +694,22 @@ void deepcopy_VkImageCreateInfo(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkSubresourceLayout(Allocator* alloc, VkStructureType rootType,
                                   const VkSubresourceLayout* from, VkSubresourceLayout* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkComponentMapping(Allocator* alloc, VkStructureType rootType,
                                  const VkComponentMapping* from, VkComponentMapping* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkImageSubresourceRange(Allocator* alloc, VkStructureType rootType,
                                       const VkImageSubresourceRange* from,
                                       VkImageSubresourceRange* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkImageViewCreateInfo(Allocator* alloc, VkStructureType rootType,
                                     const VkImageViewCreateInfo* from, VkImageViewCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -841,8 +734,6 @@ void deepcopy_VkImageViewCreateInfo(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkCommandPoolCreateInfo(Allocator* alloc, VkStructureType rootType,
                                       const VkCommandPoolCreateInfo* from,
                                       VkCommandPoolCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -863,8 +754,6 @@ void deepcopy_VkCommandPoolCreateInfo(Allocator* alloc, VkStructureType rootType
 void deepcopy_VkCommandBufferAllocateInfo(Allocator* alloc, VkStructureType rootType,
                                           const VkCommandBufferAllocateInfo* from,
                                           VkCommandBufferAllocateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -885,8 +774,6 @@ void deepcopy_VkCommandBufferAllocateInfo(Allocator* alloc, VkStructureType root
 void deepcopy_VkCommandBufferInheritanceInfo(Allocator* alloc, VkStructureType rootType,
                                              const VkCommandBufferInheritanceInfo* from,
                                              VkCommandBufferInheritanceInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -907,8 +794,6 @@ void deepcopy_VkCommandBufferInheritanceInfo(Allocator* alloc, VkStructureType r
 void deepcopy_VkCommandBufferBeginInfo(Allocator* alloc, VkStructureType rootType,
                                        const VkCommandBufferBeginInfo* from,
                                        VkCommandBufferBeginInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -936,23 +821,17 @@ void deepcopy_VkCommandBufferBeginInfo(Allocator* alloc, VkStructureType rootTyp
 
 void deepcopy_VkBufferCopy(Allocator* alloc, VkStructureType rootType, const VkBufferCopy* from,
                            VkBufferCopy* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkImageSubresourceLayers(Allocator* alloc, VkStructureType rootType,
                                        const VkImageSubresourceLayers* from,
                                        VkImageSubresourceLayers* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkBufferImageCopy(Allocator* alloc, VkStructureType rootType,
                                 const VkBufferImageCopy* from, VkBufferImageCopy* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     deepcopy_VkImageSubresourceLayers(alloc, rootType, &from->imageSubresource,
                                       (VkImageSubresourceLayers*)(&to->imageSubresource));
@@ -962,8 +841,6 @@ void deepcopy_VkBufferImageCopy(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkImageCopy(Allocator* alloc, VkStructureType rootType, const VkImageCopy* from,
                           VkImageCopy* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     deepcopy_VkImageSubresourceLayers(alloc, rootType, &from->srcSubresource,
                                       (VkImageSubresourceLayers*)(&to->srcSubresource));
@@ -976,8 +853,6 @@ void deepcopy_VkImageCopy(Allocator* alloc, VkStructureType rootType, const VkIm
 
 void deepcopy_VkBufferMemoryBarrier(Allocator* alloc, VkStructureType rootType,
                                     const VkBufferMemoryBarrier* from, VkBufferMemoryBarrier* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -997,8 +872,6 @@ void deepcopy_VkBufferMemoryBarrier(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkImageMemoryBarrier(Allocator* alloc, VkStructureType rootType,
                                    const VkImageMemoryBarrier* from, VkImageMemoryBarrier* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -1020,8 +893,6 @@ void deepcopy_VkImageMemoryBarrier(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkMemoryBarrier(Allocator* alloc, VkStructureType rootType,
                               const VkMemoryBarrier* from, VkMemoryBarrier* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -1044,24 +915,18 @@ void deepcopy_VkMemoryBarrier(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkDispatchIndirectCommand(Allocator* alloc, VkStructureType rootType,
                                         const VkDispatchIndirectCommand* from,
                                         VkDispatchIndirectCommand* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkPipelineCacheHeaderVersionOne(Allocator* alloc, VkStructureType rootType,
                                               const VkPipelineCacheHeaderVersionOne* from,
                                               VkPipelineCacheHeaderVersionOne* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     memcpy(to->pipelineCacheUUID, from->pipelineCacheUUID, VK_UUID_SIZE * sizeof(uint8_t));
 }
 
 void deepcopy_VkEventCreateInfo(Allocator* alloc, VkStructureType rootType,
                                 const VkEventCreateInfo* from, VkEventCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -1082,8 +947,6 @@ void deepcopy_VkEventCreateInfo(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkBufferViewCreateInfo(Allocator* alloc, VkStructureType rootType,
                                      const VkBufferViewCreateInfo* from,
                                      VkBufferViewCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -1104,8 +967,6 @@ void deepcopy_VkBufferViewCreateInfo(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkShaderModuleCreateInfo(Allocator* alloc, VkStructureType rootType,
                                        const VkShaderModuleCreateInfo* from,
                                        VkShaderModuleCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -1131,8 +992,6 @@ void deepcopy_VkShaderModuleCreateInfo(Allocator* alloc, VkStructureType rootTyp
 void deepcopy_VkPipelineCacheCreateInfo(Allocator* alloc, VkStructureType rootType,
                                         const VkPipelineCacheCreateInfo* from,
                                         VkPipelineCacheCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -1158,26 +1017,20 @@ void deepcopy_VkPipelineCacheCreateInfo(Allocator* alloc, VkStructureType rootTy
 void deepcopy_VkSpecializationMapEntry(Allocator* alloc, VkStructureType rootType,
                                        const VkSpecializationMapEntry* from,
                                        VkSpecializationMapEntry* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkSpecializationInfo(Allocator* alloc, VkStructureType rootType,
                                    const VkSpecializationInfo* from, VkSpecializationInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
-    if (from) {
-        to->pMapEntries = nullptr;
-        if (from->pMapEntries) {
-            to->pMapEntries = (VkSpecializationMapEntry*)alloc->alloc(
-                from->mapEntryCount * sizeof(const VkSpecializationMapEntry));
-            to->mapEntryCount = from->mapEntryCount;
-            for (uint32_t i = 0; i < (uint32_t)from->mapEntryCount; ++i) {
-                deepcopy_VkSpecializationMapEntry(alloc, rootType, from->pMapEntries + i,
-                                                  (VkSpecializationMapEntry*)(to->pMapEntries + i));
-            }
+    to->pMapEntries = nullptr;
+    if (from->pMapEntries) {
+        to->pMapEntries = (VkSpecializationMapEntry*)alloc->alloc(
+            from->mapEntryCount * sizeof(const VkSpecializationMapEntry));
+        to->mapEntryCount = from->mapEntryCount;
+        for (uint32_t i = 0; i < (uint32_t)from->mapEntryCount; ++i) {
+            deepcopy_VkSpecializationMapEntry(alloc, rootType, from->pMapEntries + i,
+                                              (VkSpecializationMapEntry*)(to->pMapEntries + i));
         }
     }
     to->pData = nullptr;
@@ -1189,8 +1042,6 @@ void deepcopy_VkSpecializationInfo(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkPipelineShaderStageCreateInfo(Allocator* alloc, VkStructureType rootType,
                                               const VkPipelineShaderStageCreateInfo* from,
                                               VkPipelineShaderStageCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -1222,8 +1073,6 @@ void deepcopy_VkPipelineShaderStageCreateInfo(Allocator* alloc, VkStructureType 
 void deepcopy_VkComputePipelineCreateInfo(Allocator* alloc, VkStructureType rootType,
                                           const VkComputePipelineCreateInfo* from,
                                           VkComputePipelineCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -1245,16 +1094,12 @@ void deepcopy_VkComputePipelineCreateInfo(Allocator* alloc, VkStructureType root
 
 void deepcopy_VkPushConstantRange(Allocator* alloc, VkStructureType rootType,
                                   const VkPushConstantRange* from, VkPushConstantRange* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkPipelineLayoutCreateInfo(Allocator* alloc, VkStructureType rootType,
                                          const VkPipelineLayoutCreateInfo* from,
                                          VkPipelineLayoutCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -1275,24 +1120,20 @@ void deepcopy_VkPipelineLayoutCreateInfo(Allocator* alloc, VkStructureType rootT
         to->pSetLayouts = (VkDescriptorSetLayout*)alloc->dupArray(
             from->pSetLayouts, from->setLayoutCount * sizeof(const VkDescriptorSetLayout));
     }
-    if (from) {
-        to->pPushConstantRanges = nullptr;
-        if (from->pPushConstantRanges) {
-            to->pPushConstantRanges = (VkPushConstantRange*)alloc->alloc(
-                from->pushConstantRangeCount * sizeof(const VkPushConstantRange));
-            to->pushConstantRangeCount = from->pushConstantRangeCount;
-            for (uint32_t i = 0; i < (uint32_t)from->pushConstantRangeCount; ++i) {
-                deepcopy_VkPushConstantRange(alloc, rootType, from->pPushConstantRanges + i,
-                                             (VkPushConstantRange*)(to->pPushConstantRanges + i));
-            }
+    to->pPushConstantRanges = nullptr;
+    if (from->pPushConstantRanges) {
+        to->pPushConstantRanges = (VkPushConstantRange*)alloc->alloc(
+            from->pushConstantRangeCount * sizeof(const VkPushConstantRange));
+        to->pushConstantRangeCount = from->pushConstantRangeCount;
+        for (uint32_t i = 0; i < (uint32_t)from->pushConstantRangeCount; ++i) {
+            deepcopy_VkPushConstantRange(alloc, rootType, from->pPushConstantRanges + i,
+                                         (VkPushConstantRange*)(to->pPushConstantRanges + i));
         }
     }
 }
 
 void deepcopy_VkSamplerCreateInfo(Allocator* alloc, VkStructureType rootType,
                                   const VkSamplerCreateInfo* from, VkSamplerCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -1312,8 +1153,6 @@ void deepcopy_VkSamplerCreateInfo(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkCopyDescriptorSet(Allocator* alloc, VkStructureType rootType,
                                   const VkCopyDescriptorSet* from, VkCopyDescriptorSet* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -1334,30 +1173,22 @@ void deepcopy_VkCopyDescriptorSet(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkDescriptorBufferInfo(Allocator* alloc, VkStructureType rootType,
                                      const VkDescriptorBufferInfo* from,
                                      VkDescriptorBufferInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkDescriptorImageInfo(Allocator* alloc, VkStructureType rootType,
                                     const VkDescriptorImageInfo* from, VkDescriptorImageInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkDescriptorPoolSize(Allocator* alloc, VkStructureType rootType,
                                    const VkDescriptorPoolSize* from, VkDescriptorPoolSize* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkDescriptorPoolCreateInfo(Allocator* alloc, VkStructureType rootType,
                                          const VkDescriptorPoolCreateInfo* from,
                                          VkDescriptorPoolCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -1373,16 +1204,14 @@ void deepcopy_VkDescriptorPoolCreateInfo(Allocator* alloc, VkStructureType rootT
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pPoolSizes = nullptr;
-        if (from->pPoolSizes) {
-            to->pPoolSizes = (VkDescriptorPoolSize*)alloc->alloc(
-                from->poolSizeCount * sizeof(const VkDescriptorPoolSize));
-            to->poolSizeCount = from->poolSizeCount;
-            for (uint32_t i = 0; i < (uint32_t)from->poolSizeCount; ++i) {
-                deepcopy_VkDescriptorPoolSize(alloc, rootType, from->pPoolSizes + i,
-                                              (VkDescriptorPoolSize*)(to->pPoolSizes + i));
-            }
+    to->pPoolSizes = nullptr;
+    if (from->pPoolSizes) {
+        to->pPoolSizes = (VkDescriptorPoolSize*)alloc->alloc(from->poolSizeCount *
+                                                             sizeof(const VkDescriptorPoolSize));
+        to->poolSizeCount = from->poolSizeCount;
+        for (uint32_t i = 0; i < (uint32_t)from->poolSizeCount; ++i) {
+            deepcopy_VkDescriptorPoolSize(alloc, rootType, from->pPoolSizes + i,
+                                          (VkDescriptorPoolSize*)(to->pPoolSizes + i));
         }
     }
 }
@@ -1390,8 +1219,6 @@ void deepcopy_VkDescriptorPoolCreateInfo(Allocator* alloc, VkStructureType rootT
 void deepcopy_VkDescriptorSetAllocateInfo(Allocator* alloc, VkStructureType rootType,
                                           const VkDescriptorSetAllocateInfo* from,
                                           VkDescriptorSetAllocateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -1417,8 +1244,6 @@ void deepcopy_VkDescriptorSetAllocateInfo(Allocator* alloc, VkStructureType root
 void deepcopy_VkDescriptorSetLayoutBinding(Allocator* alloc, VkStructureType rootType,
                                            const VkDescriptorSetLayoutBinding* from,
                                            VkDescriptorSetLayoutBinding* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     to->pImmutableSamplers = nullptr;
     if (from->pImmutableSamplers) {
@@ -1430,8 +1255,6 @@ void deepcopy_VkDescriptorSetLayoutBinding(Allocator* alloc, VkStructureType roo
 void deepcopy_VkDescriptorSetLayoutCreateInfo(Allocator* alloc, VkStructureType rootType,
                                               const VkDescriptorSetLayoutCreateInfo* from,
                                               VkDescriptorSetLayoutCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -1447,25 +1270,21 @@ void deepcopy_VkDescriptorSetLayoutCreateInfo(Allocator* alloc, VkStructureType 
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pBindings = nullptr;
-        if (from->pBindings) {
-            to->pBindings = (VkDescriptorSetLayoutBinding*)alloc->alloc(
-                from->bindingCount * sizeof(const VkDescriptorSetLayoutBinding));
-            to->bindingCount = from->bindingCount;
-            for (uint32_t i = 0; i < (uint32_t)from->bindingCount; ++i) {
-                deepcopy_VkDescriptorSetLayoutBinding(
-                    alloc, rootType, from->pBindings + i,
-                    (VkDescriptorSetLayoutBinding*)(to->pBindings + i));
-            }
+    to->pBindings = nullptr;
+    if (from->pBindings) {
+        to->pBindings = (VkDescriptorSetLayoutBinding*)alloc->alloc(
+            from->bindingCount * sizeof(const VkDescriptorSetLayoutBinding));
+        to->bindingCount = from->bindingCount;
+        for (uint32_t i = 0; i < (uint32_t)from->bindingCount; ++i) {
+            deepcopy_VkDescriptorSetLayoutBinding(
+                alloc, rootType, from->pBindings + i,
+                (VkDescriptorSetLayoutBinding*)(to->pBindings + i));
         }
     }
 }
 
 void deepcopy_VkWriteDescriptorSet(Allocator* alloc, VkStructureType rootType,
                                    const VkWriteDescriptorSet* from, VkWriteDescriptorSet* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -1481,28 +1300,24 @@ void deepcopy_VkWriteDescriptorSet(Allocator* alloc, VkStructureType rootType,
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pImageInfo = nullptr;
-        if (from->pImageInfo) {
-            to->pImageInfo = (VkDescriptorImageInfo*)alloc->alloc(
-                from->descriptorCount * sizeof(const VkDescriptorImageInfo));
-            to->descriptorCount = from->descriptorCount;
-            for (uint32_t i = 0; i < (uint32_t)from->descriptorCount; ++i) {
-                deepcopy_VkDescriptorImageInfo(alloc, rootType, from->pImageInfo + i,
-                                               (VkDescriptorImageInfo*)(to->pImageInfo + i));
-            }
+    to->pImageInfo = nullptr;
+    if (from->pImageInfo) {
+        to->pImageInfo = (VkDescriptorImageInfo*)alloc->alloc(from->descriptorCount *
+                                                              sizeof(const VkDescriptorImageInfo));
+        to->descriptorCount = from->descriptorCount;
+        for (uint32_t i = 0; i < (uint32_t)from->descriptorCount; ++i) {
+            deepcopy_VkDescriptorImageInfo(alloc, rootType, from->pImageInfo + i,
+                                           (VkDescriptorImageInfo*)(to->pImageInfo + i));
         }
     }
-    if (from) {
-        to->pBufferInfo = nullptr;
-        if (from->pBufferInfo) {
-            to->pBufferInfo = (VkDescriptorBufferInfo*)alloc->alloc(
-                from->descriptorCount * sizeof(const VkDescriptorBufferInfo));
-            to->descriptorCount = from->descriptorCount;
-            for (uint32_t i = 0; i < (uint32_t)from->descriptorCount; ++i) {
-                deepcopy_VkDescriptorBufferInfo(alloc, rootType, from->pBufferInfo + i,
-                                                (VkDescriptorBufferInfo*)(to->pBufferInfo + i));
-            }
+    to->pBufferInfo = nullptr;
+    if (from->pBufferInfo) {
+        to->pBufferInfo = (VkDescriptorBufferInfo*)alloc->alloc(
+            from->descriptorCount * sizeof(const VkDescriptorBufferInfo));
+        to->descriptorCount = from->descriptorCount;
+        for (uint32_t i = 0; i < (uint32_t)from->descriptorCount; ++i) {
+            deepcopy_VkDescriptorBufferInfo(alloc, rootType, from->pBufferInfo + i,
+                                            (VkDescriptorBufferInfo*)(to->pBufferInfo + i));
         }
     }
     to->pTexelBufferView = nullptr;
@@ -1514,8 +1329,6 @@ void deepcopy_VkWriteDescriptorSet(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkClearColorValue(Allocator* alloc, VkStructureType rootType,
                                 const VkClearColorValue* from, VkClearColorValue* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     memcpy(to->float32, from->float32, 4 * sizeof(float));
     memcpy(to->int32, from->int32, 4 * sizeof(int32_t));
@@ -1527,61 +1340,45 @@ void deepcopy_VkClearColorValue(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkDrawIndexedIndirectCommand(Allocator* alloc, VkStructureType rootType,
                                            const VkDrawIndexedIndirectCommand* from,
                                            VkDrawIndexedIndirectCommand* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkDrawIndirectCommand(Allocator* alloc, VkStructureType rootType,
                                     const VkDrawIndirectCommand* from, VkDrawIndirectCommand* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkStencilOpState(Allocator* alloc, VkStructureType rootType,
                                const VkStencilOpState* from, VkStencilOpState* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkVertexInputAttributeDescription(Allocator* alloc, VkStructureType rootType,
                                                 const VkVertexInputAttributeDescription* from,
                                                 VkVertexInputAttributeDescription* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkVertexInputBindingDescription(Allocator* alloc, VkStructureType rootType,
                                               const VkVertexInputBindingDescription* from,
                                               VkVertexInputBindingDescription* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkViewport(Allocator* alloc, VkStructureType rootType, const VkViewport* from,
                          VkViewport* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkPipelineColorBlendAttachmentState(Allocator* alloc, VkStructureType rootType,
                                                   const VkPipelineColorBlendAttachmentState* from,
                                                   VkPipelineColorBlendAttachmentState* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkPipelineColorBlendStateCreateInfo(Allocator* alloc, VkStructureType rootType,
                                                   const VkPipelineColorBlendStateCreateInfo* from,
                                                   VkPipelineColorBlendStateCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -1597,17 +1394,15 @@ void deepcopy_VkPipelineColorBlendStateCreateInfo(Allocator* alloc, VkStructureT
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pAttachments = nullptr;
-        if (from->pAttachments) {
-            to->pAttachments = (VkPipelineColorBlendAttachmentState*)alloc->alloc(
-                from->attachmentCount * sizeof(const VkPipelineColorBlendAttachmentState));
-            to->attachmentCount = from->attachmentCount;
-            for (uint32_t i = 0; i < (uint32_t)from->attachmentCount; ++i) {
-                deepcopy_VkPipelineColorBlendAttachmentState(
-                    alloc, rootType, from->pAttachments + i,
-                    (VkPipelineColorBlendAttachmentState*)(to->pAttachments + i));
-            }
+    to->pAttachments = nullptr;
+    if (from->pAttachments) {
+        to->pAttachments = (VkPipelineColorBlendAttachmentState*)alloc->alloc(
+            from->attachmentCount * sizeof(const VkPipelineColorBlendAttachmentState));
+        to->attachmentCount = from->attachmentCount;
+        for (uint32_t i = 0; i < (uint32_t)from->attachmentCount; ++i) {
+            deepcopy_VkPipelineColorBlendAttachmentState(
+                alloc, rootType, from->pAttachments + i,
+                (VkPipelineColorBlendAttachmentState*)(to->pAttachments + i));
         }
     }
     memcpy(to->blendConstants, from->blendConstants, 4 * sizeof(float));
@@ -1616,8 +1411,6 @@ void deepcopy_VkPipelineColorBlendStateCreateInfo(Allocator* alloc, VkStructureT
 void deepcopy_VkPipelineDepthStencilStateCreateInfo(
     Allocator* alloc, VkStructureType rootType, const VkPipelineDepthStencilStateCreateInfo* from,
     VkPipelineDepthStencilStateCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -1640,8 +1433,6 @@ void deepcopy_VkPipelineDepthStencilStateCreateInfo(
 void deepcopy_VkPipelineDynamicStateCreateInfo(Allocator* alloc, VkStructureType rootType,
                                                const VkPipelineDynamicStateCreateInfo* from,
                                                VkPipelineDynamicStateCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -1667,8 +1458,6 @@ void deepcopy_VkPipelineDynamicStateCreateInfo(Allocator* alloc, VkStructureType
 void deepcopy_VkPipelineInputAssemblyStateCreateInfo(
     Allocator* alloc, VkStructureType rootType, const VkPipelineInputAssemblyStateCreateInfo* from,
     VkPipelineInputAssemblyStateCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -1689,8 +1478,6 @@ void deepcopy_VkPipelineInputAssemblyStateCreateInfo(
 void deepcopy_VkPipelineMultisampleStateCreateInfo(Allocator* alloc, VkStructureType rootType,
                                                    const VkPipelineMultisampleStateCreateInfo* from,
                                                    VkPipelineMultisampleStateCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -1717,8 +1504,6 @@ void deepcopy_VkPipelineMultisampleStateCreateInfo(Allocator* alloc, VkStructure
 void deepcopy_VkPipelineRasterizationStateCreateInfo(
     Allocator* alloc, VkStructureType rootType, const VkPipelineRasterizationStateCreateInfo* from,
     VkPipelineRasterizationStateCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -1739,8 +1524,6 @@ void deepcopy_VkPipelineRasterizationStateCreateInfo(
 void deepcopy_VkPipelineTessellationStateCreateInfo(
     Allocator* alloc, VkStructureType rootType, const VkPipelineTessellationStateCreateInfo* from,
     VkPipelineTessellationStateCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -1761,8 +1544,6 @@ void deepcopy_VkPipelineTessellationStateCreateInfo(
 void deepcopy_VkPipelineVertexInputStateCreateInfo(Allocator* alloc, VkStructureType rootType,
                                                    const VkPipelineVertexInputStateCreateInfo* from,
                                                    VkPipelineVertexInputStateCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -1778,32 +1559,27 @@ void deepcopy_VkPipelineVertexInputStateCreateInfo(Allocator* alloc, VkStructure
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pVertexBindingDescriptions = nullptr;
-        if (from->pVertexBindingDescriptions) {
-            to->pVertexBindingDescriptions = (VkVertexInputBindingDescription*)alloc->alloc(
-                from->vertexBindingDescriptionCount *
-                sizeof(const VkVertexInputBindingDescription));
-            to->vertexBindingDescriptionCount = from->vertexBindingDescriptionCount;
-            for (uint32_t i = 0; i < (uint32_t)from->vertexBindingDescriptionCount; ++i) {
-                deepcopy_VkVertexInputBindingDescription(
-                    alloc, rootType, from->pVertexBindingDescriptions + i,
-                    (VkVertexInputBindingDescription*)(to->pVertexBindingDescriptions + i));
-            }
+    to->pVertexBindingDescriptions = nullptr;
+    if (from->pVertexBindingDescriptions) {
+        to->pVertexBindingDescriptions = (VkVertexInputBindingDescription*)alloc->alloc(
+            from->vertexBindingDescriptionCount * sizeof(const VkVertexInputBindingDescription));
+        to->vertexBindingDescriptionCount = from->vertexBindingDescriptionCount;
+        for (uint32_t i = 0; i < (uint32_t)from->vertexBindingDescriptionCount; ++i) {
+            deepcopy_VkVertexInputBindingDescription(
+                alloc, rootType, from->pVertexBindingDescriptions + i,
+                (VkVertexInputBindingDescription*)(to->pVertexBindingDescriptions + i));
         }
     }
-    if (from) {
-        to->pVertexAttributeDescriptions = nullptr;
-        if (from->pVertexAttributeDescriptions) {
-            to->pVertexAttributeDescriptions = (VkVertexInputAttributeDescription*)alloc->alloc(
-                from->vertexAttributeDescriptionCount *
-                sizeof(const VkVertexInputAttributeDescription));
-            to->vertexAttributeDescriptionCount = from->vertexAttributeDescriptionCount;
-            for (uint32_t i = 0; i < (uint32_t)from->vertexAttributeDescriptionCount; ++i) {
-                deepcopy_VkVertexInputAttributeDescription(
-                    alloc, rootType, from->pVertexAttributeDescriptions + i,
-                    (VkVertexInputAttributeDescription*)(to->pVertexAttributeDescriptions + i));
-            }
+    to->pVertexAttributeDescriptions = nullptr;
+    if (from->pVertexAttributeDescriptions) {
+        to->pVertexAttributeDescriptions = (VkVertexInputAttributeDescription*)alloc->alloc(
+            from->vertexAttributeDescriptionCount *
+            sizeof(const VkVertexInputAttributeDescription));
+        to->vertexAttributeDescriptionCount = from->vertexAttributeDescriptionCount;
+        for (uint32_t i = 0; i < (uint32_t)from->vertexAttributeDescriptionCount; ++i) {
+            deepcopy_VkVertexInputAttributeDescription(
+                alloc, rootType, from->pVertexAttributeDescriptions + i,
+                (VkVertexInputAttributeDescription*)(to->pVertexAttributeDescriptions + i));
         }
     }
 }
@@ -1811,8 +1587,6 @@ void deepcopy_VkPipelineVertexInputStateCreateInfo(Allocator* alloc, VkStructure
 void deepcopy_VkPipelineViewportStateCreateInfo(Allocator* alloc, VkStructureType rootType,
                                                 const VkPipelineViewportStateCreateInfo* from,
                                                 VkPipelineViewportStateCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -1828,27 +1602,21 @@ void deepcopy_VkPipelineViewportStateCreateInfo(Allocator* alloc, VkStructureTyp
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pViewports = nullptr;
-        if (from->pViewports) {
-            to->pViewports =
-                (VkViewport*)alloc->alloc(from->viewportCount * sizeof(const VkViewport));
-            to->viewportCount = from->viewportCount;
-            for (uint32_t i = 0; i < (uint32_t)from->viewportCount; ++i) {
-                deepcopy_VkViewport(alloc, rootType, from->pViewports + i,
-                                    (VkViewport*)(to->pViewports + i));
-            }
+    to->pViewports = nullptr;
+    if (from->pViewports) {
+        to->pViewports = (VkViewport*)alloc->alloc(from->viewportCount * sizeof(const VkViewport));
+        to->viewportCount = from->viewportCount;
+        for (uint32_t i = 0; i < (uint32_t)from->viewportCount; ++i) {
+            deepcopy_VkViewport(alloc, rootType, from->pViewports + i,
+                                (VkViewport*)(to->pViewports + i));
         }
     }
-    if (from) {
-        to->pScissors = nullptr;
-        if (from->pScissors) {
-            to->pScissors = (VkRect2D*)alloc->alloc(from->scissorCount * sizeof(const VkRect2D));
-            to->scissorCount = from->scissorCount;
-            for (uint32_t i = 0; i < (uint32_t)from->scissorCount; ++i) {
-                deepcopy_VkRect2D(alloc, rootType, from->pScissors + i,
-                                  (VkRect2D*)(to->pScissors + i));
-            }
+    to->pScissors = nullptr;
+    if (from->pScissors) {
+        to->pScissors = (VkRect2D*)alloc->alloc(from->scissorCount * sizeof(const VkRect2D));
+        to->scissorCount = from->scissorCount;
+        for (uint32_t i = 0; i < (uint32_t)from->scissorCount; ++i) {
+            deepcopy_VkRect2D(alloc, rootType, from->pScissors + i, (VkRect2D*)(to->pScissors + i));
         }
     }
 }
@@ -1856,8 +1624,6 @@ void deepcopy_VkPipelineViewportStateCreateInfo(Allocator* alloc, VkStructureTyp
 void deepcopy_VkGraphicsPipelineCreateInfo(Allocator* alloc, VkStructureType rootType,
                                            const VkGraphicsPipelineCreateInfo* from,
                                            VkGraphicsPipelineCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -1873,17 +1639,15 @@ void deepcopy_VkGraphicsPipelineCreateInfo(Allocator* alloc, VkStructureType roo
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pStages = nullptr;
-        if (from->pStages) {
-            to->pStages = (VkPipelineShaderStageCreateInfo*)alloc->alloc(
-                from->stageCount * sizeof(const VkPipelineShaderStageCreateInfo));
-            to->stageCount = from->stageCount;
-            for (uint32_t i = 0; i < (uint32_t)from->stageCount; ++i) {
-                deepcopy_VkPipelineShaderStageCreateInfo(
-                    alloc, rootType, from->pStages + i,
-                    (VkPipelineShaderStageCreateInfo*)(to->pStages + i));
-            }
+    to->pStages = nullptr;
+    if (from->pStages) {
+        to->pStages = (VkPipelineShaderStageCreateInfo*)alloc->alloc(
+            from->stageCount * sizeof(const VkPipelineShaderStageCreateInfo));
+        to->stageCount = from->stageCount;
+        for (uint32_t i = 0; i < (uint32_t)from->stageCount; ++i) {
+            deepcopy_VkPipelineShaderStageCreateInfo(
+                alloc, rootType, from->pStages + i,
+                (VkPipelineShaderStageCreateInfo*)(to->pStages + i));
         }
     }
     to->pVertexInputState = nullptr;
@@ -1963,23 +1727,17 @@ void deepcopy_VkGraphicsPipelineCreateInfo(Allocator* alloc, VkStructureType roo
 void deepcopy_VkAttachmentDescription(Allocator* alloc, VkStructureType rootType,
                                       const VkAttachmentDescription* from,
                                       VkAttachmentDescription* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkAttachmentReference(Allocator* alloc, VkStructureType rootType,
                                     const VkAttachmentReference* from, VkAttachmentReference* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkFramebufferCreateInfo(Allocator* alloc, VkStructureType rootType,
                                       const VkFramebufferCreateInfo* from,
                                       VkFramebufferCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2004,51 +1762,40 @@ void deepcopy_VkFramebufferCreateInfo(Allocator* alloc, VkStructureType rootType
 
 void deepcopy_VkSubpassDependency(Allocator* alloc, VkStructureType rootType,
                                   const VkSubpassDependency* from, VkSubpassDependency* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkSubpassDescription(Allocator* alloc, VkStructureType rootType,
                                    const VkSubpassDescription* from, VkSubpassDescription* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
-    if (from) {
-        to->pInputAttachments = nullptr;
-        if (from->pInputAttachments) {
-            to->pInputAttachments = (VkAttachmentReference*)alloc->alloc(
-                from->inputAttachmentCount * sizeof(const VkAttachmentReference));
-            to->inputAttachmentCount = from->inputAttachmentCount;
-            for (uint32_t i = 0; i < (uint32_t)from->inputAttachmentCount; ++i) {
-                deepcopy_VkAttachmentReference(alloc, rootType, from->pInputAttachments + i,
-                                               (VkAttachmentReference*)(to->pInputAttachments + i));
-            }
+    to->pInputAttachments = nullptr;
+    if (from->pInputAttachments) {
+        to->pInputAttachments = (VkAttachmentReference*)alloc->alloc(
+            from->inputAttachmentCount * sizeof(const VkAttachmentReference));
+        to->inputAttachmentCount = from->inputAttachmentCount;
+        for (uint32_t i = 0; i < (uint32_t)from->inputAttachmentCount; ++i) {
+            deepcopy_VkAttachmentReference(alloc, rootType, from->pInputAttachments + i,
+                                           (VkAttachmentReference*)(to->pInputAttachments + i));
         }
     }
-    if (from) {
-        to->pColorAttachments = nullptr;
-        if (from->pColorAttachments) {
-            to->pColorAttachments = (VkAttachmentReference*)alloc->alloc(
-                from->colorAttachmentCount * sizeof(const VkAttachmentReference));
-            to->colorAttachmentCount = from->colorAttachmentCount;
-            for (uint32_t i = 0; i < (uint32_t)from->colorAttachmentCount; ++i) {
-                deepcopy_VkAttachmentReference(alloc, rootType, from->pColorAttachments + i,
-                                               (VkAttachmentReference*)(to->pColorAttachments + i));
-            }
+    to->pColorAttachments = nullptr;
+    if (from->pColorAttachments) {
+        to->pColorAttachments = (VkAttachmentReference*)alloc->alloc(
+            from->colorAttachmentCount * sizeof(const VkAttachmentReference));
+        to->colorAttachmentCount = from->colorAttachmentCount;
+        for (uint32_t i = 0; i < (uint32_t)from->colorAttachmentCount; ++i) {
+            deepcopy_VkAttachmentReference(alloc, rootType, from->pColorAttachments + i,
+                                           (VkAttachmentReference*)(to->pColorAttachments + i));
         }
     }
-    if (from) {
-        to->pResolveAttachments = nullptr;
-        if (from->pResolveAttachments) {
-            to->pResolveAttachments = (VkAttachmentReference*)alloc->alloc(
-                from->colorAttachmentCount * sizeof(const VkAttachmentReference));
-            to->colorAttachmentCount = from->colorAttachmentCount;
-            for (uint32_t i = 0; i < (uint32_t)from->colorAttachmentCount; ++i) {
-                deepcopy_VkAttachmentReference(
-                    alloc, rootType, from->pResolveAttachments + i,
-                    (VkAttachmentReference*)(to->pResolveAttachments + i));
-            }
+    to->pResolveAttachments = nullptr;
+    if (from->pResolveAttachments) {
+        to->pResolveAttachments = (VkAttachmentReference*)alloc->alloc(
+            from->colorAttachmentCount * sizeof(const VkAttachmentReference));
+        to->colorAttachmentCount = from->colorAttachmentCount;
+        for (uint32_t i = 0; i < (uint32_t)from->colorAttachmentCount; ++i) {
+            deepcopy_VkAttachmentReference(alloc, rootType, from->pResolveAttachments + i,
+                                           (VkAttachmentReference*)(to->pResolveAttachments + i));
         }
     }
     to->pDepthStencilAttachment = nullptr;
@@ -2068,8 +1815,6 @@ void deepcopy_VkSubpassDescription(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkRenderPassCreateInfo(Allocator* alloc, VkStructureType rootType,
                                      const VkRenderPassCreateInfo* from,
                                      VkRenderPassCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2085,40 +1830,34 @@ void deepcopy_VkRenderPassCreateInfo(Allocator* alloc, VkStructureType rootType,
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pAttachments = nullptr;
-        if (from->pAttachments) {
-            to->pAttachments = (VkAttachmentDescription*)alloc->alloc(
-                from->attachmentCount * sizeof(const VkAttachmentDescription));
-            to->attachmentCount = from->attachmentCount;
-            for (uint32_t i = 0; i < (uint32_t)from->attachmentCount; ++i) {
-                deepcopy_VkAttachmentDescription(alloc, rootType, from->pAttachments + i,
-                                                 (VkAttachmentDescription*)(to->pAttachments + i));
-            }
+    to->pAttachments = nullptr;
+    if (from->pAttachments) {
+        to->pAttachments = (VkAttachmentDescription*)alloc->alloc(
+            from->attachmentCount * sizeof(const VkAttachmentDescription));
+        to->attachmentCount = from->attachmentCount;
+        for (uint32_t i = 0; i < (uint32_t)from->attachmentCount; ++i) {
+            deepcopy_VkAttachmentDescription(alloc, rootType, from->pAttachments + i,
+                                             (VkAttachmentDescription*)(to->pAttachments + i));
         }
     }
-    if (from) {
-        to->pSubpasses = nullptr;
-        if (from->pSubpasses) {
-            to->pSubpasses = (VkSubpassDescription*)alloc->alloc(
-                from->subpassCount * sizeof(const VkSubpassDescription));
-            to->subpassCount = from->subpassCount;
-            for (uint32_t i = 0; i < (uint32_t)from->subpassCount; ++i) {
-                deepcopy_VkSubpassDescription(alloc, rootType, from->pSubpasses + i,
-                                              (VkSubpassDescription*)(to->pSubpasses + i));
-            }
+    to->pSubpasses = nullptr;
+    if (from->pSubpasses) {
+        to->pSubpasses = (VkSubpassDescription*)alloc->alloc(from->subpassCount *
+                                                             sizeof(const VkSubpassDescription));
+        to->subpassCount = from->subpassCount;
+        for (uint32_t i = 0; i < (uint32_t)from->subpassCount; ++i) {
+            deepcopy_VkSubpassDescription(alloc, rootType, from->pSubpasses + i,
+                                          (VkSubpassDescription*)(to->pSubpasses + i));
         }
     }
-    if (from) {
-        to->pDependencies = nullptr;
-        if (from->pDependencies) {
-            to->pDependencies = (VkSubpassDependency*)alloc->alloc(
-                from->dependencyCount * sizeof(const VkSubpassDependency));
-            to->dependencyCount = from->dependencyCount;
-            for (uint32_t i = 0; i < (uint32_t)from->dependencyCount; ++i) {
-                deepcopy_VkSubpassDependency(alloc, rootType, from->pDependencies + i,
-                                             (VkSubpassDependency*)(to->pDependencies + i));
-            }
+    to->pDependencies = nullptr;
+    if (from->pDependencies) {
+        to->pDependencies = (VkSubpassDependency*)alloc->alloc(from->dependencyCount *
+                                                               sizeof(const VkSubpassDependency));
+        to->dependencyCount = from->dependencyCount;
+        for (uint32_t i = 0; i < (uint32_t)from->dependencyCount; ++i) {
+            deepcopy_VkSubpassDependency(alloc, rootType, from->pDependencies + i,
+                                         (VkSubpassDependency*)(to->pDependencies + i));
         }
     }
 }
@@ -2126,23 +1865,17 @@ void deepcopy_VkRenderPassCreateInfo(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkClearDepthStencilValue(Allocator* alloc, VkStructureType rootType,
                                        const VkClearDepthStencilValue* from,
                                        VkClearDepthStencilValue* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkClearRect(Allocator* alloc, VkStructureType rootType, const VkClearRect* from,
                           VkClearRect* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     deepcopy_VkRect2D(alloc, rootType, &from->rect, (VkRect2D*)(&to->rect));
 }
 
 void deepcopy_VkClearValue(Allocator* alloc, VkStructureType rootType, const VkClearValue* from,
                            VkClearValue* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     deepcopy_VkClearColorValue(alloc, rootType, &from->color, (VkClearColorValue*)(&to->color));
     deepcopy_VkClearDepthStencilValue(alloc, rootType, &from->depthStencil,
@@ -2151,16 +1884,12 @@ void deepcopy_VkClearValue(Allocator* alloc, VkStructureType rootType, const VkC
 
 void deepcopy_VkClearAttachment(Allocator* alloc, VkStructureType rootType,
                                 const VkClearAttachment* from, VkClearAttachment* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     deepcopy_VkClearValue(alloc, rootType, &from->clearValue, (VkClearValue*)(&to->clearValue));
 }
 
 void deepcopy_VkImageBlit(Allocator* alloc, VkStructureType rootType, const VkImageBlit* from,
                           VkImageBlit* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     deepcopy_VkImageSubresourceLayers(alloc, rootType, &from->srcSubresource,
                                       (VkImageSubresourceLayers*)(&to->srcSubresource));
@@ -2178,8 +1907,6 @@ void deepcopy_VkImageBlit(Allocator* alloc, VkStructureType rootType, const VkIm
 
 void deepcopy_VkImageResolve(Allocator* alloc, VkStructureType rootType, const VkImageResolve* from,
                              VkImageResolve* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     deepcopy_VkImageSubresourceLayers(alloc, rootType, &from->srcSubresource,
                                       (VkImageSubresourceLayers*)(&to->srcSubresource));
@@ -2192,8 +1919,6 @@ void deepcopy_VkImageResolve(Allocator* alloc, VkStructureType rootType, const V
 
 void deepcopy_VkRenderPassBeginInfo(Allocator* alloc, VkStructureType rootType,
                                     const VkRenderPassBeginInfo* from, VkRenderPassBeginInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2210,16 +1935,14 @@ void deepcopy_VkRenderPassBeginInfo(Allocator* alloc, VkStructureType rootType,
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
     deepcopy_VkRect2D(alloc, rootType, &from->renderArea, (VkRect2D*)(&to->renderArea));
-    if (from) {
-        to->pClearValues = nullptr;
-        if (from->pClearValues) {
-            to->pClearValues =
-                (VkClearValue*)alloc->alloc(from->clearValueCount * sizeof(const VkClearValue));
-            to->clearValueCount = from->clearValueCount;
-            for (uint32_t i = 0; i < (uint32_t)from->clearValueCount; ++i) {
-                deepcopy_VkClearValue(alloc, rootType, from->pClearValues + i,
-                                      (VkClearValue*)(to->pClearValues + i));
-            }
+    to->pClearValues = nullptr;
+    if (from->pClearValues) {
+        to->pClearValues =
+            (VkClearValue*)alloc->alloc(from->clearValueCount * sizeof(const VkClearValue));
+        to->clearValueCount = from->clearValueCount;
+        for (uint32_t i = 0; i < (uint32_t)from->clearValueCount; ++i) {
+            deepcopy_VkClearValue(alloc, rootType, from->pClearValues + i,
+                                  (VkClearValue*)(to->pClearValues + i));
         }
     }
 }
@@ -2229,8 +1952,6 @@ void deepcopy_VkRenderPassBeginInfo(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkBindBufferMemoryInfo(Allocator* alloc, VkStructureType rootType,
                                      const VkBindBufferMemoryInfo* from,
                                      VkBindBufferMemoryInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2250,8 +1971,6 @@ void deepcopy_VkBindBufferMemoryInfo(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkBindImageMemoryInfo(Allocator* alloc, VkStructureType rootType,
                                     const VkBindImageMemoryInfo* from, VkBindImageMemoryInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2272,8 +1991,6 @@ void deepcopy_VkBindImageMemoryInfo(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkMemoryDedicatedRequirements(Allocator* alloc, VkStructureType rootType,
                                             const VkMemoryDedicatedRequirements* from,
                                             VkMemoryDedicatedRequirements* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2294,8 +2011,6 @@ void deepcopy_VkMemoryDedicatedRequirements(Allocator* alloc, VkStructureType ro
 void deepcopy_VkMemoryDedicatedAllocateInfo(Allocator* alloc, VkStructureType rootType,
                                             const VkMemoryDedicatedAllocateInfo* from,
                                             VkMemoryDedicatedAllocateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2316,8 +2031,6 @@ void deepcopy_VkMemoryDedicatedAllocateInfo(Allocator* alloc, VkStructureType ro
 void deepcopy_VkMemoryAllocateFlagsInfo(Allocator* alloc, VkStructureType rootType,
                                         const VkMemoryAllocateFlagsInfo* from,
                                         VkMemoryAllocateFlagsInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2338,8 +2051,6 @@ void deepcopy_VkMemoryAllocateFlagsInfo(Allocator* alloc, VkStructureType rootTy
 void deepcopy_VkDeviceGroupCommandBufferBeginInfo(Allocator* alloc, VkStructureType rootType,
                                                   const VkDeviceGroupCommandBufferBeginInfo* from,
                                                   VkDeviceGroupCommandBufferBeginInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2360,8 +2071,6 @@ void deepcopy_VkDeviceGroupCommandBufferBeginInfo(Allocator* alloc, VkStructureT
 void deepcopy_VkDeviceGroupSubmitInfo(Allocator* alloc, VkStructureType rootType,
                                       const VkDeviceGroupSubmitInfo* from,
                                       VkDeviceGroupSubmitInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2398,8 +2107,6 @@ void deepcopy_VkDeviceGroupSubmitInfo(Allocator* alloc, VkStructureType rootType
 void deepcopy_VkDeviceGroupBindSparseInfo(Allocator* alloc, VkStructureType rootType,
                                           const VkDeviceGroupBindSparseInfo* from,
                                           VkDeviceGroupBindSparseInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2420,8 +2127,6 @@ void deepcopy_VkDeviceGroupBindSparseInfo(Allocator* alloc, VkStructureType root
 void deepcopy_VkBindBufferMemoryDeviceGroupInfo(Allocator* alloc, VkStructureType rootType,
                                                 const VkBindBufferMemoryDeviceGroupInfo* from,
                                                 VkBindBufferMemoryDeviceGroupInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2447,8 +2152,6 @@ void deepcopy_VkBindBufferMemoryDeviceGroupInfo(Allocator* alloc, VkStructureTyp
 void deepcopy_VkBindImageMemoryDeviceGroupInfo(Allocator* alloc, VkStructureType rootType,
                                                const VkBindImageMemoryDeviceGroupInfo* from,
                                                VkBindImageMemoryDeviceGroupInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2469,16 +2172,14 @@ void deepcopy_VkBindImageMemoryDeviceGroupInfo(Allocator* alloc, VkStructureType
         to->pDeviceIndices = (uint32_t*)alloc->dupArray(
             from->pDeviceIndices, from->deviceIndexCount * sizeof(const uint32_t));
     }
-    if (from) {
-        to->pSplitInstanceBindRegions = nullptr;
-        if (from->pSplitInstanceBindRegions) {
-            to->pSplitInstanceBindRegions = (VkRect2D*)alloc->alloc(
-                from->splitInstanceBindRegionCount * sizeof(const VkRect2D));
-            to->splitInstanceBindRegionCount = from->splitInstanceBindRegionCount;
-            for (uint32_t i = 0; i < (uint32_t)from->splitInstanceBindRegionCount; ++i) {
-                deepcopy_VkRect2D(alloc, rootType, from->pSplitInstanceBindRegions + i,
-                                  (VkRect2D*)(to->pSplitInstanceBindRegions + i));
-            }
+    to->pSplitInstanceBindRegions = nullptr;
+    if (from->pSplitInstanceBindRegions) {
+        to->pSplitInstanceBindRegions =
+            (VkRect2D*)alloc->alloc(from->splitInstanceBindRegionCount * sizeof(const VkRect2D));
+        to->splitInstanceBindRegionCount = from->splitInstanceBindRegionCount;
+        for (uint32_t i = 0; i < (uint32_t)from->splitInstanceBindRegionCount; ++i) {
+            deepcopy_VkRect2D(alloc, rootType, from->pSplitInstanceBindRegions + i,
+                              (VkRect2D*)(to->pSplitInstanceBindRegions + i));
         }
     }
 }
@@ -2486,8 +2187,6 @@ void deepcopy_VkBindImageMemoryDeviceGroupInfo(Allocator* alloc, VkStructureType
 void deepcopy_VkPhysicalDeviceGroupProperties(Allocator* alloc, VkStructureType rootType,
                                               const VkPhysicalDeviceGroupProperties* from,
                                               VkPhysicalDeviceGroupProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2510,8 +2209,6 @@ void deepcopy_VkPhysicalDeviceGroupProperties(Allocator* alloc, VkStructureType 
 void deepcopy_VkDeviceGroupDeviceCreateInfo(Allocator* alloc, VkStructureType rootType,
                                             const VkDeviceGroupDeviceCreateInfo* from,
                                             VkDeviceGroupDeviceCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2537,8 +2234,6 @@ void deepcopy_VkDeviceGroupDeviceCreateInfo(Allocator* alloc, VkStructureType ro
 void deepcopy_VkBufferMemoryRequirementsInfo2(Allocator* alloc, VkStructureType rootType,
                                               const VkBufferMemoryRequirementsInfo2* from,
                                               VkBufferMemoryRequirementsInfo2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2559,8 +2254,6 @@ void deepcopy_VkBufferMemoryRequirementsInfo2(Allocator* alloc, VkStructureType 
 void deepcopy_VkImageMemoryRequirementsInfo2(Allocator* alloc, VkStructureType rootType,
                                              const VkImageMemoryRequirementsInfo2* from,
                                              VkImageMemoryRequirementsInfo2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2581,8 +2274,6 @@ void deepcopy_VkImageMemoryRequirementsInfo2(Allocator* alloc, VkStructureType r
 void deepcopy_VkImageSparseMemoryRequirementsInfo2(Allocator* alloc, VkStructureType rootType,
                                                    const VkImageSparseMemoryRequirementsInfo2* from,
                                                    VkImageSparseMemoryRequirementsInfo2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2602,8 +2293,6 @@ void deepcopy_VkImageSparseMemoryRequirementsInfo2(Allocator* alloc, VkStructure
 
 void deepcopy_VkMemoryRequirements2(Allocator* alloc, VkStructureType rootType,
                                     const VkMemoryRequirements2* from, VkMemoryRequirements2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2626,8 +2315,6 @@ void deepcopy_VkMemoryRequirements2(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkSparseImageMemoryRequirements2(Allocator* alloc, VkStructureType rootType,
                                                const VkSparseImageMemoryRequirements2* from,
                                                VkSparseImageMemoryRequirements2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2651,8 +2338,6 @@ void deepcopy_VkSparseImageMemoryRequirements2(Allocator* alloc, VkStructureType
 void deepcopy_VkPhysicalDeviceFeatures2(Allocator* alloc, VkStructureType rootType,
                                         const VkPhysicalDeviceFeatures2* from,
                                         VkPhysicalDeviceFeatures2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2675,8 +2360,6 @@ void deepcopy_VkPhysicalDeviceFeatures2(Allocator* alloc, VkStructureType rootTy
 void deepcopy_VkPhysicalDeviceProperties2(Allocator* alloc, VkStructureType rootType,
                                           const VkPhysicalDeviceProperties2* from,
                                           VkPhysicalDeviceProperties2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2698,8 +2381,6 @@ void deepcopy_VkPhysicalDeviceProperties2(Allocator* alloc, VkStructureType root
 
 void deepcopy_VkFormatProperties2(Allocator* alloc, VkStructureType rootType,
                                   const VkFormatProperties2* from, VkFormatProperties2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2722,8 +2403,6 @@ void deepcopy_VkFormatProperties2(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkImageFormatProperties2(Allocator* alloc, VkStructureType rootType,
                                        const VkImageFormatProperties2* from,
                                        VkImageFormatProperties2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2746,8 +2425,6 @@ void deepcopy_VkImageFormatProperties2(Allocator* alloc, VkStructureType rootTyp
 void deepcopy_VkPhysicalDeviceImageFormatInfo2(Allocator* alloc, VkStructureType rootType,
                                                const VkPhysicalDeviceImageFormatInfo2* from,
                                                VkPhysicalDeviceImageFormatInfo2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2768,8 +2445,6 @@ void deepcopy_VkPhysicalDeviceImageFormatInfo2(Allocator* alloc, VkStructureType
 void deepcopy_VkQueueFamilyProperties2(Allocator* alloc, VkStructureType rootType,
                                        const VkQueueFamilyProperties2* from,
                                        VkQueueFamilyProperties2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2792,8 +2467,6 @@ void deepcopy_VkQueueFamilyProperties2(Allocator* alloc, VkStructureType rootTyp
 void deepcopy_VkPhysicalDeviceMemoryProperties2(Allocator* alloc, VkStructureType rootType,
                                                 const VkPhysicalDeviceMemoryProperties2* from,
                                                 VkPhysicalDeviceMemoryProperties2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2817,8 +2490,6 @@ void deepcopy_VkPhysicalDeviceMemoryProperties2(Allocator* alloc, VkStructureTyp
 void deepcopy_VkSparseImageFormatProperties2(Allocator* alloc, VkStructureType rootType,
                                              const VkSparseImageFormatProperties2* from,
                                              VkSparseImageFormatProperties2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2841,8 +2512,6 @@ void deepcopy_VkSparseImageFormatProperties2(Allocator* alloc, VkStructureType r
 void deepcopy_VkPhysicalDeviceSparseImageFormatInfo2(
     Allocator* alloc, VkStructureType rootType, const VkPhysicalDeviceSparseImageFormatInfo2* from,
     VkPhysicalDeviceSparseImageFormatInfo2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2863,8 +2532,6 @@ void deepcopy_VkPhysicalDeviceSparseImageFormatInfo2(
 void deepcopy_VkImageViewUsageCreateInfo(Allocator* alloc, VkStructureType rootType,
                                          const VkImageViewUsageCreateInfo* from,
                                          VkImageViewUsageCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2885,8 +2552,6 @@ void deepcopy_VkImageViewUsageCreateInfo(Allocator* alloc, VkStructureType rootT
 void deepcopy_VkPhysicalDeviceProtectedMemoryFeatures(
     Allocator* alloc, VkStructureType rootType, const VkPhysicalDeviceProtectedMemoryFeatures* from,
     VkPhysicalDeviceProtectedMemoryFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2908,8 +2573,6 @@ void deepcopy_VkPhysicalDeviceProtectedMemoryProperties(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceProtectedMemoryProperties* from,
     VkPhysicalDeviceProtectedMemoryProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2929,8 +2592,6 @@ void deepcopy_VkPhysicalDeviceProtectedMemoryProperties(
 
 void deepcopy_VkDeviceQueueInfo2(Allocator* alloc, VkStructureType rootType,
                                  const VkDeviceQueueInfo2* from, VkDeviceQueueInfo2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2950,8 +2611,6 @@ void deepcopy_VkDeviceQueueInfo2(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkProtectedSubmitInfo(Allocator* alloc, VkStructureType rootType,
                                     const VkProtectedSubmitInfo* from, VkProtectedSubmitInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2972,8 +2631,6 @@ void deepcopy_VkProtectedSubmitInfo(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkBindImagePlaneMemoryInfo(Allocator* alloc, VkStructureType rootType,
                                          const VkBindImagePlaneMemoryInfo* from,
                                          VkBindImagePlaneMemoryInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -2994,8 +2651,6 @@ void deepcopy_VkBindImagePlaneMemoryInfo(Allocator* alloc, VkStructureType rootT
 void deepcopy_VkImagePlaneMemoryRequirementsInfo(Allocator* alloc, VkStructureType rootType,
                                                  const VkImagePlaneMemoryRequirementsInfo* from,
                                                  VkImagePlaneMemoryRequirementsInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3016,16 +2671,12 @@ void deepcopy_VkImagePlaneMemoryRequirementsInfo(Allocator* alloc, VkStructureTy
 void deepcopy_VkExternalMemoryProperties(Allocator* alloc, VkStructureType rootType,
                                          const VkExternalMemoryProperties* from,
                                          VkExternalMemoryProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkPhysicalDeviceExternalImageFormatInfo(
     Allocator* alloc, VkStructureType rootType, const VkPhysicalDeviceExternalImageFormatInfo* from,
     VkPhysicalDeviceExternalImageFormatInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3046,8 +2697,6 @@ void deepcopy_VkPhysicalDeviceExternalImageFormatInfo(
 void deepcopy_VkExternalImageFormatProperties(Allocator* alloc, VkStructureType rootType,
                                               const VkExternalImageFormatProperties* from,
                                               VkExternalImageFormatProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3071,8 +2720,6 @@ void deepcopy_VkExternalImageFormatProperties(Allocator* alloc, VkStructureType 
 void deepcopy_VkPhysicalDeviceExternalBufferInfo(Allocator* alloc, VkStructureType rootType,
                                                  const VkPhysicalDeviceExternalBufferInfo* from,
                                                  VkPhysicalDeviceExternalBufferInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3093,8 +2740,6 @@ void deepcopy_VkPhysicalDeviceExternalBufferInfo(Allocator* alloc, VkStructureTy
 void deepcopy_VkExternalBufferProperties(Allocator* alloc, VkStructureType rootType,
                                          const VkExternalBufferProperties* from,
                                          VkExternalBufferProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3118,8 +2763,6 @@ void deepcopy_VkExternalBufferProperties(Allocator* alloc, VkStructureType rootT
 void deepcopy_VkPhysicalDeviceIDProperties(Allocator* alloc, VkStructureType rootType,
                                            const VkPhysicalDeviceIDProperties* from,
                                            VkPhysicalDeviceIDProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3143,8 +2786,6 @@ void deepcopy_VkPhysicalDeviceIDProperties(Allocator* alloc, VkStructureType roo
 void deepcopy_VkExternalMemoryImageCreateInfo(Allocator* alloc, VkStructureType rootType,
                                               const VkExternalMemoryImageCreateInfo* from,
                                               VkExternalMemoryImageCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3165,8 +2806,6 @@ void deepcopy_VkExternalMemoryImageCreateInfo(Allocator* alloc, VkStructureType 
 void deepcopy_VkExternalMemoryBufferCreateInfo(Allocator* alloc, VkStructureType rootType,
                                                const VkExternalMemoryBufferCreateInfo* from,
                                                VkExternalMemoryBufferCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3187,8 +2826,6 @@ void deepcopy_VkExternalMemoryBufferCreateInfo(Allocator* alloc, VkStructureType
 void deepcopy_VkExportMemoryAllocateInfo(Allocator* alloc, VkStructureType rootType,
                                          const VkExportMemoryAllocateInfo* from,
                                          VkExportMemoryAllocateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3209,8 +2846,6 @@ void deepcopy_VkExportMemoryAllocateInfo(Allocator* alloc, VkStructureType rootT
 void deepcopy_VkPhysicalDeviceExternalFenceInfo(Allocator* alloc, VkStructureType rootType,
                                                 const VkPhysicalDeviceExternalFenceInfo* from,
                                                 VkPhysicalDeviceExternalFenceInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3231,8 +2866,6 @@ void deepcopy_VkPhysicalDeviceExternalFenceInfo(Allocator* alloc, VkStructureTyp
 void deepcopy_VkExternalFenceProperties(Allocator* alloc, VkStructureType rootType,
                                         const VkExternalFenceProperties* from,
                                         VkExternalFenceProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3253,8 +2886,6 @@ void deepcopy_VkExternalFenceProperties(Allocator* alloc, VkStructureType rootTy
 void deepcopy_VkExportFenceCreateInfo(Allocator* alloc, VkStructureType rootType,
                                       const VkExportFenceCreateInfo* from,
                                       VkExportFenceCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3275,8 +2906,6 @@ void deepcopy_VkExportFenceCreateInfo(Allocator* alloc, VkStructureType rootType
 void deepcopy_VkExportSemaphoreCreateInfo(Allocator* alloc, VkStructureType rootType,
                                           const VkExportSemaphoreCreateInfo* from,
                                           VkExportSemaphoreCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3297,8 +2926,6 @@ void deepcopy_VkExportSemaphoreCreateInfo(Allocator* alloc, VkStructureType root
 void deepcopy_VkPhysicalDeviceExternalSemaphoreInfo(
     Allocator* alloc, VkStructureType rootType, const VkPhysicalDeviceExternalSemaphoreInfo* from,
     VkPhysicalDeviceExternalSemaphoreInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3319,8 +2946,6 @@ void deepcopy_VkPhysicalDeviceExternalSemaphoreInfo(
 void deepcopy_VkExternalSemaphoreProperties(Allocator* alloc, VkStructureType rootType,
                                             const VkExternalSemaphoreProperties* from,
                                             VkExternalSemaphoreProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3343,8 +2968,6 @@ void deepcopy_VkExternalSemaphoreProperties(Allocator* alloc, VkStructureType ro
 void deepcopy_VkPhysicalDeviceSubgroupProperties(Allocator* alloc, VkStructureType rootType,
                                                  const VkPhysicalDeviceSubgroupProperties* from,
                                                  VkPhysicalDeviceSubgroupProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3365,8 +2988,6 @@ void deepcopy_VkPhysicalDeviceSubgroupProperties(Allocator* alloc, VkStructureTy
 void deepcopy_VkPhysicalDevice16BitStorageFeatures(Allocator* alloc, VkStructureType rootType,
                                                    const VkPhysicalDevice16BitStorageFeatures* from,
                                                    VkPhysicalDevice16BitStorageFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3388,8 +3009,6 @@ void deepcopy_VkPhysicalDeviceVariablePointersFeatures(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceVariablePointersFeatures* from,
     VkPhysicalDeviceVariablePointersFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3410,16 +3029,12 @@ void deepcopy_VkPhysicalDeviceVariablePointersFeatures(
 void deepcopy_VkDescriptorUpdateTemplateEntry(Allocator* alloc, VkStructureType rootType,
                                               const VkDescriptorUpdateTemplateEntry* from,
                                               VkDescriptorUpdateTemplateEntry* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkDescriptorUpdateTemplateCreateInfo(Allocator* alloc, VkStructureType rootType,
                                                    const VkDescriptorUpdateTemplateCreateInfo* from,
                                                    VkDescriptorUpdateTemplateCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3435,17 +3050,15 @@ void deepcopy_VkDescriptorUpdateTemplateCreateInfo(Allocator* alloc, VkStructure
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pDescriptorUpdateEntries = nullptr;
-        if (from->pDescriptorUpdateEntries) {
-            to->pDescriptorUpdateEntries = (VkDescriptorUpdateTemplateEntry*)alloc->alloc(
-                from->descriptorUpdateEntryCount * sizeof(const VkDescriptorUpdateTemplateEntry));
-            to->descriptorUpdateEntryCount = from->descriptorUpdateEntryCount;
-            for (uint32_t i = 0; i < (uint32_t)from->descriptorUpdateEntryCount; ++i) {
-                deepcopy_VkDescriptorUpdateTemplateEntry(
-                    alloc, rootType, from->pDescriptorUpdateEntries + i,
-                    (VkDescriptorUpdateTemplateEntry*)(to->pDescriptorUpdateEntries + i));
-            }
+    to->pDescriptorUpdateEntries = nullptr;
+    if (from->pDescriptorUpdateEntries) {
+        to->pDescriptorUpdateEntries = (VkDescriptorUpdateTemplateEntry*)alloc->alloc(
+            from->descriptorUpdateEntryCount * sizeof(const VkDescriptorUpdateTemplateEntry));
+        to->descriptorUpdateEntryCount = from->descriptorUpdateEntryCount;
+        for (uint32_t i = 0; i < (uint32_t)from->descriptorUpdateEntryCount; ++i) {
+            deepcopy_VkDescriptorUpdateTemplateEntry(
+                alloc, rootType, from->pDescriptorUpdateEntries + i,
+                (VkDescriptorUpdateTemplateEntry*)(to->pDescriptorUpdateEntries + i));
         }
     }
 }
@@ -3453,8 +3066,6 @@ void deepcopy_VkDescriptorUpdateTemplateCreateInfo(Allocator* alloc, VkStructure
 void deepcopy_VkPhysicalDeviceMaintenance3Properties(
     Allocator* alloc, VkStructureType rootType, const VkPhysicalDeviceMaintenance3Properties* from,
     VkPhysicalDeviceMaintenance3Properties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3475,8 +3086,6 @@ void deepcopy_VkPhysicalDeviceMaintenance3Properties(
 void deepcopy_VkDescriptorSetLayoutSupport(Allocator* alloc, VkStructureType rootType,
                                            const VkDescriptorSetLayoutSupport* from,
                                            VkDescriptorSetLayoutSupport* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3497,8 +3106,6 @@ void deepcopy_VkDescriptorSetLayoutSupport(Allocator* alloc, VkStructureType roo
 void deepcopy_VkSamplerYcbcrConversionCreateInfo(Allocator* alloc, VkStructureType rootType,
                                                  const VkSamplerYcbcrConversionCreateInfo* from,
                                                  VkSamplerYcbcrConversionCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3521,8 +3128,6 @@ void deepcopy_VkSamplerYcbcrConversionCreateInfo(Allocator* alloc, VkStructureTy
 void deepcopy_VkSamplerYcbcrConversionInfo(Allocator* alloc, VkStructureType rootType,
                                            const VkSamplerYcbcrConversionInfo* from,
                                            VkSamplerYcbcrConversionInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3544,8 +3149,6 @@ void deepcopy_VkPhysicalDeviceSamplerYcbcrConversionFeatures(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceSamplerYcbcrConversionFeatures* from,
     VkPhysicalDeviceSamplerYcbcrConversionFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3567,8 +3170,6 @@ void deepcopy_VkSamplerYcbcrConversionImageFormatProperties(
     Allocator* alloc, VkStructureType rootType,
     const VkSamplerYcbcrConversionImageFormatProperties* from,
     VkSamplerYcbcrConversionImageFormatProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3591,8 +3192,6 @@ void deepcopy_VkSamplerYcbcrConversionImageFormatProperties(
 void deepcopy_VkDeviceGroupRenderPassBeginInfo(Allocator* alloc, VkStructureType rootType,
                                                const VkDeviceGroupRenderPassBeginInfo* from,
                                                VkDeviceGroupRenderPassBeginInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3608,16 +3207,14 @@ void deepcopy_VkDeviceGroupRenderPassBeginInfo(Allocator* alloc, VkStructureType
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pDeviceRenderAreas = nullptr;
-        if (from->pDeviceRenderAreas) {
-            to->pDeviceRenderAreas =
-                (VkRect2D*)alloc->alloc(from->deviceRenderAreaCount * sizeof(const VkRect2D));
-            to->deviceRenderAreaCount = from->deviceRenderAreaCount;
-            for (uint32_t i = 0; i < (uint32_t)from->deviceRenderAreaCount; ++i) {
-                deepcopy_VkRect2D(alloc, rootType, from->pDeviceRenderAreas + i,
-                                  (VkRect2D*)(to->pDeviceRenderAreas + i));
-            }
+    to->pDeviceRenderAreas = nullptr;
+    if (from->pDeviceRenderAreas) {
+        to->pDeviceRenderAreas =
+            (VkRect2D*)alloc->alloc(from->deviceRenderAreaCount * sizeof(const VkRect2D));
+        to->deviceRenderAreaCount = from->deviceRenderAreaCount;
+        for (uint32_t i = 0; i < (uint32_t)from->deviceRenderAreaCount; ++i) {
+            deepcopy_VkRect2D(alloc, rootType, from->pDeviceRenderAreas + i,
+                              (VkRect2D*)(to->pDeviceRenderAreas + i));
         }
     }
 }
@@ -3625,8 +3222,6 @@ void deepcopy_VkDeviceGroupRenderPassBeginInfo(Allocator* alloc, VkStructureType
 void deepcopy_VkPhysicalDevicePointClippingProperties(
     Allocator* alloc, VkStructureType rootType, const VkPhysicalDevicePointClippingProperties* from,
     VkPhysicalDevicePointClippingProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3647,8 +3242,6 @@ void deepcopy_VkPhysicalDevicePointClippingProperties(
 void deepcopy_VkInputAttachmentAspectReference(Allocator* alloc, VkStructureType rootType,
                                                const VkInputAttachmentAspectReference* from,
                                                VkInputAttachmentAspectReference* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
@@ -3656,8 +3249,6 @@ void deepcopy_VkRenderPassInputAttachmentAspectCreateInfo(
     Allocator* alloc, VkStructureType rootType,
     const VkRenderPassInputAttachmentAspectCreateInfo* from,
     VkRenderPassInputAttachmentAspectCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3673,17 +3264,15 @@ void deepcopy_VkRenderPassInputAttachmentAspectCreateInfo(
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pAspectReferences = nullptr;
-        if (from->pAspectReferences) {
-            to->pAspectReferences = (VkInputAttachmentAspectReference*)alloc->alloc(
-                from->aspectReferenceCount * sizeof(const VkInputAttachmentAspectReference));
-            to->aspectReferenceCount = from->aspectReferenceCount;
-            for (uint32_t i = 0; i < (uint32_t)from->aspectReferenceCount; ++i) {
-                deepcopy_VkInputAttachmentAspectReference(
-                    alloc, rootType, from->pAspectReferences + i,
-                    (VkInputAttachmentAspectReference*)(to->pAspectReferences + i));
-            }
+    to->pAspectReferences = nullptr;
+    if (from->pAspectReferences) {
+        to->pAspectReferences = (VkInputAttachmentAspectReference*)alloc->alloc(
+            from->aspectReferenceCount * sizeof(const VkInputAttachmentAspectReference));
+        to->aspectReferenceCount = from->aspectReferenceCount;
+        for (uint32_t i = 0; i < (uint32_t)from->aspectReferenceCount; ++i) {
+            deepcopy_VkInputAttachmentAspectReference(
+                alloc, rootType, from->pAspectReferences + i,
+                (VkInputAttachmentAspectReference*)(to->pAspectReferences + i));
         }
     }
 }
@@ -3692,8 +3281,6 @@ void deepcopy_VkPipelineTessellationDomainOriginStateCreateInfo(
     Allocator* alloc, VkStructureType rootType,
     const VkPipelineTessellationDomainOriginStateCreateInfo* from,
     VkPipelineTessellationDomainOriginStateCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3714,8 +3301,6 @@ void deepcopy_VkPipelineTessellationDomainOriginStateCreateInfo(
 void deepcopy_VkRenderPassMultiviewCreateInfo(Allocator* alloc, VkStructureType rootType,
                                               const VkRenderPassMultiviewCreateInfo* from,
                                               VkRenderPassMultiviewCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3751,8 +3336,6 @@ void deepcopy_VkRenderPassMultiviewCreateInfo(Allocator* alloc, VkStructureType 
 void deepcopy_VkPhysicalDeviceMultiviewFeatures(Allocator* alloc, VkStructureType rootType,
                                                 const VkPhysicalDeviceMultiviewFeatures* from,
                                                 VkPhysicalDeviceMultiviewFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3773,8 +3356,6 @@ void deepcopy_VkPhysicalDeviceMultiviewFeatures(Allocator* alloc, VkStructureTyp
 void deepcopy_VkPhysicalDeviceMultiviewProperties(Allocator* alloc, VkStructureType rootType,
                                                   const VkPhysicalDeviceMultiviewProperties* from,
                                                   VkPhysicalDeviceMultiviewProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3796,8 +3377,6 @@ void deepcopy_VkPhysicalDeviceShaderDrawParametersFeatures(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceShaderDrawParametersFeatures* from,
     VkPhysicalDeviceShaderDrawParametersFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3819,16 +3398,12 @@ void deepcopy_VkPhysicalDeviceShaderDrawParametersFeatures(
 #ifdef VK_BASE_VERSION_1_2
 void deepcopy_VkConformanceVersion(Allocator* alloc, VkStructureType rootType,
                                    const VkConformanceVersion* from, VkConformanceVersion* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkPhysicalDeviceDriverProperties(Allocator* alloc, VkStructureType rootType,
                                                const VkPhysicalDeviceDriverProperties* from,
                                                VkPhysicalDeviceDriverProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3853,8 +3428,6 @@ void deepcopy_VkPhysicalDeviceDriverProperties(Allocator* alloc, VkStructureType
 void deepcopy_VkPhysicalDeviceVulkan11Features(Allocator* alloc, VkStructureType rootType,
                                                const VkPhysicalDeviceVulkan11Features* from,
                                                VkPhysicalDeviceVulkan11Features* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3875,8 +3448,6 @@ void deepcopy_VkPhysicalDeviceVulkan11Features(Allocator* alloc, VkStructureType
 void deepcopy_VkPhysicalDeviceVulkan11Properties(Allocator* alloc, VkStructureType rootType,
                                                  const VkPhysicalDeviceVulkan11Properties* from,
                                                  VkPhysicalDeviceVulkan11Properties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3900,8 +3471,6 @@ void deepcopy_VkPhysicalDeviceVulkan11Properties(Allocator* alloc, VkStructureTy
 void deepcopy_VkPhysicalDeviceVulkan12Features(Allocator* alloc, VkStructureType rootType,
                                                const VkPhysicalDeviceVulkan12Features* from,
                                                VkPhysicalDeviceVulkan12Features* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3922,8 +3491,6 @@ void deepcopy_VkPhysicalDeviceVulkan12Features(Allocator* alloc, VkStructureType
 void deepcopy_VkPhysicalDeviceVulkan12Properties(Allocator* alloc, VkStructureType rootType,
                                                  const VkPhysicalDeviceVulkan12Properties* from,
                                                  VkPhysicalDeviceVulkan12Properties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3948,8 +3515,6 @@ void deepcopy_VkPhysicalDeviceVulkan12Properties(Allocator* alloc, VkStructureTy
 void deepcopy_VkImageFormatListCreateInfo(Allocator* alloc, VkStructureType rootType,
                                           const VkImageFormatListCreateInfo* from,
                                           VkImageFormatListCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3976,8 +3541,6 @@ void deepcopy_VkPhysicalDeviceVulkanMemoryModelFeatures(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceVulkanMemoryModelFeatures* from,
     VkPhysicalDeviceVulkanMemoryModelFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -3998,8 +3561,6 @@ void deepcopy_VkPhysicalDeviceVulkanMemoryModelFeatures(
 void deepcopy_VkPhysicalDeviceHostQueryResetFeatures(
     Allocator* alloc, VkStructureType rootType, const VkPhysicalDeviceHostQueryResetFeatures* from,
     VkPhysicalDeviceHostQueryResetFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4021,8 +3582,6 @@ void deepcopy_VkPhysicalDeviceTimelineSemaphoreFeatures(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceTimelineSemaphoreFeatures* from,
     VkPhysicalDeviceTimelineSemaphoreFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4044,8 +3603,6 @@ void deepcopy_VkPhysicalDeviceTimelineSemaphoreProperties(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceTimelineSemaphoreProperties* from,
     VkPhysicalDeviceTimelineSemaphoreProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4066,8 +3623,6 @@ void deepcopy_VkPhysicalDeviceTimelineSemaphoreProperties(
 void deepcopy_VkSemaphoreTypeCreateInfo(Allocator* alloc, VkStructureType rootType,
                                         const VkSemaphoreTypeCreateInfo* from,
                                         VkSemaphoreTypeCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4088,8 +3643,6 @@ void deepcopy_VkSemaphoreTypeCreateInfo(Allocator* alloc, VkStructureType rootTy
 void deepcopy_VkTimelineSemaphoreSubmitInfo(Allocator* alloc, VkStructureType rootType,
                                             const VkTimelineSemaphoreSubmitInfo* from,
                                             VkTimelineSemaphoreSubmitInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4119,8 +3672,6 @@ void deepcopy_VkTimelineSemaphoreSubmitInfo(Allocator* alloc, VkStructureType ro
 
 void deepcopy_VkSemaphoreWaitInfo(Allocator* alloc, VkStructureType rootType,
                                   const VkSemaphoreWaitInfo* from, VkSemaphoreWaitInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4150,8 +3701,6 @@ void deepcopy_VkSemaphoreWaitInfo(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkSemaphoreSignalInfo(Allocator* alloc, VkStructureType rootType,
                                     const VkSemaphoreSignalInfo* from, VkSemaphoreSignalInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4173,8 +3722,6 @@ void deepcopy_VkPhysicalDeviceBufferDeviceAddressFeatures(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceBufferDeviceAddressFeatures* from,
     VkPhysicalDeviceBufferDeviceAddressFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4195,8 +3742,6 @@ void deepcopy_VkPhysicalDeviceBufferDeviceAddressFeatures(
 void deepcopy_VkBufferDeviceAddressInfo(Allocator* alloc, VkStructureType rootType,
                                         const VkBufferDeviceAddressInfo* from,
                                         VkBufferDeviceAddressInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4217,8 +3762,6 @@ void deepcopy_VkBufferDeviceAddressInfo(Allocator* alloc, VkStructureType rootTy
 void deepcopy_VkBufferOpaqueCaptureAddressCreateInfo(
     Allocator* alloc, VkStructureType rootType, const VkBufferOpaqueCaptureAddressCreateInfo* from,
     VkBufferOpaqueCaptureAddressCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4240,8 +3783,6 @@ void deepcopy_VkMemoryOpaqueCaptureAddressAllocateInfo(
     Allocator* alloc, VkStructureType rootType,
     const VkMemoryOpaqueCaptureAddressAllocateInfo* from,
     VkMemoryOpaqueCaptureAddressAllocateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4262,8 +3803,6 @@ void deepcopy_VkMemoryOpaqueCaptureAddressAllocateInfo(
 void deepcopy_VkDeviceMemoryOpaqueCaptureAddressInfo(
     Allocator* alloc, VkStructureType rootType, const VkDeviceMemoryOpaqueCaptureAddressInfo* from,
     VkDeviceMemoryOpaqueCaptureAddressInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4286,8 +3825,6 @@ void deepcopy_VkDeviceMemoryOpaqueCaptureAddressInfo(
 void deepcopy_VkPhysicalDevice8BitStorageFeatures(Allocator* alloc, VkStructureType rootType,
                                                   const VkPhysicalDevice8BitStorageFeatures* from,
                                                   VkPhysicalDevice8BitStorageFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4309,8 +3846,6 @@ void deepcopy_VkPhysicalDeviceShaderAtomicInt64Features(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceShaderAtomicInt64Features* from,
     VkPhysicalDeviceShaderAtomicInt64Features* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4332,8 +3867,6 @@ void deepcopy_VkPhysicalDeviceShaderFloat16Int8Features(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceShaderFloat16Int8Features* from,
     VkPhysicalDeviceShaderFloat16Int8Features* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4354,8 +3887,6 @@ void deepcopy_VkPhysicalDeviceShaderFloat16Int8Features(
 void deepcopy_VkPhysicalDeviceFloatControlsProperties(
     Allocator* alloc, VkStructureType rootType, const VkPhysicalDeviceFloatControlsProperties* from,
     VkPhysicalDeviceFloatControlsProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4377,8 +3908,6 @@ void deepcopy_VkDescriptorSetLayoutBindingFlagsCreateInfo(
     Allocator* alloc, VkStructureType rootType,
     const VkDescriptorSetLayoutBindingFlagsCreateInfo* from,
     VkDescriptorSetLayoutBindingFlagsCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4405,8 +3934,6 @@ void deepcopy_VkPhysicalDeviceDescriptorIndexingFeatures(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceDescriptorIndexingFeatures* from,
     VkPhysicalDeviceDescriptorIndexingFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4428,8 +3955,6 @@ void deepcopy_VkPhysicalDeviceDescriptorIndexingProperties(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceDescriptorIndexingProperties* from,
     VkPhysicalDeviceDescriptorIndexingProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4451,8 +3976,6 @@ void deepcopy_VkDescriptorSetVariableDescriptorCountAllocateInfo(
     Allocator* alloc, VkStructureType rootType,
     const VkDescriptorSetVariableDescriptorCountAllocateInfo* from,
     VkDescriptorSetVariableDescriptorCountAllocateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4479,8 +4002,6 @@ void deepcopy_VkDescriptorSetVariableDescriptorCountLayoutSupport(
     Allocator* alloc, VkStructureType rootType,
     const VkDescriptorSetVariableDescriptorCountLayoutSupport* from,
     VkDescriptorSetVariableDescriptorCountLayoutSupport* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4502,8 +4023,6 @@ void deepcopy_VkPhysicalDeviceScalarBlockLayoutFeatures(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceScalarBlockLayoutFeatures* from,
     VkPhysicalDeviceScalarBlockLayoutFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4524,8 +4043,6 @@ void deepcopy_VkPhysicalDeviceScalarBlockLayoutFeatures(
 void deepcopy_VkSamplerReductionModeCreateInfo(Allocator* alloc, VkStructureType rootType,
                                                const VkSamplerReductionModeCreateInfo* from,
                                                VkSamplerReductionModeCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4547,8 +4064,6 @@ void deepcopy_VkPhysicalDeviceSamplerFilterMinmaxProperties(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceSamplerFilterMinmaxProperties* from,
     VkPhysicalDeviceSamplerFilterMinmaxProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4570,8 +4085,6 @@ void deepcopy_VkPhysicalDeviceUniformBufferStandardLayoutFeatures(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceUniformBufferStandardLayoutFeatures* from,
     VkPhysicalDeviceUniformBufferStandardLayoutFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4593,8 +4106,6 @@ void deepcopy_VkPhysicalDeviceShaderSubgroupExtendedTypesFeatures(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceShaderSubgroupExtendedTypesFeatures* from,
     VkPhysicalDeviceShaderSubgroupExtendedTypesFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4617,8 +4128,6 @@ void deepcopy_VkPhysicalDeviceShaderSubgroupExtendedTypesFeatures(
 void deepcopy_VkAttachmentDescription2(Allocator* alloc, VkStructureType rootType,
                                        const VkAttachmentDescription2* from,
                                        VkAttachmentDescription2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4639,8 +4148,6 @@ void deepcopy_VkAttachmentDescription2(Allocator* alloc, VkStructureType rootTyp
 void deepcopy_VkAttachmentReference2(Allocator* alloc, VkStructureType rootType,
                                      const VkAttachmentReference2* from,
                                      VkAttachmentReference2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4660,8 +4167,6 @@ void deepcopy_VkAttachmentReference2(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkSubpassDescription2(Allocator* alloc, VkStructureType rootType,
                                     const VkSubpassDescription2* from, VkSubpassDescription2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4677,43 +4182,34 @@ void deepcopy_VkSubpassDescription2(Allocator* alloc, VkStructureType rootType,
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pInputAttachments = nullptr;
-        if (from->pInputAttachments) {
-            to->pInputAttachments = (VkAttachmentReference2*)alloc->alloc(
-                from->inputAttachmentCount * sizeof(const VkAttachmentReference2));
-            to->inputAttachmentCount = from->inputAttachmentCount;
-            for (uint32_t i = 0; i < (uint32_t)from->inputAttachmentCount; ++i) {
-                deepcopy_VkAttachmentReference2(
-                    alloc, rootType, from->pInputAttachments + i,
-                    (VkAttachmentReference2*)(to->pInputAttachments + i));
-            }
+    to->pInputAttachments = nullptr;
+    if (from->pInputAttachments) {
+        to->pInputAttachments = (VkAttachmentReference2*)alloc->alloc(
+            from->inputAttachmentCount * sizeof(const VkAttachmentReference2));
+        to->inputAttachmentCount = from->inputAttachmentCount;
+        for (uint32_t i = 0; i < (uint32_t)from->inputAttachmentCount; ++i) {
+            deepcopy_VkAttachmentReference2(alloc, rootType, from->pInputAttachments + i,
+                                            (VkAttachmentReference2*)(to->pInputAttachments + i));
         }
     }
-    if (from) {
-        to->pColorAttachments = nullptr;
-        if (from->pColorAttachments) {
-            to->pColorAttachments = (VkAttachmentReference2*)alloc->alloc(
-                from->colorAttachmentCount * sizeof(const VkAttachmentReference2));
-            to->colorAttachmentCount = from->colorAttachmentCount;
-            for (uint32_t i = 0; i < (uint32_t)from->colorAttachmentCount; ++i) {
-                deepcopy_VkAttachmentReference2(
-                    alloc, rootType, from->pColorAttachments + i,
-                    (VkAttachmentReference2*)(to->pColorAttachments + i));
-            }
+    to->pColorAttachments = nullptr;
+    if (from->pColorAttachments) {
+        to->pColorAttachments = (VkAttachmentReference2*)alloc->alloc(
+            from->colorAttachmentCount * sizeof(const VkAttachmentReference2));
+        to->colorAttachmentCount = from->colorAttachmentCount;
+        for (uint32_t i = 0; i < (uint32_t)from->colorAttachmentCount; ++i) {
+            deepcopy_VkAttachmentReference2(alloc, rootType, from->pColorAttachments + i,
+                                            (VkAttachmentReference2*)(to->pColorAttachments + i));
         }
     }
-    if (from) {
-        to->pResolveAttachments = nullptr;
-        if (from->pResolveAttachments) {
-            to->pResolveAttachments = (VkAttachmentReference2*)alloc->alloc(
-                from->colorAttachmentCount * sizeof(const VkAttachmentReference2));
-            to->colorAttachmentCount = from->colorAttachmentCount;
-            for (uint32_t i = 0; i < (uint32_t)from->colorAttachmentCount; ++i) {
-                deepcopy_VkAttachmentReference2(
-                    alloc, rootType, from->pResolveAttachments + i,
-                    (VkAttachmentReference2*)(to->pResolveAttachments + i));
-            }
+    to->pResolveAttachments = nullptr;
+    if (from->pResolveAttachments) {
+        to->pResolveAttachments = (VkAttachmentReference2*)alloc->alloc(
+            from->colorAttachmentCount * sizeof(const VkAttachmentReference2));
+        to->colorAttachmentCount = from->colorAttachmentCount;
+        for (uint32_t i = 0; i < (uint32_t)from->colorAttachmentCount; ++i) {
+            deepcopy_VkAttachmentReference2(alloc, rootType, from->pResolveAttachments + i,
+                                            (VkAttachmentReference2*)(to->pResolveAttachments + i));
         }
     }
     to->pDepthStencilAttachment = nullptr;
@@ -4732,8 +4228,6 @@ void deepcopy_VkSubpassDescription2(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkSubpassDependency2(Allocator* alloc, VkStructureType rootType,
                                    const VkSubpassDependency2* from, VkSubpassDependency2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4753,8 +4247,6 @@ void deepcopy_VkSubpassDependency2(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkSubpassBeginInfo(Allocator* alloc, VkStructureType rootType,
                                  const VkSubpassBeginInfo* from, VkSubpassBeginInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4774,8 +4266,6 @@ void deepcopy_VkSubpassBeginInfo(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkSubpassEndInfo(Allocator* alloc, VkStructureType rootType,
                                const VkSubpassEndInfo* from, VkSubpassEndInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4796,8 +4286,6 @@ void deepcopy_VkSubpassEndInfo(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkRenderPassCreateInfo2(Allocator* alloc, VkStructureType rootType,
                                       const VkRenderPassCreateInfo2* from,
                                       VkRenderPassCreateInfo2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4813,41 +4301,34 @@ void deepcopy_VkRenderPassCreateInfo2(Allocator* alloc, VkStructureType rootType
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pAttachments = nullptr;
-        if (from->pAttachments) {
-            to->pAttachments = (VkAttachmentDescription2*)alloc->alloc(
-                from->attachmentCount * sizeof(const VkAttachmentDescription2));
-            to->attachmentCount = from->attachmentCount;
-            for (uint32_t i = 0; i < (uint32_t)from->attachmentCount; ++i) {
-                deepcopy_VkAttachmentDescription2(
-                    alloc, rootType, from->pAttachments + i,
-                    (VkAttachmentDescription2*)(to->pAttachments + i));
-            }
+    to->pAttachments = nullptr;
+    if (from->pAttachments) {
+        to->pAttachments = (VkAttachmentDescription2*)alloc->alloc(
+            from->attachmentCount * sizeof(const VkAttachmentDescription2));
+        to->attachmentCount = from->attachmentCount;
+        for (uint32_t i = 0; i < (uint32_t)from->attachmentCount; ++i) {
+            deepcopy_VkAttachmentDescription2(alloc, rootType, from->pAttachments + i,
+                                              (VkAttachmentDescription2*)(to->pAttachments + i));
         }
     }
-    if (from) {
-        to->pSubpasses = nullptr;
-        if (from->pSubpasses) {
-            to->pSubpasses = (VkSubpassDescription2*)alloc->alloc(
-                from->subpassCount * sizeof(const VkSubpassDescription2));
-            to->subpassCount = from->subpassCount;
-            for (uint32_t i = 0; i < (uint32_t)from->subpassCount; ++i) {
-                deepcopy_VkSubpassDescription2(alloc, rootType, from->pSubpasses + i,
-                                               (VkSubpassDescription2*)(to->pSubpasses + i));
-            }
+    to->pSubpasses = nullptr;
+    if (from->pSubpasses) {
+        to->pSubpasses = (VkSubpassDescription2*)alloc->alloc(from->subpassCount *
+                                                              sizeof(const VkSubpassDescription2));
+        to->subpassCount = from->subpassCount;
+        for (uint32_t i = 0; i < (uint32_t)from->subpassCount; ++i) {
+            deepcopy_VkSubpassDescription2(alloc, rootType, from->pSubpasses + i,
+                                           (VkSubpassDescription2*)(to->pSubpasses + i));
         }
     }
-    if (from) {
-        to->pDependencies = nullptr;
-        if (from->pDependencies) {
-            to->pDependencies = (VkSubpassDependency2*)alloc->alloc(
-                from->dependencyCount * sizeof(const VkSubpassDependency2));
-            to->dependencyCount = from->dependencyCount;
-            for (uint32_t i = 0; i < (uint32_t)from->dependencyCount; ++i) {
-                deepcopy_VkSubpassDependency2(alloc, rootType, from->pDependencies + i,
-                                              (VkSubpassDependency2*)(to->pDependencies + i));
-            }
+    to->pDependencies = nullptr;
+    if (from->pDependencies) {
+        to->pDependencies = (VkSubpassDependency2*)alloc->alloc(from->dependencyCount *
+                                                                sizeof(const VkSubpassDependency2));
+        to->dependencyCount = from->dependencyCount;
+        for (uint32_t i = 0; i < (uint32_t)from->dependencyCount; ++i) {
+            deepcopy_VkSubpassDependency2(alloc, rootType, from->pDependencies + i,
+                                          (VkSubpassDependency2*)(to->pDependencies + i));
         }
     }
     to->pCorrelatedViewMasks = nullptr;
@@ -4860,8 +4341,6 @@ void deepcopy_VkRenderPassCreateInfo2(Allocator* alloc, VkStructureType rootType
 void deepcopy_VkSubpassDescriptionDepthStencilResolve(
     Allocator* alloc, VkStructureType rootType, const VkSubpassDescriptionDepthStencilResolve* from,
     VkSubpassDescriptionDepthStencilResolve* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4891,8 +4370,6 @@ void deepcopy_VkPhysicalDeviceDepthStencilResolveProperties(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceDepthStencilResolveProperties* from,
     VkPhysicalDeviceDepthStencilResolveProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4913,8 +4390,6 @@ void deepcopy_VkPhysicalDeviceDepthStencilResolveProperties(
 void deepcopy_VkImageStencilUsageCreateInfo(Allocator* alloc, VkStructureType rootType,
                                             const VkImageStencilUsageCreateInfo* from,
                                             VkImageStencilUsageCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4936,8 +4411,6 @@ void deepcopy_VkPhysicalDeviceImagelessFramebufferFeatures(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceImagelessFramebufferFeatures* from,
     VkPhysicalDeviceImagelessFramebufferFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4958,8 +4431,6 @@ void deepcopy_VkPhysicalDeviceImagelessFramebufferFeatures(
 void deepcopy_VkFramebufferAttachmentImageInfo(Allocator* alloc, VkStructureType rootType,
                                                const VkFramebufferAttachmentImageInfo* from,
                                                VkFramebufferAttachmentImageInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -4985,8 +4456,6 @@ void deepcopy_VkFramebufferAttachmentImageInfo(Allocator* alloc, VkStructureType
 void deepcopy_VkRenderPassAttachmentBeginInfo(Allocator* alloc, VkStructureType rootType,
                                               const VkRenderPassAttachmentBeginInfo* from,
                                               VkRenderPassAttachmentBeginInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5012,8 +4481,6 @@ void deepcopy_VkRenderPassAttachmentBeginInfo(Allocator* alloc, VkStructureType 
 void deepcopy_VkFramebufferAttachmentsCreateInfo(Allocator* alloc, VkStructureType rootType,
                                                  const VkFramebufferAttachmentsCreateInfo* from,
                                                  VkFramebufferAttachmentsCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5029,17 +4496,15 @@ void deepcopy_VkFramebufferAttachmentsCreateInfo(Allocator* alloc, VkStructureTy
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pAttachmentImageInfos = nullptr;
-        if (from->pAttachmentImageInfos) {
-            to->pAttachmentImageInfos = (VkFramebufferAttachmentImageInfo*)alloc->alloc(
-                from->attachmentImageInfoCount * sizeof(const VkFramebufferAttachmentImageInfo));
-            to->attachmentImageInfoCount = from->attachmentImageInfoCount;
-            for (uint32_t i = 0; i < (uint32_t)from->attachmentImageInfoCount; ++i) {
-                deepcopy_VkFramebufferAttachmentImageInfo(
-                    alloc, rootType, from->pAttachmentImageInfos + i,
-                    (VkFramebufferAttachmentImageInfo*)(to->pAttachmentImageInfos + i));
-            }
+    to->pAttachmentImageInfos = nullptr;
+    if (from->pAttachmentImageInfos) {
+        to->pAttachmentImageInfos = (VkFramebufferAttachmentImageInfo*)alloc->alloc(
+            from->attachmentImageInfoCount * sizeof(const VkFramebufferAttachmentImageInfo));
+        to->attachmentImageInfoCount = from->attachmentImageInfoCount;
+        for (uint32_t i = 0; i < (uint32_t)from->attachmentImageInfoCount; ++i) {
+            deepcopy_VkFramebufferAttachmentImageInfo(
+                alloc, rootType, from->pAttachmentImageInfos + i,
+                (VkFramebufferAttachmentImageInfo*)(to->pAttachmentImageInfos + i));
         }
     }
 }
@@ -5048,8 +4513,6 @@ void deepcopy_VkPhysicalDeviceSeparateDepthStencilLayoutsFeatures(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceSeparateDepthStencilLayoutsFeatures* from,
     VkPhysicalDeviceSeparateDepthStencilLayoutsFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5070,8 +4533,6 @@ void deepcopy_VkPhysicalDeviceSeparateDepthStencilLayoutsFeatures(
 void deepcopy_VkAttachmentReferenceStencilLayout(Allocator* alloc, VkStructureType rootType,
                                                  const VkAttachmentReferenceStencilLayout* from,
                                                  VkAttachmentReferenceStencilLayout* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5092,8 +4553,6 @@ void deepcopy_VkAttachmentReferenceStencilLayout(Allocator* alloc, VkStructureTy
 void deepcopy_VkAttachmentDescriptionStencilLayout(Allocator* alloc, VkStructureType rootType,
                                                    const VkAttachmentDescriptionStencilLayout* from,
                                                    VkAttachmentDescriptionStencilLayout* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5116,8 +4575,6 @@ void deepcopy_VkAttachmentDescriptionStencilLayout(Allocator* alloc, VkStructure
 void deepcopy_VkPhysicalDeviceVulkan13Features(Allocator* alloc, VkStructureType rootType,
                                                const VkPhysicalDeviceVulkan13Features* from,
                                                VkPhysicalDeviceVulkan13Features* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5138,8 +4595,6 @@ void deepcopy_VkPhysicalDeviceVulkan13Features(Allocator* alloc, VkStructureType
 void deepcopy_VkPhysicalDeviceVulkan13Properties(Allocator* alloc, VkStructureType rootType,
                                                  const VkPhysicalDeviceVulkan13Properties* from,
                                                  VkPhysicalDeviceVulkan13Properties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5160,8 +4615,6 @@ void deepcopy_VkPhysicalDeviceVulkan13Properties(Allocator* alloc, VkStructureTy
 void deepcopy_VkPhysicalDeviceToolProperties(Allocator* alloc, VkStructureType rootType,
                                              const VkPhysicalDeviceToolProperties* from,
                                              VkPhysicalDeviceToolProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5186,8 +4639,6 @@ void deepcopy_VkPhysicalDeviceToolProperties(Allocator* alloc, VkStructureType r
 void deepcopy_VkPhysicalDevicePrivateDataFeatures(Allocator* alloc, VkStructureType rootType,
                                                   const VkPhysicalDevicePrivateDataFeatures* from,
                                                   VkPhysicalDevicePrivateDataFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5208,8 +4659,6 @@ void deepcopy_VkPhysicalDevicePrivateDataFeatures(Allocator* alloc, VkStructureT
 void deepcopy_VkDevicePrivateDataCreateInfo(Allocator* alloc, VkStructureType rootType,
                                             const VkDevicePrivateDataCreateInfo* from,
                                             VkDevicePrivateDataCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5230,8 +4679,6 @@ void deepcopy_VkDevicePrivateDataCreateInfo(Allocator* alloc, VkStructureType ro
 void deepcopy_VkPrivateDataSlotCreateInfo(Allocator* alloc, VkStructureType rootType,
                                           const VkPrivateDataSlotCreateInfo* from,
                                           VkPrivateDataSlotCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5251,8 +4698,6 @@ void deepcopy_VkPrivateDataSlotCreateInfo(Allocator* alloc, VkStructureType root
 
 void deepcopy_VkMemoryBarrier2(Allocator* alloc, VkStructureType rootType,
                                const VkMemoryBarrier2* from, VkMemoryBarrier2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5273,8 +4718,6 @@ void deepcopy_VkMemoryBarrier2(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkBufferMemoryBarrier2(Allocator* alloc, VkStructureType rootType,
                                      const VkBufferMemoryBarrier2* from,
                                      VkBufferMemoryBarrier2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5294,8 +4737,6 @@ void deepcopy_VkBufferMemoryBarrier2(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkImageMemoryBarrier2(Allocator* alloc, VkStructureType rootType,
                                     const VkImageMemoryBarrier2* from, VkImageMemoryBarrier2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5317,8 +4758,6 @@ void deepcopy_VkImageMemoryBarrier2(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkDependencyInfo(Allocator* alloc, VkStructureType rootType,
                                const VkDependencyInfo* from, VkDependencyInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5334,50 +4773,41 @@ void deepcopy_VkDependencyInfo(Allocator* alloc, VkStructureType rootType,
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pMemoryBarriers = nullptr;
-        if (from->pMemoryBarriers) {
-            to->pMemoryBarriers = (VkMemoryBarrier2*)alloc->alloc(from->memoryBarrierCount *
-                                                                  sizeof(const VkMemoryBarrier2));
-            to->memoryBarrierCount = from->memoryBarrierCount;
-            for (uint32_t i = 0; i < (uint32_t)from->memoryBarrierCount; ++i) {
-                deepcopy_VkMemoryBarrier2(alloc, rootType, from->pMemoryBarriers + i,
-                                          (VkMemoryBarrier2*)(to->pMemoryBarriers + i));
-            }
+    to->pMemoryBarriers = nullptr;
+    if (from->pMemoryBarriers) {
+        to->pMemoryBarriers = (VkMemoryBarrier2*)alloc->alloc(from->memoryBarrierCount *
+                                                              sizeof(const VkMemoryBarrier2));
+        to->memoryBarrierCount = from->memoryBarrierCount;
+        for (uint32_t i = 0; i < (uint32_t)from->memoryBarrierCount; ++i) {
+            deepcopy_VkMemoryBarrier2(alloc, rootType, from->pMemoryBarriers + i,
+                                      (VkMemoryBarrier2*)(to->pMemoryBarriers + i));
         }
     }
-    if (from) {
-        to->pBufferMemoryBarriers = nullptr;
-        if (from->pBufferMemoryBarriers) {
-            to->pBufferMemoryBarriers = (VkBufferMemoryBarrier2*)alloc->alloc(
-                from->bufferMemoryBarrierCount * sizeof(const VkBufferMemoryBarrier2));
-            to->bufferMemoryBarrierCount = from->bufferMemoryBarrierCount;
-            for (uint32_t i = 0; i < (uint32_t)from->bufferMemoryBarrierCount; ++i) {
-                deepcopy_VkBufferMemoryBarrier2(
-                    alloc, rootType, from->pBufferMemoryBarriers + i,
-                    (VkBufferMemoryBarrier2*)(to->pBufferMemoryBarriers + i));
-            }
+    to->pBufferMemoryBarriers = nullptr;
+    if (from->pBufferMemoryBarriers) {
+        to->pBufferMemoryBarriers = (VkBufferMemoryBarrier2*)alloc->alloc(
+            from->bufferMemoryBarrierCount * sizeof(const VkBufferMemoryBarrier2));
+        to->bufferMemoryBarrierCount = from->bufferMemoryBarrierCount;
+        for (uint32_t i = 0; i < (uint32_t)from->bufferMemoryBarrierCount; ++i) {
+            deepcopy_VkBufferMemoryBarrier2(
+                alloc, rootType, from->pBufferMemoryBarriers + i,
+                (VkBufferMemoryBarrier2*)(to->pBufferMemoryBarriers + i));
         }
     }
-    if (from) {
-        to->pImageMemoryBarriers = nullptr;
-        if (from->pImageMemoryBarriers) {
-            to->pImageMemoryBarriers = (VkImageMemoryBarrier2*)alloc->alloc(
-                from->imageMemoryBarrierCount * sizeof(const VkImageMemoryBarrier2));
-            to->imageMemoryBarrierCount = from->imageMemoryBarrierCount;
-            for (uint32_t i = 0; i < (uint32_t)from->imageMemoryBarrierCount; ++i) {
-                deepcopy_VkImageMemoryBarrier2(
-                    alloc, rootType, from->pImageMemoryBarriers + i,
-                    (VkImageMemoryBarrier2*)(to->pImageMemoryBarriers + i));
-            }
+    to->pImageMemoryBarriers = nullptr;
+    if (from->pImageMemoryBarriers) {
+        to->pImageMemoryBarriers = (VkImageMemoryBarrier2*)alloc->alloc(
+            from->imageMemoryBarrierCount * sizeof(const VkImageMemoryBarrier2));
+        to->imageMemoryBarrierCount = from->imageMemoryBarrierCount;
+        for (uint32_t i = 0; i < (uint32_t)from->imageMemoryBarrierCount; ++i) {
+            deepcopy_VkImageMemoryBarrier2(alloc, rootType, from->pImageMemoryBarriers + i,
+                                           (VkImageMemoryBarrier2*)(to->pImageMemoryBarriers + i));
         }
     }
 }
 
 void deepcopy_VkSemaphoreSubmitInfo(Allocator* alloc, VkStructureType rootType,
                                     const VkSemaphoreSubmitInfo* from, VkSemaphoreSubmitInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5398,8 +4828,6 @@ void deepcopy_VkSemaphoreSubmitInfo(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkCommandBufferSubmitInfo(Allocator* alloc, VkStructureType rootType,
                                         const VkCommandBufferSubmitInfo* from,
                                         VkCommandBufferSubmitInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5419,8 +4847,6 @@ void deepcopy_VkCommandBufferSubmitInfo(Allocator* alloc, VkStructureType rootTy
 
 void deepcopy_VkSubmitInfo2(Allocator* alloc, VkStructureType rootType, const VkSubmitInfo2* from,
                             VkSubmitInfo2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5436,43 +4862,35 @@ void deepcopy_VkSubmitInfo2(Allocator* alloc, VkStructureType rootType, const Vk
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pWaitSemaphoreInfos = nullptr;
-        if (from->pWaitSemaphoreInfos) {
-            to->pWaitSemaphoreInfos = (VkSemaphoreSubmitInfo*)alloc->alloc(
-                from->waitSemaphoreInfoCount * sizeof(const VkSemaphoreSubmitInfo));
-            to->waitSemaphoreInfoCount = from->waitSemaphoreInfoCount;
-            for (uint32_t i = 0; i < (uint32_t)from->waitSemaphoreInfoCount; ++i) {
-                deepcopy_VkSemaphoreSubmitInfo(
-                    alloc, rootType, from->pWaitSemaphoreInfos + i,
-                    (VkSemaphoreSubmitInfo*)(to->pWaitSemaphoreInfos + i));
-            }
+    to->pWaitSemaphoreInfos = nullptr;
+    if (from->pWaitSemaphoreInfos) {
+        to->pWaitSemaphoreInfos = (VkSemaphoreSubmitInfo*)alloc->alloc(
+            from->waitSemaphoreInfoCount * sizeof(const VkSemaphoreSubmitInfo));
+        to->waitSemaphoreInfoCount = from->waitSemaphoreInfoCount;
+        for (uint32_t i = 0; i < (uint32_t)from->waitSemaphoreInfoCount; ++i) {
+            deepcopy_VkSemaphoreSubmitInfo(alloc, rootType, from->pWaitSemaphoreInfos + i,
+                                           (VkSemaphoreSubmitInfo*)(to->pWaitSemaphoreInfos + i));
         }
     }
-    if (from) {
-        to->pCommandBufferInfos = nullptr;
-        if (from->pCommandBufferInfos) {
-            to->pCommandBufferInfos = (VkCommandBufferSubmitInfo*)alloc->alloc(
-                from->commandBufferInfoCount * sizeof(const VkCommandBufferSubmitInfo));
-            to->commandBufferInfoCount = from->commandBufferInfoCount;
-            for (uint32_t i = 0; i < (uint32_t)from->commandBufferInfoCount; ++i) {
-                deepcopy_VkCommandBufferSubmitInfo(
-                    alloc, rootType, from->pCommandBufferInfos + i,
-                    (VkCommandBufferSubmitInfo*)(to->pCommandBufferInfos + i));
-            }
+    to->pCommandBufferInfos = nullptr;
+    if (from->pCommandBufferInfos) {
+        to->pCommandBufferInfos = (VkCommandBufferSubmitInfo*)alloc->alloc(
+            from->commandBufferInfoCount * sizeof(const VkCommandBufferSubmitInfo));
+        to->commandBufferInfoCount = from->commandBufferInfoCount;
+        for (uint32_t i = 0; i < (uint32_t)from->commandBufferInfoCount; ++i) {
+            deepcopy_VkCommandBufferSubmitInfo(
+                alloc, rootType, from->pCommandBufferInfos + i,
+                (VkCommandBufferSubmitInfo*)(to->pCommandBufferInfos + i));
         }
     }
-    if (from) {
-        to->pSignalSemaphoreInfos = nullptr;
-        if (from->pSignalSemaphoreInfos) {
-            to->pSignalSemaphoreInfos = (VkSemaphoreSubmitInfo*)alloc->alloc(
-                from->signalSemaphoreInfoCount * sizeof(const VkSemaphoreSubmitInfo));
-            to->signalSemaphoreInfoCount = from->signalSemaphoreInfoCount;
-            for (uint32_t i = 0; i < (uint32_t)from->signalSemaphoreInfoCount; ++i) {
-                deepcopy_VkSemaphoreSubmitInfo(
-                    alloc, rootType, from->pSignalSemaphoreInfos + i,
-                    (VkSemaphoreSubmitInfo*)(to->pSignalSemaphoreInfos + i));
-            }
+    to->pSignalSemaphoreInfos = nullptr;
+    if (from->pSignalSemaphoreInfos) {
+        to->pSignalSemaphoreInfos = (VkSemaphoreSubmitInfo*)alloc->alloc(
+            from->signalSemaphoreInfoCount * sizeof(const VkSemaphoreSubmitInfo));
+        to->signalSemaphoreInfoCount = from->signalSemaphoreInfoCount;
+        for (uint32_t i = 0; i < (uint32_t)from->signalSemaphoreInfoCount; ++i) {
+            deepcopy_VkSemaphoreSubmitInfo(alloc, rootType, from->pSignalSemaphoreInfos + i,
+                                           (VkSemaphoreSubmitInfo*)(to->pSignalSemaphoreInfos + i));
         }
     }
 }
@@ -5481,8 +4899,6 @@ void deepcopy_VkPhysicalDeviceSynchronization2Features(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceSynchronization2Features* from,
     VkPhysicalDeviceSynchronization2Features* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5502,8 +4918,6 @@ void deepcopy_VkPhysicalDeviceSynchronization2Features(
 
 void deepcopy_VkBufferCopy2(Allocator* alloc, VkStructureType rootType, const VkBufferCopy2* from,
                             VkBufferCopy2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5523,8 +4937,6 @@ void deepcopy_VkBufferCopy2(Allocator* alloc, VkStructureType rootType, const Vk
 
 void deepcopy_VkCopyBufferInfo2(Allocator* alloc, VkStructureType rootType,
                                 const VkCopyBufferInfo2* from, VkCopyBufferInfo2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5540,24 +4952,20 @@ void deepcopy_VkCopyBufferInfo2(Allocator* alloc, VkStructureType rootType,
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pRegions = nullptr;
-        if (from->pRegions) {
-            to->pRegions =
-                (VkBufferCopy2*)alloc->alloc(from->regionCount * sizeof(const VkBufferCopy2));
-            to->regionCount = from->regionCount;
-            for (uint32_t i = 0; i < (uint32_t)from->regionCount; ++i) {
-                deepcopy_VkBufferCopy2(alloc, rootType, from->pRegions + i,
-                                       (VkBufferCopy2*)(to->pRegions + i));
-            }
+    to->pRegions = nullptr;
+    if (from->pRegions) {
+        to->pRegions =
+            (VkBufferCopy2*)alloc->alloc(from->regionCount * sizeof(const VkBufferCopy2));
+        to->regionCount = from->regionCount;
+        for (uint32_t i = 0; i < (uint32_t)from->regionCount; ++i) {
+            deepcopy_VkBufferCopy2(alloc, rootType, from->pRegions + i,
+                                   (VkBufferCopy2*)(to->pRegions + i));
         }
     }
 }
 
 void deepcopy_VkImageCopy2(Allocator* alloc, VkStructureType rootType, const VkImageCopy2* from,
                            VkImageCopy2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5584,8 +4992,6 @@ void deepcopy_VkImageCopy2(Allocator* alloc, VkStructureType rootType, const VkI
 
 void deepcopy_VkCopyImageInfo2(Allocator* alloc, VkStructureType rootType,
                                const VkCopyImageInfo2* from, VkCopyImageInfo2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5601,24 +5007,19 @@ void deepcopy_VkCopyImageInfo2(Allocator* alloc, VkStructureType rootType,
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pRegions = nullptr;
-        if (from->pRegions) {
-            to->pRegions =
-                (VkImageCopy2*)alloc->alloc(from->regionCount * sizeof(const VkImageCopy2));
-            to->regionCount = from->regionCount;
-            for (uint32_t i = 0; i < (uint32_t)from->regionCount; ++i) {
-                deepcopy_VkImageCopy2(alloc, rootType, from->pRegions + i,
-                                      (VkImageCopy2*)(to->pRegions + i));
-            }
+    to->pRegions = nullptr;
+    if (from->pRegions) {
+        to->pRegions = (VkImageCopy2*)alloc->alloc(from->regionCount * sizeof(const VkImageCopy2));
+        to->regionCount = from->regionCount;
+        for (uint32_t i = 0; i < (uint32_t)from->regionCount; ++i) {
+            deepcopy_VkImageCopy2(alloc, rootType, from->pRegions + i,
+                                  (VkImageCopy2*)(to->pRegions + i));
         }
     }
 }
 
 void deepcopy_VkBufferImageCopy2(Allocator* alloc, VkStructureType rootType,
                                  const VkBufferImageCopy2* from, VkBufferImageCopy2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5643,8 +5044,6 @@ void deepcopy_VkBufferImageCopy2(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkCopyBufferToImageInfo2(Allocator* alloc, VkStructureType rootType,
                                        const VkCopyBufferToImageInfo2* from,
                                        VkCopyBufferToImageInfo2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5660,16 +5059,14 @@ void deepcopy_VkCopyBufferToImageInfo2(Allocator* alloc, VkStructureType rootTyp
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pRegions = nullptr;
-        if (from->pRegions) {
-            to->pRegions = (VkBufferImageCopy2*)alloc->alloc(from->regionCount *
-                                                             sizeof(const VkBufferImageCopy2));
-            to->regionCount = from->regionCount;
-            for (uint32_t i = 0; i < (uint32_t)from->regionCount; ++i) {
-                deepcopy_VkBufferImageCopy2(alloc, rootType, from->pRegions + i,
-                                            (VkBufferImageCopy2*)(to->pRegions + i));
-            }
+    to->pRegions = nullptr;
+    if (from->pRegions) {
+        to->pRegions =
+            (VkBufferImageCopy2*)alloc->alloc(from->regionCount * sizeof(const VkBufferImageCopy2));
+        to->regionCount = from->regionCount;
+        for (uint32_t i = 0; i < (uint32_t)from->regionCount; ++i) {
+            deepcopy_VkBufferImageCopy2(alloc, rootType, from->pRegions + i,
+                                        (VkBufferImageCopy2*)(to->pRegions + i));
         }
     }
 }
@@ -5677,8 +5074,6 @@ void deepcopy_VkCopyBufferToImageInfo2(Allocator* alloc, VkStructureType rootTyp
 void deepcopy_VkCopyImageToBufferInfo2(Allocator* alloc, VkStructureType rootType,
                                        const VkCopyImageToBufferInfo2* from,
                                        VkCopyImageToBufferInfo2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5694,16 +5089,14 @@ void deepcopy_VkCopyImageToBufferInfo2(Allocator* alloc, VkStructureType rootTyp
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pRegions = nullptr;
-        if (from->pRegions) {
-            to->pRegions = (VkBufferImageCopy2*)alloc->alloc(from->regionCount *
-                                                             sizeof(const VkBufferImageCopy2));
-            to->regionCount = from->regionCount;
-            for (uint32_t i = 0; i < (uint32_t)from->regionCount; ++i) {
-                deepcopy_VkBufferImageCopy2(alloc, rootType, from->pRegions + i,
-                                            (VkBufferImageCopy2*)(to->pRegions + i));
-            }
+    to->pRegions = nullptr;
+    if (from->pRegions) {
+        to->pRegions =
+            (VkBufferImageCopy2*)alloc->alloc(from->regionCount * sizeof(const VkBufferImageCopy2));
+        to->regionCount = from->regionCount;
+        for (uint32_t i = 0; i < (uint32_t)from->regionCount; ++i) {
+            deepcopy_VkBufferImageCopy2(alloc, rootType, from->pRegions + i,
+                                        (VkBufferImageCopy2*)(to->pRegions + i));
         }
     }
 }
@@ -5712,8 +5105,6 @@ void deepcopy_VkPhysicalDeviceTextureCompressionASTCHDRFeatures(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceTextureCompressionASTCHDRFeatures* from,
     VkPhysicalDeviceTextureCompressionASTCHDRFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5733,8 +5124,6 @@ void deepcopy_VkPhysicalDeviceTextureCompressionASTCHDRFeatures(
 
 void deepcopy_VkFormatProperties3(Allocator* alloc, VkStructureType rootType,
                                   const VkFormatProperties3* from, VkFormatProperties3* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5755,8 +5144,6 @@ void deepcopy_VkFormatProperties3(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkPhysicalDeviceMaintenance4Features(Allocator* alloc, VkStructureType rootType,
                                                    const VkPhysicalDeviceMaintenance4Features* from,
                                                    VkPhysicalDeviceMaintenance4Features* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5777,8 +5164,6 @@ void deepcopy_VkPhysicalDeviceMaintenance4Features(Allocator* alloc, VkStructure
 void deepcopy_VkPhysicalDeviceMaintenance4Properties(
     Allocator* alloc, VkStructureType rootType, const VkPhysicalDeviceMaintenance4Properties* from,
     VkPhysicalDeviceMaintenance4Properties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5799,8 +5184,6 @@ void deepcopy_VkPhysicalDeviceMaintenance4Properties(
 void deepcopy_VkDeviceBufferMemoryRequirements(Allocator* alloc, VkStructureType rootType,
                                                const VkDeviceBufferMemoryRequirements* from,
                                                VkDeviceBufferMemoryRequirements* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5827,8 +5210,6 @@ void deepcopy_VkDeviceBufferMemoryRequirements(Allocator* alloc, VkStructureType
 void deepcopy_VkDeviceImageMemoryRequirements(Allocator* alloc, VkStructureType rootType,
                                               const VkDeviceImageMemoryRequirements* from,
                                               VkDeviceImageMemoryRequirements* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5857,16 +5238,12 @@ void deepcopy_VkDeviceImageMemoryRequirements(Allocator* alloc, VkStructureType 
 void deepcopy_VkPipelineCreationFeedback(Allocator* alloc, VkStructureType rootType,
                                          const VkPipelineCreationFeedback* from,
                                          VkPipelineCreationFeedback* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkPipelineCreationFeedbackCreateInfo(Allocator* alloc, VkStructureType rootType,
                                                    const VkPipelineCreationFeedbackCreateInfo* from,
                                                    VkPipelineCreationFeedbackCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5890,17 +5267,15 @@ void deepcopy_VkPipelineCreationFeedbackCreateInfo(Allocator* alloc, VkStructure
             alloc, rootType, from->pPipelineCreationFeedback,
             (VkPipelineCreationFeedback*)(to->pPipelineCreationFeedback));
     }
-    if (from) {
-        to->pPipelineStageCreationFeedbacks = nullptr;
-        if (from->pPipelineStageCreationFeedbacks) {
-            to->pPipelineStageCreationFeedbacks = (VkPipelineCreationFeedback*)alloc->alloc(
-                from->pipelineStageCreationFeedbackCount * sizeof(VkPipelineCreationFeedback));
-            to->pipelineStageCreationFeedbackCount = from->pipelineStageCreationFeedbackCount;
-            for (uint32_t i = 0; i < (uint32_t)from->pipelineStageCreationFeedbackCount; ++i) {
-                deepcopy_VkPipelineCreationFeedback(
-                    alloc, rootType, from->pPipelineStageCreationFeedbacks + i,
-                    (VkPipelineCreationFeedback*)(to->pPipelineStageCreationFeedbacks + i));
-            }
+    to->pPipelineStageCreationFeedbacks = nullptr;
+    if (from->pPipelineStageCreationFeedbacks) {
+        to->pPipelineStageCreationFeedbacks = (VkPipelineCreationFeedback*)alloc->alloc(
+            from->pipelineStageCreationFeedbackCount * sizeof(VkPipelineCreationFeedback));
+        to->pipelineStageCreationFeedbackCount = from->pipelineStageCreationFeedbackCount;
+        for (uint32_t i = 0; i < (uint32_t)from->pipelineStageCreationFeedbackCount; ++i) {
+            deepcopy_VkPipelineCreationFeedback(
+                alloc, rootType, from->pPipelineStageCreationFeedbacks + i,
+                (VkPipelineCreationFeedback*)(to->pPipelineStageCreationFeedbacks + i));
         }
     }
 }
@@ -5909,8 +5284,6 @@ void deepcopy_VkPhysicalDeviceShaderTerminateInvocationFeatures(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceShaderTerminateInvocationFeatures* from,
     VkPhysicalDeviceShaderTerminateInvocationFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5932,8 +5305,6 @@ void deepcopy_VkPhysicalDeviceShaderDemoteToHelperInvocationFeatures(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceShaderDemoteToHelperInvocationFeatures* from,
     VkPhysicalDeviceShaderDemoteToHelperInvocationFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5955,8 +5326,6 @@ void deepcopy_VkPhysicalDevicePipelineCreationCacheControlFeatures(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDevicePipelineCreationCacheControlFeatures* from,
     VkPhysicalDevicePipelineCreationCacheControlFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -5978,8 +5347,6 @@ void deepcopy_VkPhysicalDeviceZeroInitializeWorkgroupMemoryFeatures(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceZeroInitializeWorkgroupMemoryFeatures* from,
     VkPhysicalDeviceZeroInitializeWorkgroupMemoryFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6000,8 +5367,6 @@ void deepcopy_VkPhysicalDeviceZeroInitializeWorkgroupMemoryFeatures(
 void deepcopy_VkPhysicalDeviceImageRobustnessFeatures(
     Allocator* alloc, VkStructureType rootType, const VkPhysicalDeviceImageRobustnessFeatures* from,
     VkPhysicalDeviceImageRobustnessFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6023,8 +5388,6 @@ void deepcopy_VkPhysicalDeviceSubgroupSizeControlFeatures(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceSubgroupSizeControlFeatures* from,
     VkPhysicalDeviceSubgroupSizeControlFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6046,8 +5409,6 @@ void deepcopy_VkPhysicalDeviceSubgroupSizeControlProperties(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceSubgroupSizeControlProperties* from,
     VkPhysicalDeviceSubgroupSizeControlProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6069,8 +5430,6 @@ void deepcopy_VkPipelineShaderStageRequiredSubgroupSizeCreateInfo(
     Allocator* alloc, VkStructureType rootType,
     const VkPipelineShaderStageRequiredSubgroupSizeCreateInfo* from,
     VkPipelineShaderStageRequiredSubgroupSizeCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6092,8 +5451,6 @@ void deepcopy_VkPhysicalDeviceInlineUniformBlockFeatures(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceInlineUniformBlockFeatures* from,
     VkPhysicalDeviceInlineUniformBlockFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6115,8 +5472,6 @@ void deepcopy_VkPhysicalDeviceInlineUniformBlockProperties(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceInlineUniformBlockProperties* from,
     VkPhysicalDeviceInlineUniformBlockProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6137,8 +5492,6 @@ void deepcopy_VkPhysicalDeviceInlineUniformBlockProperties(
 void deepcopy_VkWriteDescriptorSetInlineUniformBlock(
     Allocator* alloc, VkStructureType rootType, const VkWriteDescriptorSetInlineUniformBlock* from,
     VkWriteDescriptorSetInlineUniformBlock* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6164,8 +5517,6 @@ void deepcopy_VkDescriptorPoolInlineUniformBlockCreateInfo(
     Allocator* alloc, VkStructureType rootType,
     const VkDescriptorPoolInlineUniformBlockCreateInfo* from,
     VkDescriptorPoolInlineUniformBlockCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6187,8 +5538,6 @@ void deepcopy_VkPhysicalDeviceShaderIntegerDotProductFeatures(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceShaderIntegerDotProductFeatures* from,
     VkPhysicalDeviceShaderIntegerDotProductFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6210,8 +5559,6 @@ void deepcopy_VkPhysicalDeviceShaderIntegerDotProductProperties(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceShaderIntegerDotProductProperties* from,
     VkPhysicalDeviceShaderIntegerDotProductProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6233,8 +5580,6 @@ void deepcopy_VkPhysicalDeviceTexelBufferAlignmentProperties(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceTexelBufferAlignmentProperties* from,
     VkPhysicalDeviceTexelBufferAlignmentProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6256,8 +5601,6 @@ void deepcopy_VkPhysicalDeviceTexelBufferAlignmentProperties(
 #ifdef VK_GRAPHICS_VERSION_1_3
 void deepcopy_VkImageBlit2(Allocator* alloc, VkStructureType rootType, const VkImageBlit2* from,
                            VkImageBlit2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6289,8 +5632,6 @@ void deepcopy_VkImageBlit2(Allocator* alloc, VkStructureType rootType, const VkI
 
 void deepcopy_VkBlitImageInfo2(Allocator* alloc, VkStructureType rootType,
                                const VkBlitImageInfo2* from, VkBlitImageInfo2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6306,24 +5647,19 @@ void deepcopy_VkBlitImageInfo2(Allocator* alloc, VkStructureType rootType,
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pRegions = nullptr;
-        if (from->pRegions) {
-            to->pRegions =
-                (VkImageBlit2*)alloc->alloc(from->regionCount * sizeof(const VkImageBlit2));
-            to->regionCount = from->regionCount;
-            for (uint32_t i = 0; i < (uint32_t)from->regionCount; ++i) {
-                deepcopy_VkImageBlit2(alloc, rootType, from->pRegions + i,
-                                      (VkImageBlit2*)(to->pRegions + i));
-            }
+    to->pRegions = nullptr;
+    if (from->pRegions) {
+        to->pRegions = (VkImageBlit2*)alloc->alloc(from->regionCount * sizeof(const VkImageBlit2));
+        to->regionCount = from->regionCount;
+        for (uint32_t i = 0; i < (uint32_t)from->regionCount; ++i) {
+            deepcopy_VkImageBlit2(alloc, rootType, from->pRegions + i,
+                                  (VkImageBlit2*)(to->pRegions + i));
         }
     }
 }
 
 void deepcopy_VkImageResolve2(Allocator* alloc, VkStructureType rootType,
                               const VkImageResolve2* from, VkImageResolve2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6350,8 +5686,6 @@ void deepcopy_VkImageResolve2(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkResolveImageInfo2(Allocator* alloc, VkStructureType rootType,
                                   const VkResolveImageInfo2* from, VkResolveImageInfo2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6367,16 +5701,14 @@ void deepcopy_VkResolveImageInfo2(Allocator* alloc, VkStructureType rootType,
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pRegions = nullptr;
-        if (from->pRegions) {
-            to->pRegions =
-                (VkImageResolve2*)alloc->alloc(from->regionCount * sizeof(const VkImageResolve2));
-            to->regionCount = from->regionCount;
-            for (uint32_t i = 0; i < (uint32_t)from->regionCount; ++i) {
-                deepcopy_VkImageResolve2(alloc, rootType, from->pRegions + i,
-                                         (VkImageResolve2*)(to->pRegions + i));
-            }
+    to->pRegions = nullptr;
+    if (from->pRegions) {
+        to->pRegions =
+            (VkImageResolve2*)alloc->alloc(from->regionCount * sizeof(const VkImageResolve2));
+        to->regionCount = from->regionCount;
+        for (uint32_t i = 0; i < (uint32_t)from->regionCount; ++i) {
+            deepcopy_VkImageResolve2(alloc, rootType, from->pRegions + i,
+                                     (VkImageResolve2*)(to->pRegions + i));
         }
     }
 }
@@ -6384,8 +5716,6 @@ void deepcopy_VkResolveImageInfo2(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkRenderingAttachmentInfo(Allocator* alloc, VkStructureType rootType,
                                         const VkRenderingAttachmentInfo* from,
                                         VkRenderingAttachmentInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6406,8 +5736,6 @@ void deepcopy_VkRenderingAttachmentInfo(Allocator* alloc, VkStructureType rootTy
 
 void deepcopy_VkRenderingInfo(Allocator* alloc, VkStructureType rootType,
                               const VkRenderingInfo* from, VkRenderingInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6424,17 +5752,15 @@ void deepcopy_VkRenderingInfo(Allocator* alloc, VkStructureType rootType,
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
     deepcopy_VkRect2D(alloc, rootType, &from->renderArea, (VkRect2D*)(&to->renderArea));
-    if (from) {
-        to->pColorAttachments = nullptr;
-        if (from->pColorAttachments) {
-            to->pColorAttachments = (VkRenderingAttachmentInfo*)alloc->alloc(
-                from->colorAttachmentCount * sizeof(const VkRenderingAttachmentInfo));
-            to->colorAttachmentCount = from->colorAttachmentCount;
-            for (uint32_t i = 0; i < (uint32_t)from->colorAttachmentCount; ++i) {
-                deepcopy_VkRenderingAttachmentInfo(
-                    alloc, rootType, from->pColorAttachments + i,
-                    (VkRenderingAttachmentInfo*)(to->pColorAttachments + i));
-            }
+    to->pColorAttachments = nullptr;
+    if (from->pColorAttachments) {
+        to->pColorAttachments = (VkRenderingAttachmentInfo*)alloc->alloc(
+            from->colorAttachmentCount * sizeof(const VkRenderingAttachmentInfo));
+        to->colorAttachmentCount = from->colorAttachmentCount;
+        for (uint32_t i = 0; i < (uint32_t)from->colorAttachmentCount; ++i) {
+            deepcopy_VkRenderingAttachmentInfo(
+                alloc, rootType, from->pColorAttachments + i,
+                (VkRenderingAttachmentInfo*)(to->pColorAttachments + i));
         }
     }
     to->pDepthAttachment = nullptr;
@@ -6456,8 +5782,6 @@ void deepcopy_VkRenderingInfo(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkPipelineRenderingCreateInfo(Allocator* alloc, VkStructureType rootType,
                                             const VkPipelineRenderingCreateInfo* from,
                                             VkPipelineRenderingCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6484,8 +5808,6 @@ void deepcopy_VkPhysicalDeviceDynamicRenderingFeatures(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceDynamicRenderingFeatures* from,
     VkPhysicalDeviceDynamicRenderingFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6506,8 +5828,6 @@ void deepcopy_VkPhysicalDeviceDynamicRenderingFeatures(
 void deepcopy_VkCommandBufferInheritanceRenderingInfo(
     Allocator* alloc, VkStructureType rootType, const VkCommandBufferInheritanceRenderingInfo* from,
     VkCommandBufferInheritanceRenderingInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6535,8 +5855,6 @@ void deepcopy_VkCommandBufferInheritanceRenderingInfo(
 void deepcopy_VkPhysicalDeviceVulkan14Features(Allocator* alloc, VkStructureType rootType,
                                                const VkPhysicalDeviceVulkan14Features* from,
                                                VkPhysicalDeviceVulkan14Features* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6557,8 +5875,6 @@ void deepcopy_VkPhysicalDeviceVulkan14Features(Allocator* alloc, VkStructureType
 void deepcopy_VkPhysicalDeviceVulkan14Properties(Allocator* alloc, VkStructureType rootType,
                                                  const VkPhysicalDeviceVulkan14Properties* from,
                                                  VkPhysicalDeviceVulkan14Properties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6591,8 +5907,6 @@ void deepcopy_VkPhysicalDeviceVulkan14Properties(Allocator* alloc, VkStructureTy
 void deepcopy_VkDeviceQueueGlobalPriorityCreateInfo(
     Allocator* alloc, VkStructureType rootType, const VkDeviceQueueGlobalPriorityCreateInfo* from,
     VkDeviceQueueGlobalPriorityCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6614,8 +5928,6 @@ void deepcopy_VkPhysicalDeviceGlobalPriorityQueryFeatures(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceGlobalPriorityQueryFeatures* from,
     VkPhysicalDeviceGlobalPriorityQueryFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6636,8 +5948,6 @@ void deepcopy_VkPhysicalDeviceGlobalPriorityQueryFeatures(
 void deepcopy_VkQueueFamilyGlobalPriorityProperties(
     Allocator* alloc, VkStructureType rootType, const VkQueueFamilyGlobalPriorityProperties* from,
     VkQueueFamilyGlobalPriorityProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6660,8 +5970,6 @@ void deepcopy_VkQueueFamilyGlobalPriorityProperties(
 void deepcopy_VkPhysicalDeviceIndexTypeUint8Features(
     Allocator* alloc, VkStructureType rootType, const VkPhysicalDeviceIndexTypeUint8Features* from,
     VkPhysicalDeviceIndexTypeUint8Features* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6681,8 +5989,6 @@ void deepcopy_VkPhysicalDeviceIndexTypeUint8Features(
 
 void deepcopy_VkMemoryMapInfo(Allocator* alloc, VkStructureType rootType,
                               const VkMemoryMapInfo* from, VkMemoryMapInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6702,8 +6008,6 @@ void deepcopy_VkMemoryMapInfo(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkMemoryUnmapInfo(Allocator* alloc, VkStructureType rootType,
                                 const VkMemoryUnmapInfo* from, VkMemoryUnmapInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6724,8 +6028,6 @@ void deepcopy_VkMemoryUnmapInfo(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkPhysicalDeviceMaintenance5Features(Allocator* alloc, VkStructureType rootType,
                                                    const VkPhysicalDeviceMaintenance5Features* from,
                                                    VkPhysicalDeviceMaintenance5Features* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6746,8 +6048,6 @@ void deepcopy_VkPhysicalDeviceMaintenance5Features(Allocator* alloc, VkStructure
 void deepcopy_VkPhysicalDeviceMaintenance5Properties(
     Allocator* alloc, VkStructureType rootType, const VkPhysicalDeviceMaintenance5Properties* from,
     VkPhysicalDeviceMaintenance5Properties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6767,8 +6067,6 @@ void deepcopy_VkPhysicalDeviceMaintenance5Properties(
 
 void deepcopy_VkSubresourceLayout2(Allocator* alloc, VkStructureType rootType,
                                    const VkSubresourceLayout2* from, VkSubresourceLayout2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6790,8 +6088,6 @@ void deepcopy_VkSubresourceLayout2(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkImageSubresource2(Allocator* alloc, VkStructureType rootType,
                                   const VkImageSubresource2* from, VkImageSubresource2* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6814,8 +6110,6 @@ void deepcopy_VkImageSubresource2(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkDeviceImageSubresourceInfo(Allocator* alloc, VkStructureType rootType,
                                            const VkDeviceImageSubresourceInfo* from,
                                            VkDeviceImageSubresourceInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6848,8 +6142,6 @@ void deepcopy_VkDeviceImageSubresourceInfo(Allocator* alloc, VkStructureType roo
 void deepcopy_VkBufferUsageFlags2CreateInfo(Allocator* alloc, VkStructureType rootType,
                                             const VkBufferUsageFlags2CreateInfo* from,
                                             VkBufferUsageFlags2CreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6870,8 +6162,6 @@ void deepcopy_VkBufferUsageFlags2CreateInfo(Allocator* alloc, VkStructureType ro
 void deepcopy_VkPhysicalDeviceMaintenance6Features(Allocator* alloc, VkStructureType rootType,
                                                    const VkPhysicalDeviceMaintenance6Features* from,
                                                    VkPhysicalDeviceMaintenance6Features* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6892,8 +6182,6 @@ void deepcopy_VkPhysicalDeviceMaintenance6Features(Allocator* alloc, VkStructure
 void deepcopy_VkPhysicalDeviceMaintenance6Properties(
     Allocator* alloc, VkStructureType rootType, const VkPhysicalDeviceMaintenance6Properties* from,
     VkPhysicalDeviceMaintenance6Properties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6913,8 +6201,6 @@ void deepcopy_VkPhysicalDeviceMaintenance6Properties(
 
 void deepcopy_VkBindMemoryStatus(Allocator* alloc, VkStructureType rootType,
                                  const VkBindMemoryStatus* from, VkBindMemoryStatus* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6939,8 +6225,6 @@ void deepcopy_VkBindMemoryStatus(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkPhysicalDeviceHostImageCopyFeatures(
     Allocator* alloc, VkStructureType rootType, const VkPhysicalDeviceHostImageCopyFeatures* from,
     VkPhysicalDeviceHostImageCopyFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6961,8 +6245,6 @@ void deepcopy_VkPhysicalDeviceHostImageCopyFeatures(
 void deepcopy_VkPhysicalDeviceHostImageCopyProperties(
     Allocator* alloc, VkStructureType rootType, const VkPhysicalDeviceHostImageCopyProperties* from,
     VkPhysicalDeviceHostImageCopyProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -6994,8 +6276,6 @@ void deepcopy_VkPhysicalDeviceHostImageCopyProperties(
 
 void deepcopy_VkMemoryToImageCopy(Allocator* alloc, VkStructureType rootType,
                                   const VkMemoryToImageCopy* from, VkMemoryToImageCopy* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7023,8 +6303,6 @@ void deepcopy_VkMemoryToImageCopy(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkImageToMemoryCopy(Allocator* alloc, VkStructureType rootType,
                                   const VkImageToMemoryCopy* from, VkImageToMemoryCopy* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7053,8 +6331,6 @@ void deepcopy_VkImageToMemoryCopy(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkCopyMemoryToImageInfo(Allocator* alloc, VkStructureType rootType,
                                       const VkCopyMemoryToImageInfo* from,
                                       VkCopyMemoryToImageInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7070,16 +6346,14 @@ void deepcopy_VkCopyMemoryToImageInfo(Allocator* alloc, VkStructureType rootType
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pRegions = nullptr;
-        if (from->pRegions) {
-            to->pRegions = (VkMemoryToImageCopy*)alloc->alloc(from->regionCount *
-                                                              sizeof(const VkMemoryToImageCopy));
-            to->regionCount = from->regionCount;
-            for (uint32_t i = 0; i < (uint32_t)from->regionCount; ++i) {
-                deepcopy_VkMemoryToImageCopy(alloc, rootType, from->pRegions + i,
-                                             (VkMemoryToImageCopy*)(to->pRegions + i));
-            }
+    to->pRegions = nullptr;
+    if (from->pRegions) {
+        to->pRegions = (VkMemoryToImageCopy*)alloc->alloc(from->regionCount *
+                                                          sizeof(const VkMemoryToImageCopy));
+        to->regionCount = from->regionCount;
+        for (uint32_t i = 0; i < (uint32_t)from->regionCount; ++i) {
+            deepcopy_VkMemoryToImageCopy(alloc, rootType, from->pRegions + i,
+                                         (VkMemoryToImageCopy*)(to->pRegions + i));
         }
     }
 }
@@ -7087,8 +6361,6 @@ void deepcopy_VkCopyMemoryToImageInfo(Allocator* alloc, VkStructureType rootType
 void deepcopy_VkCopyImageToMemoryInfo(Allocator* alloc, VkStructureType rootType,
                                       const VkCopyImageToMemoryInfo* from,
                                       VkCopyImageToMemoryInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7104,16 +6376,14 @@ void deepcopy_VkCopyImageToMemoryInfo(Allocator* alloc, VkStructureType rootType
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pRegions = nullptr;
-        if (from->pRegions) {
-            to->pRegions = (VkImageToMemoryCopy*)alloc->alloc(from->regionCount *
-                                                              sizeof(const VkImageToMemoryCopy));
-            to->regionCount = from->regionCount;
-            for (uint32_t i = 0; i < (uint32_t)from->regionCount; ++i) {
-                deepcopy_VkImageToMemoryCopy(alloc, rootType, from->pRegions + i,
-                                             (VkImageToMemoryCopy*)(to->pRegions + i));
-            }
+    to->pRegions = nullptr;
+    if (from->pRegions) {
+        to->pRegions = (VkImageToMemoryCopy*)alloc->alloc(from->regionCount *
+                                                          sizeof(const VkImageToMemoryCopy));
+        to->regionCount = from->regionCount;
+        for (uint32_t i = 0; i < (uint32_t)from->regionCount; ++i) {
+            deepcopy_VkImageToMemoryCopy(alloc, rootType, from->pRegions + i,
+                                         (VkImageToMemoryCopy*)(to->pRegions + i));
         }
     }
 }
@@ -7121,8 +6391,6 @@ void deepcopy_VkCopyImageToMemoryInfo(Allocator* alloc, VkStructureType rootType
 void deepcopy_VkCopyImageToImageInfo(Allocator* alloc, VkStructureType rootType,
                                      const VkCopyImageToImageInfo* from,
                                      VkCopyImageToImageInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7138,16 +6406,13 @@ void deepcopy_VkCopyImageToImageInfo(Allocator* alloc, VkStructureType rootType,
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pRegions = nullptr;
-        if (from->pRegions) {
-            to->pRegions =
-                (VkImageCopy2*)alloc->alloc(from->regionCount * sizeof(const VkImageCopy2));
-            to->regionCount = from->regionCount;
-            for (uint32_t i = 0; i < (uint32_t)from->regionCount; ++i) {
-                deepcopy_VkImageCopy2(alloc, rootType, from->pRegions + i,
-                                      (VkImageCopy2*)(to->pRegions + i));
-            }
+    to->pRegions = nullptr;
+    if (from->pRegions) {
+        to->pRegions = (VkImageCopy2*)alloc->alloc(from->regionCount * sizeof(const VkImageCopy2));
+        to->regionCount = from->regionCount;
+        for (uint32_t i = 0; i < (uint32_t)from->regionCount; ++i) {
+            deepcopy_VkImageCopy2(alloc, rootType, from->pRegions + i,
+                                  (VkImageCopy2*)(to->pRegions + i));
         }
     }
 }
@@ -7155,8 +6420,6 @@ void deepcopy_VkCopyImageToImageInfo(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkHostImageLayoutTransitionInfo(Allocator* alloc, VkStructureType rootType,
                                               const VkHostImageLayoutTransitionInfo* from,
                                               VkHostImageLayoutTransitionInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7179,8 +6442,6 @@ void deepcopy_VkHostImageLayoutTransitionInfo(Allocator* alloc, VkStructureType 
 void deepcopy_VkSubresourceHostMemcpySize(Allocator* alloc, VkStructureType rootType,
                                           const VkSubresourceHostMemcpySize* from,
                                           VkSubresourceHostMemcpySize* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7201,8 +6462,6 @@ void deepcopy_VkSubresourceHostMemcpySize(Allocator* alloc, VkStructureType root
 void deepcopy_VkHostImageCopyDevicePerformanceQuery(
     Allocator* alloc, VkStructureType rootType, const VkHostImageCopyDevicePerformanceQuery* from,
     VkHostImageCopyDevicePerformanceQuery* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7226,8 +6485,6 @@ void deepcopy_VkPhysicalDeviceShaderSubgroupRotateFeatures(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceShaderSubgroupRotateFeatures* from,
     VkPhysicalDeviceShaderSubgroupRotateFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7249,8 +6506,6 @@ void deepcopy_VkPhysicalDeviceShaderFloatControls2Features(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceShaderFloatControls2Features* from,
     VkPhysicalDeviceShaderFloatControls2Features* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7272,8 +6527,6 @@ void deepcopy_VkPhysicalDeviceShaderExpectAssumeFeatures(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceShaderExpectAssumeFeatures* from,
     VkPhysicalDeviceShaderExpectAssumeFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7294,8 +6547,6 @@ void deepcopy_VkPhysicalDeviceShaderExpectAssumeFeatures(
 void deepcopy_VkPipelineCreateFlags2CreateInfo(Allocator* alloc, VkStructureType rootType,
                                                const VkPipelineCreateFlags2CreateInfo* from,
                                                VkPipelineCreateFlags2CreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7317,8 +6568,6 @@ void deepcopy_VkPhysicalDevicePushDescriptorProperties(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDevicePushDescriptorProperties* from,
     VkPhysicalDevicePushDescriptorProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7339,8 +6588,6 @@ void deepcopy_VkPhysicalDevicePushDescriptorProperties(
 void deepcopy_VkBindDescriptorSetsInfo(Allocator* alloc, VkStructureType rootType,
                                        const VkBindDescriptorSetsInfo* from,
                                        VkBindDescriptorSetsInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7370,8 +6617,6 @@ void deepcopy_VkBindDescriptorSetsInfo(Allocator* alloc, VkStructureType rootTyp
 
 void deepcopy_VkPushConstantsInfo(Allocator* alloc, VkStructureType rootType,
                                   const VkPushConstantsInfo* from, VkPushConstantsInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7396,8 +6641,6 @@ void deepcopy_VkPushConstantsInfo(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkPushDescriptorSetInfo(Allocator* alloc, VkStructureType rootType,
                                       const VkPushDescriptorSetInfo* from,
                                       VkPushDescriptorSetInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7413,16 +6656,14 @@ void deepcopy_VkPushDescriptorSetInfo(Allocator* alloc, VkStructureType rootType
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pDescriptorWrites = nullptr;
-        if (from->pDescriptorWrites) {
-            to->pDescriptorWrites = (VkWriteDescriptorSet*)alloc->alloc(
-                from->descriptorWriteCount * sizeof(const VkWriteDescriptorSet));
-            to->descriptorWriteCount = from->descriptorWriteCount;
-            for (uint32_t i = 0; i < (uint32_t)from->descriptorWriteCount; ++i) {
-                deepcopy_VkWriteDescriptorSet(alloc, rootType, from->pDescriptorWrites + i,
-                                              (VkWriteDescriptorSet*)(to->pDescriptorWrites + i));
-            }
+    to->pDescriptorWrites = nullptr;
+    if (from->pDescriptorWrites) {
+        to->pDescriptorWrites = (VkWriteDescriptorSet*)alloc->alloc(
+            from->descriptorWriteCount * sizeof(const VkWriteDescriptorSet));
+        to->descriptorWriteCount = from->descriptorWriteCount;
+        for (uint32_t i = 0; i < (uint32_t)from->descriptorWriteCount; ++i) {
+            deepcopy_VkWriteDescriptorSet(alloc, rootType, from->pDescriptorWrites + i,
+                                          (VkWriteDescriptorSet*)(to->pDescriptorWrites + i));
         }
     }
 }
@@ -7430,8 +6671,6 @@ void deepcopy_VkPushDescriptorSetInfo(Allocator* alloc, VkStructureType rootType
 void deepcopy_VkPushDescriptorSetWithTemplateInfo(Allocator* alloc, VkStructureType rootType,
                                                   const VkPushDescriptorSetWithTemplateInfo* from,
                                                   VkPushDescriptorSetWithTemplateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7457,8 +6696,6 @@ void deepcopy_VkPhysicalDevicePipelineProtectedAccessFeatures(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDevicePipelineProtectedAccessFeatures* from,
     VkPhysicalDevicePipelineProtectedAccessFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7480,8 +6717,6 @@ void deepcopy_VkPhysicalDevicePipelineRobustnessFeatures(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDevicePipelineRobustnessFeatures* from,
     VkPhysicalDevicePipelineRobustnessFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7503,8 +6738,6 @@ void deepcopy_VkPhysicalDevicePipelineRobustnessProperties(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDevicePipelineRobustnessProperties* from,
     VkPhysicalDevicePipelineRobustnessProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7525,8 +6758,6 @@ void deepcopy_VkPhysicalDevicePipelineRobustnessProperties(
 void deepcopy_VkPipelineRobustnessCreateInfo(Allocator* alloc, VkStructureType rootType,
                                              const VkPipelineRobustnessCreateInfo* from,
                                              VkPipelineRobustnessCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7550,8 +6781,6 @@ void deepcopy_VkPhysicalDeviceLineRasterizationFeatures(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceLineRasterizationFeatures* from,
     VkPhysicalDeviceLineRasterizationFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7573,8 +6802,6 @@ void deepcopy_VkPhysicalDeviceLineRasterizationProperties(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceLineRasterizationProperties* from,
     VkPhysicalDeviceLineRasterizationProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7596,8 +6823,6 @@ void deepcopy_VkPipelineRasterizationLineStateCreateInfo(
     Allocator* alloc, VkStructureType rootType,
     const VkPipelineRasterizationLineStateCreateInfo* from,
     VkPipelineRasterizationLineStateCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7619,8 +6844,6 @@ void deepcopy_VkPhysicalDeviceVertexAttributeDivisorProperties(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceVertexAttributeDivisorProperties* from,
     VkPhysicalDeviceVertexAttributeDivisorProperties* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7641,8 +6864,6 @@ void deepcopy_VkPhysicalDeviceVertexAttributeDivisorProperties(
 void deepcopy_VkVertexInputBindingDivisorDescription(
     Allocator* alloc, VkStructureType rootType, const VkVertexInputBindingDivisorDescription* from,
     VkVertexInputBindingDivisorDescription* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
@@ -7650,8 +6871,6 @@ void deepcopy_VkPipelineVertexInputDivisorStateCreateInfo(
     Allocator* alloc, VkStructureType rootType,
     const VkPipelineVertexInputDivisorStateCreateInfo* from,
     VkPipelineVertexInputDivisorStateCreateInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7667,18 +6886,15 @@ void deepcopy_VkPipelineVertexInputDivisorStateCreateInfo(
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pVertexBindingDivisors = nullptr;
-        if (from->pVertexBindingDivisors) {
-            to->pVertexBindingDivisors = (VkVertexInputBindingDivisorDescription*)alloc->alloc(
-                from->vertexBindingDivisorCount *
-                sizeof(const VkVertexInputBindingDivisorDescription));
-            to->vertexBindingDivisorCount = from->vertexBindingDivisorCount;
-            for (uint32_t i = 0; i < (uint32_t)from->vertexBindingDivisorCount; ++i) {
-                deepcopy_VkVertexInputBindingDivisorDescription(
-                    alloc, rootType, from->pVertexBindingDivisors + i,
-                    (VkVertexInputBindingDivisorDescription*)(to->pVertexBindingDivisors + i));
-            }
+    to->pVertexBindingDivisors = nullptr;
+    if (from->pVertexBindingDivisors) {
+        to->pVertexBindingDivisors = (VkVertexInputBindingDivisorDescription*)alloc->alloc(
+            from->vertexBindingDivisorCount * sizeof(const VkVertexInputBindingDivisorDescription));
+        to->vertexBindingDivisorCount = from->vertexBindingDivisorCount;
+        for (uint32_t i = 0; i < (uint32_t)from->vertexBindingDivisorCount; ++i) {
+            deepcopy_VkVertexInputBindingDivisorDescription(
+                alloc, rootType, from->pVertexBindingDivisors + i,
+                (VkVertexInputBindingDivisorDescription*)(to->pVertexBindingDivisors + i));
         }
     }
 }
@@ -7687,8 +6903,6 @@ void deepcopy_VkPhysicalDeviceVertexAttributeDivisorFeatures(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceVertexAttributeDivisorFeatures* from,
     VkPhysicalDeviceVertexAttributeDivisorFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7708,8 +6922,6 @@ void deepcopy_VkPhysicalDeviceVertexAttributeDivisorFeatures(
 
 void deepcopy_VkRenderingAreaInfo(Allocator* alloc, VkStructureType rootType,
                                   const VkRenderingAreaInfo* from, VkRenderingAreaInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7736,8 +6948,6 @@ void deepcopy_VkPhysicalDeviceDynamicRenderingLocalReadFeatures(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceDynamicRenderingLocalReadFeatures* from,
     VkPhysicalDeviceDynamicRenderingLocalReadFeatures* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7758,8 +6968,6 @@ void deepcopy_VkPhysicalDeviceDynamicRenderingLocalReadFeatures(
 void deepcopy_VkRenderingAttachmentLocationInfo(Allocator* alloc, VkStructureType rootType,
                                                 const VkRenderingAttachmentLocationInfo* from,
                                                 VkRenderingAttachmentLocationInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7785,8 +6993,6 @@ void deepcopy_VkRenderingAttachmentLocationInfo(Allocator* alloc, VkStructureTyp
 void deepcopy_VkRenderingInputAttachmentIndexInfo(Allocator* alloc, VkStructureType rootType,
                                                   const VkRenderingInputAttachmentIndexInfo* from,
                                                   VkRenderingInputAttachmentIndexInfo* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7825,8 +7031,6 @@ void deepcopy_VkRenderingInputAttachmentIndexInfo(Allocator* alloc, VkStructureT
 void deepcopy_VkImportSemaphoreFdInfoKHR(Allocator* alloc, VkStructureType rootType,
                                          const VkImportSemaphoreFdInfoKHR* from,
                                          VkImportSemaphoreFdInfoKHR* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7847,8 +7051,6 @@ void deepcopy_VkImportSemaphoreFdInfoKHR(Allocator* alloc, VkStructureType rootT
 void deepcopy_VkSemaphoreGetFdInfoKHR(Allocator* alloc, VkStructureType rootType,
                                       const VkSemaphoreGetFdInfoKHR* from,
                                       VkSemaphoreGetFdInfoKHR* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7870,8 +7072,6 @@ void deepcopy_VkSemaphoreGetFdInfoKHR(Allocator* alloc, VkStructureType rootType
 #ifdef VK_KHR_incremental_present
 void deepcopy_VkRectLayerKHR(Allocator* alloc, VkStructureType rootType, const VkRectLayerKHR* from,
                              VkRectLayerKHR* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     deepcopy_VkOffset2D(alloc, rootType, &from->offset, (VkOffset2D*)(&to->offset));
     deepcopy_VkExtent2D(alloc, rootType, &from->extent, (VkExtent2D*)(&to->extent));
@@ -7879,27 +7079,21 @@ void deepcopy_VkRectLayerKHR(Allocator* alloc, VkStructureType rootType, const V
 
 void deepcopy_VkPresentRegionKHR(Allocator* alloc, VkStructureType rootType,
                                  const VkPresentRegionKHR* from, VkPresentRegionKHR* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
-    if (from) {
-        to->pRectangles = nullptr;
-        if (from->pRectangles) {
-            to->pRectangles =
-                (VkRectLayerKHR*)alloc->alloc(from->rectangleCount * sizeof(const VkRectLayerKHR));
-            to->rectangleCount = from->rectangleCount;
-            for (uint32_t i = 0; i < (uint32_t)from->rectangleCount; ++i) {
-                deepcopy_VkRectLayerKHR(alloc, rootType, from->pRectangles + i,
-                                        (VkRectLayerKHR*)(to->pRectangles + i));
-            }
+    to->pRectangles = nullptr;
+    if (from->pRectangles) {
+        to->pRectangles =
+            (VkRectLayerKHR*)alloc->alloc(from->rectangleCount * sizeof(const VkRectLayerKHR));
+        to->rectangleCount = from->rectangleCount;
+        for (uint32_t i = 0; i < (uint32_t)from->rectangleCount; ++i) {
+            deepcopy_VkRectLayerKHR(alloc, rootType, from->pRectangles + i,
+                                    (VkRectLayerKHR*)(to->pRectangles + i));
         }
     }
 }
 
 void deepcopy_VkPresentRegionsKHR(Allocator* alloc, VkStructureType rootType,
                                   const VkPresentRegionsKHR* from, VkPresentRegionsKHR* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7915,16 +7109,14 @@ void deepcopy_VkPresentRegionsKHR(Allocator* alloc, VkStructureType rootType,
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pRegions = nullptr;
-        if (from->pRegions) {
-            to->pRegions = (VkPresentRegionKHR*)alloc->alloc(from->swapchainCount *
-                                                             sizeof(const VkPresentRegionKHR));
-            to->swapchainCount = from->swapchainCount;
-            for (uint32_t i = 0; i < (uint32_t)from->swapchainCount; ++i) {
-                deepcopy_VkPresentRegionKHR(alloc, rootType, from->pRegions + i,
-                                            (VkPresentRegionKHR*)(to->pRegions + i));
-            }
+    to->pRegions = nullptr;
+    if (from->pRegions) {
+        to->pRegions = (VkPresentRegionKHR*)alloc->alloc(from->swapchainCount *
+                                                         sizeof(const VkPresentRegionKHR));
+        to->swapchainCount = from->swapchainCount;
+        for (uint32_t i = 0; i < (uint32_t)from->swapchainCount; ++i) {
+            deepcopy_VkPresentRegionKHR(alloc, rootType, from->pRegions + i,
+                                        (VkPresentRegionKHR*)(to->pRegions + i));
         }
     }
 }
@@ -7934,8 +7126,6 @@ void deepcopy_VkPresentRegionsKHR(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkImportFenceFdInfoKHR(Allocator* alloc, VkStructureType rootType,
                                      const VkImportFenceFdInfoKHR* from,
                                      VkImportFenceFdInfoKHR* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7955,8 +7145,6 @@ void deepcopy_VkImportFenceFdInfoKHR(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkFenceGetFdInfoKHR(Allocator* alloc, VkStructureType rootType,
                                   const VkFenceGetFdInfoKHR* from, VkFenceGetFdInfoKHR* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -7980,8 +7168,6 @@ void deepcopy_VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR* from,
     VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8001,8 +7187,6 @@ void deepcopy_VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR(
 
 void deepcopy_VkPipelineInfoKHR(Allocator* alloc, VkStructureType rootType,
                                 const VkPipelineInfoKHR* from, VkPipelineInfoKHR* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8023,8 +7207,6 @@ void deepcopy_VkPipelineInfoKHR(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkPipelineExecutablePropertiesKHR(Allocator* alloc, VkStructureType rootType,
                                                 const VkPipelineExecutablePropertiesKHR* from,
                                                 VkPipelineExecutablePropertiesKHR* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8047,8 +7229,6 @@ void deepcopy_VkPipelineExecutablePropertiesKHR(Allocator* alloc, VkStructureTyp
 void deepcopy_VkPipelineExecutableInfoKHR(Allocator* alloc, VkStructureType rootType,
                                           const VkPipelineExecutableInfoKHR* from,
                                           VkPipelineExecutableInfoKHR* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8069,16 +7249,12 @@ void deepcopy_VkPipelineExecutableInfoKHR(Allocator* alloc, VkStructureType root
 void deepcopy_VkPipelineExecutableStatisticValueKHR(
     Allocator* alloc, VkStructureType rootType, const VkPipelineExecutableStatisticValueKHR* from,
     VkPipelineExecutableStatisticValueKHR* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkPipelineExecutableStatisticKHR(Allocator* alloc, VkStructureType rootType,
                                                const VkPipelineExecutableStatisticKHR* from,
                                                VkPipelineExecutableStatisticKHR* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8104,8 +7280,6 @@ void deepcopy_VkPipelineExecutableInternalRepresentationKHR(
     Allocator* alloc, VkStructureType rootType,
     const VkPipelineExecutableInternalRepresentationKHR* from,
     VkPipelineExecutableInternalRepresentationKHR* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8130,12 +7304,37 @@ void deepcopy_VkPipelineExecutableInternalRepresentationKHR(
 }
 
 #endif
+#ifdef VK_KHR_pipeline_library
+void deepcopy_VkPipelineLibraryCreateInfoKHR(Allocator* alloc, VkStructureType rootType,
+                                             const VkPipelineLibraryCreateInfoKHR* from,
+                                             VkPipelineLibraryCreateInfoKHR* to) {
+    *to = *from;
+    if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
+        rootType = from->sType;
+    }
+    const void* from_pNext = from;
+    size_t pNext_size = 0u;
+    while (!pNext_size && from_pNext) {
+        from_pNext = static_cast<const VkBaseOutStructure*>(from_pNext)->pNext;
+        pNext_size = goldfish_vk_extension_struct_size(rootType, from_pNext);
+    }
+    to->pNext = nullptr;
+    if (pNext_size) {
+        to->pNext = (void*)alloc->alloc(pNext_size);
+        deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
+    }
+    to->pLibraries = nullptr;
+    if (from->pLibraries) {
+        to->pLibraries = (VkPipeline*)alloc->dupArray(
+            from->pLibraries, from->libraryCount * sizeof(const VkPipeline));
+    }
+}
+
+#endif
 #ifdef VK_KHR_maintenance6
 void deepcopy_VkSetDescriptorBufferOffsetsInfoEXT(Allocator* alloc, VkStructureType rootType,
                                                   const VkSetDescriptorBufferOffsetsInfoEXT* from,
                                                   VkSetDescriptorBufferOffsetsInfoEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8167,8 +7366,6 @@ void deepcopy_VkBindDescriptorBufferEmbeddedSamplersInfoEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkBindDescriptorBufferEmbeddedSamplersInfoEXT* from,
     VkBindDescriptorBufferEmbeddedSamplersInfoEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8191,8 +7388,6 @@ void deepcopy_VkBindDescriptorBufferEmbeddedSamplersInfoEXT(
 void deepcopy_VkPhysicalDeviceMaintenance7FeaturesKHR(
     Allocator* alloc, VkStructureType rootType, const VkPhysicalDeviceMaintenance7FeaturesKHR* from,
     VkPhysicalDeviceMaintenance7FeaturesKHR* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8214,8 +7409,6 @@ void deepcopy_VkPhysicalDeviceMaintenance7PropertiesKHR(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceMaintenance7PropertiesKHR* from,
     VkPhysicalDeviceMaintenance7PropertiesKHR* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8236,8 +7429,6 @@ void deepcopy_VkPhysicalDeviceMaintenance7PropertiesKHR(
 void deepcopy_VkPhysicalDeviceLayeredApiPropertiesKHR(
     Allocator* alloc, VkStructureType rootType, const VkPhysicalDeviceLayeredApiPropertiesKHR* from,
     VkPhysicalDeviceLayeredApiPropertiesKHR* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8260,8 +7451,6 @@ void deepcopy_VkPhysicalDeviceLayeredApiPropertiesListKHR(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceLayeredApiPropertiesListKHR* from,
     VkPhysicalDeviceLayeredApiPropertiesListKHR* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8277,17 +7466,15 @@ void deepcopy_VkPhysicalDeviceLayeredApiPropertiesListKHR(
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pLayeredApis = nullptr;
-        if (from->pLayeredApis) {
-            to->pLayeredApis = (VkPhysicalDeviceLayeredApiPropertiesKHR*)alloc->alloc(
-                from->layeredApiCount * sizeof(VkPhysicalDeviceLayeredApiPropertiesKHR));
-            to->layeredApiCount = from->layeredApiCount;
-            for (uint32_t i = 0; i < (uint32_t)from->layeredApiCount; ++i) {
-                deepcopy_VkPhysicalDeviceLayeredApiPropertiesKHR(
-                    alloc, rootType, from->pLayeredApis + i,
-                    (VkPhysicalDeviceLayeredApiPropertiesKHR*)(to->pLayeredApis + i));
-            }
+    to->pLayeredApis = nullptr;
+    if (from->pLayeredApis) {
+        to->pLayeredApis = (VkPhysicalDeviceLayeredApiPropertiesKHR*)alloc->alloc(
+            from->layeredApiCount * sizeof(VkPhysicalDeviceLayeredApiPropertiesKHR));
+        to->layeredApiCount = from->layeredApiCount;
+        for (uint32_t i = 0; i < (uint32_t)from->layeredApiCount; ++i) {
+            deepcopy_VkPhysicalDeviceLayeredApiPropertiesKHR(
+                alloc, rootType, from->pLayeredApis + i,
+                (VkPhysicalDeviceLayeredApiPropertiesKHR*)(to->pLayeredApis + i));
         }
     }
 }
@@ -8296,8 +7483,6 @@ void deepcopy_VkPhysicalDeviceLayeredApiVulkanPropertiesKHR(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceLayeredApiVulkanPropertiesKHR* from,
     VkPhysicalDeviceLayeredApiVulkanPropertiesKHR* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8322,8 +7507,6 @@ void deepcopy_VkPhysicalDeviceLayeredApiVulkanPropertiesKHR(
 void deepcopy_VkMemoryBarrierAccessFlags3KHR(Allocator* alloc, VkStructureType rootType,
                                              const VkMemoryBarrierAccessFlags3KHR* from,
                                              VkMemoryBarrierAccessFlags3KHR* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8344,8 +7527,6 @@ void deepcopy_VkMemoryBarrierAccessFlags3KHR(Allocator* alloc, VkStructureType r
 void deepcopy_VkPhysicalDeviceMaintenance8FeaturesKHR(
     Allocator* alloc, VkStructureType rootType, const VkPhysicalDeviceMaintenance8FeaturesKHR* from,
     VkPhysicalDeviceMaintenance8FeaturesKHR* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8368,8 +7549,6 @@ void deepcopy_VkPhysicalDeviceMaintenance8FeaturesKHR(
 void deepcopy_VkPhysicalDeviceMaintenance9FeaturesKHR(
     Allocator* alloc, VkStructureType rootType, const VkPhysicalDeviceMaintenance9FeaturesKHR* from,
     VkPhysicalDeviceMaintenance9FeaturesKHR* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8391,8 +7570,6 @@ void deepcopy_VkPhysicalDeviceMaintenance9PropertiesKHR(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceMaintenance9PropertiesKHR* from,
     VkPhysicalDeviceMaintenance9PropertiesKHR* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8414,8 +7591,6 @@ void deepcopy_VkQueueFamilyOwnershipTransferPropertiesKHR(
     Allocator* alloc, VkStructureType rootType,
     const VkQueueFamilyOwnershipTransferPropertiesKHR* from,
     VkQueueFamilyOwnershipTransferPropertiesKHR* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8438,15 +7613,11 @@ void deepcopy_VkQueueFamilyOwnershipTransferPropertiesKHR(
 void deepcopy_VkNativeBufferUsage2ANDROID(Allocator* alloc, VkStructureType rootType,
                                           const VkNativeBufferUsage2ANDROID* from,
                                           VkNativeBufferUsage2ANDROID* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkNativeBufferANDROID(Allocator* alloc, VkStructureType rootType,
                                     const VkNativeBufferANDROID* from, VkNativeBufferANDROID* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8473,8 +7644,6 @@ void deepcopy_VkNativeBufferANDROID(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkSwapchainImageCreateInfoANDROID(Allocator* alloc, VkStructureType rootType,
                                                 const VkSwapchainImageCreateInfoANDROID* from,
                                                 VkSwapchainImageCreateInfoANDROID* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8496,8 +7665,6 @@ void deepcopy_VkPhysicalDevicePresentationPropertiesANDROID(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDevicePresentationPropertiesANDROID* from,
     VkPhysicalDevicePresentationPropertiesANDROID* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8521,8 +7688,6 @@ void deepcopy_VkPhysicalDeviceTransformFeedbackFeaturesEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceTransformFeedbackFeaturesEXT* from,
     VkPhysicalDeviceTransformFeedbackFeaturesEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8544,8 +7709,6 @@ void deepcopy_VkPhysicalDeviceTransformFeedbackPropertiesEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceTransformFeedbackPropertiesEXT* from,
     VkPhysicalDeviceTransformFeedbackPropertiesEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8567,8 +7730,6 @@ void deepcopy_VkPipelineRasterizationStateStreamCreateInfoEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPipelineRasterizationStateStreamCreateInfoEXT* from,
     VkPipelineRasterizationStateStreamCreateInfoEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8592,8 +7753,6 @@ void deepcopy_VkPhysicalDeviceDepthClipEnableFeaturesEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceDepthClipEnableFeaturesEXT* from,
     VkPhysicalDeviceDepthClipEnableFeaturesEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8615,8 +7774,6 @@ void deepcopy_VkPipelineRasterizationDepthClipStateCreateInfoEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPipelineRasterizationDepthClipStateCreateInfoEXT* from,
     VkPipelineRasterizationDepthClipStateCreateInfoEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8640,8 +7797,6 @@ void deepcopy_VkPhysicalDeviceBlendOperationAdvancedFeaturesEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceBlendOperationAdvancedFeaturesEXT* from,
     VkPhysicalDeviceBlendOperationAdvancedFeaturesEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8663,8 +7818,6 @@ void deepcopy_VkPhysicalDeviceBlendOperationAdvancedPropertiesEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceBlendOperationAdvancedPropertiesEXT* from,
     VkPhysicalDeviceBlendOperationAdvancedPropertiesEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8686,8 +7839,6 @@ void deepcopy_VkPipelineColorBlendAdvancedStateCreateInfoEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPipelineColorBlendAdvancedStateCreateInfoEXT* from,
     VkPipelineColorBlendAdvancedStateCreateInfoEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8710,16 +7861,12 @@ void deepcopy_VkPipelineColorBlendAdvancedStateCreateInfoEXT(
 void deepcopy_VkDrmFormatModifierPropertiesEXT(Allocator* alloc, VkStructureType rootType,
                                                const VkDrmFormatModifierPropertiesEXT* from,
                                                VkDrmFormatModifierPropertiesEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkDrmFormatModifierPropertiesListEXT(Allocator* alloc, VkStructureType rootType,
                                                    const VkDrmFormatModifierPropertiesListEXT* from,
                                                    VkDrmFormatModifierPropertiesListEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8735,17 +7882,15 @@ void deepcopy_VkDrmFormatModifierPropertiesListEXT(Allocator* alloc, VkStructure
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pDrmFormatModifierProperties = nullptr;
-        if (from->pDrmFormatModifierProperties) {
-            to->pDrmFormatModifierProperties = (VkDrmFormatModifierPropertiesEXT*)alloc->alloc(
-                from->drmFormatModifierCount * sizeof(VkDrmFormatModifierPropertiesEXT));
-            to->drmFormatModifierCount = from->drmFormatModifierCount;
-            for (uint32_t i = 0; i < (uint32_t)from->drmFormatModifierCount; ++i) {
-                deepcopy_VkDrmFormatModifierPropertiesEXT(
-                    alloc, rootType, from->pDrmFormatModifierProperties + i,
-                    (VkDrmFormatModifierPropertiesEXT*)(to->pDrmFormatModifierProperties + i));
-            }
+    to->pDrmFormatModifierProperties = nullptr;
+    if (from->pDrmFormatModifierProperties) {
+        to->pDrmFormatModifierProperties = (VkDrmFormatModifierPropertiesEXT*)alloc->alloc(
+            from->drmFormatModifierCount * sizeof(VkDrmFormatModifierPropertiesEXT));
+        to->drmFormatModifierCount = from->drmFormatModifierCount;
+        for (uint32_t i = 0; i < (uint32_t)from->drmFormatModifierCount; ++i) {
+            deepcopy_VkDrmFormatModifierPropertiesEXT(
+                alloc, rootType, from->pDrmFormatModifierProperties + i,
+                (VkDrmFormatModifierPropertiesEXT*)(to->pDrmFormatModifierProperties + i));
         }
     }
 }
@@ -8754,8 +7899,6 @@ void deepcopy_VkPhysicalDeviceImageDrmFormatModifierInfoEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceImageDrmFormatModifierInfoEXT* from,
     VkPhysicalDeviceImageDrmFormatModifierInfoEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8782,8 +7925,6 @@ void deepcopy_VkImageDrmFormatModifierListCreateInfoEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkImageDrmFormatModifierListCreateInfoEXT* from,
     VkImageDrmFormatModifierListCreateInfoEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8810,8 +7951,6 @@ void deepcopy_VkImageDrmFormatModifierExplicitCreateInfoEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkImageDrmFormatModifierExplicitCreateInfoEXT* from,
     VkImageDrmFormatModifierExplicitCreateInfoEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8827,16 +7966,14 @@ void deepcopy_VkImageDrmFormatModifierExplicitCreateInfoEXT(
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pPlaneLayouts = nullptr;
-        if (from->pPlaneLayouts) {
-            to->pPlaneLayouts = (VkSubresourceLayout*)alloc->alloc(
-                from->drmFormatModifierPlaneCount * sizeof(const VkSubresourceLayout));
-            to->drmFormatModifierPlaneCount = from->drmFormatModifierPlaneCount;
-            for (uint32_t i = 0; i < (uint32_t)from->drmFormatModifierPlaneCount; ++i) {
-                deepcopy_VkSubresourceLayout(alloc, rootType, from->pPlaneLayouts + i,
-                                             (VkSubresourceLayout*)(to->pPlaneLayouts + i));
-            }
+    to->pPlaneLayouts = nullptr;
+    if (from->pPlaneLayouts) {
+        to->pPlaneLayouts = (VkSubresourceLayout*)alloc->alloc(from->drmFormatModifierPlaneCount *
+                                                               sizeof(const VkSubresourceLayout));
+        to->drmFormatModifierPlaneCount = from->drmFormatModifierPlaneCount;
+        for (uint32_t i = 0; i < (uint32_t)from->drmFormatModifierPlaneCount; ++i) {
+            deepcopy_VkSubresourceLayout(alloc, rootType, from->pPlaneLayouts + i,
+                                         (VkSubresourceLayout*)(to->pPlaneLayouts + i));
         }
     }
 }
@@ -8844,8 +7981,6 @@ void deepcopy_VkImageDrmFormatModifierExplicitCreateInfoEXT(
 void deepcopy_VkImageDrmFormatModifierPropertiesEXT(
     Allocator* alloc, VkStructureType rootType, const VkImageDrmFormatModifierPropertiesEXT* from,
     VkImageDrmFormatModifierPropertiesEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8866,16 +8001,12 @@ void deepcopy_VkImageDrmFormatModifierPropertiesEXT(
 void deepcopy_VkDrmFormatModifierProperties2EXT(Allocator* alloc, VkStructureType rootType,
                                                 const VkDrmFormatModifierProperties2EXT* from,
                                                 VkDrmFormatModifierProperties2EXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
 }
 
 void deepcopy_VkDrmFormatModifierPropertiesList2EXT(
     Allocator* alloc, VkStructureType rootType, const VkDrmFormatModifierPropertiesList2EXT* from,
     VkDrmFormatModifierPropertiesList2EXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8891,17 +8022,15 @@ void deepcopy_VkDrmFormatModifierPropertiesList2EXT(
         to->pNext = (void*)alloc->alloc(pNext_size);
         deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
     }
-    if (from) {
-        to->pDrmFormatModifierProperties = nullptr;
-        if (from->pDrmFormatModifierProperties) {
-            to->pDrmFormatModifierProperties = (VkDrmFormatModifierProperties2EXT*)alloc->alloc(
-                from->drmFormatModifierCount * sizeof(VkDrmFormatModifierProperties2EXT));
-            to->drmFormatModifierCount = from->drmFormatModifierCount;
-            for (uint32_t i = 0; i < (uint32_t)from->drmFormatModifierCount; ++i) {
-                deepcopy_VkDrmFormatModifierProperties2EXT(
-                    alloc, rootType, from->pDrmFormatModifierProperties + i,
-                    (VkDrmFormatModifierProperties2EXT*)(to->pDrmFormatModifierProperties + i));
-            }
+    to->pDrmFormatModifierProperties = nullptr;
+    if (from->pDrmFormatModifierProperties) {
+        to->pDrmFormatModifierProperties = (VkDrmFormatModifierProperties2EXT*)alloc->alloc(
+            from->drmFormatModifierCount * sizeof(VkDrmFormatModifierProperties2EXT));
+        to->drmFormatModifierCount = from->drmFormatModifierCount;
+        for (uint32_t i = 0; i < (uint32_t)from->drmFormatModifierCount; ++i) {
+            deepcopy_VkDrmFormatModifierProperties2EXT(
+                alloc, rootType, from->pDrmFormatModifierProperties + i,
+                (VkDrmFormatModifierProperties2EXT*)(to->pDrmFormatModifierProperties + i));
         }
     }
 }
@@ -8912,8 +8041,6 @@ void deepcopy_VkPhysicalDeviceVertexAttributeDivisorPropertiesEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceVertexAttributeDivisorPropertiesEXT* from,
     VkPhysicalDeviceVertexAttributeDivisorPropertiesEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8937,8 +8064,6 @@ void deepcopy_VkPhysicalDeviceFragmentDensityMapFeaturesEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceFragmentDensityMapFeaturesEXT* from,
     VkPhysicalDeviceFragmentDensityMapFeaturesEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8960,8 +8085,6 @@ void deepcopy_VkPhysicalDeviceFragmentDensityMapPropertiesEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceFragmentDensityMapPropertiesEXT* from,
     VkPhysicalDeviceFragmentDensityMapPropertiesEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -8987,8 +8110,6 @@ void deepcopy_VkRenderPassFragmentDensityMapCreateInfoEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkRenderPassFragmentDensityMapCreateInfoEXT* from,
     VkRenderPassFragmentDensityMapCreateInfoEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9012,8 +8133,6 @@ void deepcopy_VkRenderingFragmentDensityMapAttachmentInfoEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkRenderingFragmentDensityMapAttachmentInfoEXT* from,
     VkRenderingFragmentDensityMapAttachmentInfoEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9037,8 +8156,6 @@ void deepcopy_VkPhysicalDeviceMemoryBudgetPropertiesEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceMemoryBudgetPropertiesEXT* from,
     VkPhysicalDeviceMemoryBudgetPropertiesEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9064,8 +8181,6 @@ void deepcopy_VkPhysicalDeviceProvokingVertexFeaturesEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceProvokingVertexFeaturesEXT* from,
     VkPhysicalDeviceProvokingVertexFeaturesEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9087,8 +8202,6 @@ void deepcopy_VkPhysicalDeviceProvokingVertexPropertiesEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceProvokingVertexPropertiesEXT* from,
     VkPhysicalDeviceProvokingVertexPropertiesEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9110,8 +8223,6 @@ void deepcopy_VkPipelineRasterizationProvokingVertexStateCreateInfoEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPipelineRasterizationProvokingVertexStateCreateInfoEXT* from,
     VkPipelineRasterizationProvokingVertexStateCreateInfoEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9135,8 +8246,6 @@ void deepcopy_VkPhysicalDeviceExtendedDynamicStateFeaturesEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceExtendedDynamicStateFeaturesEXT* from,
     VkPhysicalDeviceExtendedDynamicStateFeaturesEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9160,8 +8269,6 @@ void deepcopy_VkPhysicalDeviceTexelBufferAlignmentFeaturesEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceTexelBufferAlignmentFeaturesEXT* from,
     VkPhysicalDeviceTexelBufferAlignmentFeaturesEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9185,8 +8292,6 @@ void deepcopy_VkPhysicalDeviceDeviceMemoryReportFeaturesEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceDeviceMemoryReportFeaturesEXT* from,
     VkPhysicalDeviceDeviceMemoryReportFeaturesEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9207,8 +8312,6 @@ void deepcopy_VkPhysicalDeviceDeviceMemoryReportFeaturesEXT(
 void deepcopy_VkDeviceMemoryReportCallbackDataEXT(Allocator* alloc, VkStructureType rootType,
                                                   const VkDeviceMemoryReportCallbackDataEXT* from,
                                                   VkDeviceMemoryReportCallbackDataEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9229,8 +8332,6 @@ void deepcopy_VkDeviceMemoryReportCallbackDataEXT(Allocator* alloc, VkStructureT
 void deepcopy_VkDeviceDeviceMemoryReportCreateInfoEXT(
     Allocator* alloc, VkStructureType rootType, const VkDeviceDeviceMemoryReportCreateInfoEXT* from,
     VkDeviceDeviceMemoryReportCreateInfoEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9257,8 +8358,6 @@ void deepcopy_VkDeviceDeviceMemoryReportCreateInfoEXT(
 void deepcopy_VkPhysicalDeviceRobustness2FeaturesKHR(
     Allocator* alloc, VkStructureType rootType, const VkPhysicalDeviceRobustness2FeaturesKHR* from,
     VkPhysicalDeviceRobustness2FeaturesKHR* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9280,8 +8379,6 @@ void deepcopy_VkPhysicalDeviceRobustness2PropertiesKHR(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceRobustness2PropertiesKHR* from,
     VkPhysicalDeviceRobustness2PropertiesKHR* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9304,8 +8401,6 @@ void deepcopy_VkPhysicalDeviceRobustness2PropertiesKHR(
 void deepcopy_VkSamplerCustomBorderColorCreateInfoEXT(
     Allocator* alloc, VkStructureType rootType, const VkSamplerCustomBorderColorCreateInfoEXT* from,
     VkSamplerCustomBorderColorCreateInfoEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9329,8 +8424,6 @@ void deepcopy_VkPhysicalDeviceCustomBorderColorPropertiesEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceCustomBorderColorPropertiesEXT* from,
     VkPhysicalDeviceCustomBorderColorPropertiesEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9352,8 +8445,6 @@ void deepcopy_VkPhysicalDeviceCustomBorderColorFeaturesEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceCustomBorderColorFeaturesEXT* from,
     VkPhysicalDeviceCustomBorderColorFeaturesEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9377,8 +8468,6 @@ void deepcopy_VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT* from,
     VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9400,8 +8489,6 @@ void deepcopy_VkPhysicalDeviceGraphicsPipelineLibraryPropertiesEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceGraphicsPipelineLibraryPropertiesEXT* from,
     VkPhysicalDeviceGraphicsPipelineLibraryPropertiesEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9422,8 +8509,6 @@ void deepcopy_VkPhysicalDeviceGraphicsPipelineLibraryPropertiesEXT(
 void deepcopy_VkGraphicsPipelineLibraryCreateInfoEXT(
     Allocator* alloc, VkStructureType rootType, const VkGraphicsPipelineLibraryCreateInfoEXT* from,
     VkGraphicsPipelineLibraryCreateInfoEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9447,8 +8532,6 @@ void deepcopy_VkPhysicalDeviceYcbcr2Plane444FormatsFeaturesEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceYcbcr2Plane444FormatsFeaturesEXT* from,
     VkPhysicalDeviceYcbcr2Plane444FormatsFeaturesEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9472,8 +8555,6 @@ void deepcopy_VkPhysicalDeviceImageCompressionControlFeaturesEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceImageCompressionControlFeaturesEXT* from,
     VkPhysicalDeviceImageCompressionControlFeaturesEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9494,8 +8575,6 @@ void deepcopy_VkPhysicalDeviceImageCompressionControlFeaturesEXT(
 void deepcopy_VkImageCompressionControlEXT(Allocator* alloc, VkStructureType rootType,
                                            const VkImageCompressionControlEXT* from,
                                            VkImageCompressionControlEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9522,8 +8601,6 @@ void deepcopy_VkImageCompressionControlEXT(Allocator* alloc, VkStructureType roo
 void deepcopy_VkImageCompressionPropertiesEXT(Allocator* alloc, VkStructureType rootType,
                                               const VkImageCompressionPropertiesEXT* from,
                                               VkImageCompressionPropertiesEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9546,8 +8623,6 @@ void deepcopy_VkImageCompressionPropertiesEXT(Allocator* alloc, VkStructureType 
 void deepcopy_VkPhysicalDevice4444FormatsFeaturesEXT(
     Allocator* alloc, VkStructureType rootType, const VkPhysicalDevice4444FormatsFeaturesEXT* from,
     VkPhysicalDevice4444FormatsFeaturesEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9571,8 +8646,6 @@ void deepcopy_VkPhysicalDevicePrimitiveTopologyListRestartFeaturesEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDevicePrimitiveTopologyListRestartFeaturesEXT* from,
     VkPhysicalDevicePrimitiveTopologyListRestartFeaturesEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9596,8 +8669,6 @@ void deepcopy_VkPhysicalDeviceFrameBoundaryFeaturesEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceFrameBoundaryFeaturesEXT* from,
     VkPhysicalDeviceFrameBoundaryFeaturesEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9617,8 +8688,6 @@ void deepcopy_VkPhysicalDeviceFrameBoundaryFeaturesEXT(
 
 void deepcopy_VkFrameBoundaryEXT(Allocator* alloc, VkStructureType rootType,
                                  const VkFrameBoundaryEXT* from, VkFrameBoundaryEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9656,8 +8725,6 @@ void deepcopy_VkPhysicalDeviceExtendedDynamicState2FeaturesEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceExtendedDynamicState2FeaturesEXT* from,
     VkPhysicalDeviceExtendedDynamicState2FeaturesEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9681,8 +8748,6 @@ void deepcopy_VkPhysicalDeviceColorWriteEnableFeaturesEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceColorWriteEnableFeaturesEXT* from,
     VkPhysicalDeviceColorWriteEnableFeaturesEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9703,8 +8768,6 @@ void deepcopy_VkPhysicalDeviceColorWriteEnableFeaturesEXT(
 void deepcopy_VkPipelineColorWriteCreateInfoEXT(Allocator* alloc, VkStructureType rootType,
                                                 const VkPipelineColorWriteCreateInfoEXT* from,
                                                 VkPipelineColorWriteCreateInfoEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9733,8 +8796,6 @@ void deepcopy_VkPhysicalDevicePrimitivesGeneratedQueryFeaturesEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDevicePrimitivesGeneratedQueryFeaturesEXT* from,
     VkPhysicalDevicePrimitivesGeneratedQueryFeaturesEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9757,8 +8818,6 @@ void deepcopy_VkPhysicalDevicePrimitivesGeneratedQueryFeaturesEXT(
 void deepcopy_VkImportColorBufferGOOGLE(Allocator* alloc, VkStructureType rootType,
                                         const VkImportColorBufferGOOGLE* from,
                                         VkImportColorBufferGOOGLE* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9778,8 +8837,6 @@ void deepcopy_VkImportColorBufferGOOGLE(Allocator* alloc, VkStructureType rootTy
 
 void deepcopy_VkImportBufferGOOGLE(Allocator* alloc, VkStructureType rootType,
                                    const VkImportBufferGOOGLE* from, VkImportBufferGOOGLE* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9799,8 +8856,6 @@ void deepcopy_VkImportBufferGOOGLE(Allocator* alloc, VkStructureType rootType,
 
 void deepcopy_VkCreateBlobGOOGLE(Allocator* alloc, VkStructureType rootType,
                                  const VkCreateBlobGOOGLE* from, VkCreateBlobGOOGLE* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9821,8 +8876,6 @@ void deepcopy_VkCreateBlobGOOGLE(Allocator* alloc, VkStructureType rootType,
 void deepcopy_VkDebugMetadataGuestProcessNameGOOGLE(
     Allocator* alloc, VkStructureType rootType, const VkDebugMetadataGuestProcessNameGOOGLE* from,
     VkDebugMetadataGuestProcessNameGOOGLE* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9847,8 +8900,6 @@ void deepcopy_VkDebugMetadataGuestProcessNameGOOGLE(
 void deepcopy_VkDebugMetadataGuestProcessIdGOOGLE(Allocator* alloc, VkStructureType rootType,
                                                   const VkDebugMetadataGuestProcessIdGOOGLE* from,
                                                   VkDebugMetadataGuestProcessIdGOOGLE* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9869,8 +8920,6 @@ void deepcopy_VkDebugMetadataGuestProcessIdGOOGLE(Allocator* alloc, VkStructureT
 void deepcopy_VkDebugMetadataGuestThreadNameGOOGLE(Allocator* alloc, VkStructureType rootType,
                                                    const VkDebugMetadataGuestThreadNameGOOGLE* from,
                                                    VkDebugMetadataGuestThreadNameGOOGLE* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9895,8 +8944,6 @@ void deepcopy_VkDebugMetadataGuestThreadNameGOOGLE(Allocator* alloc, VkStructure
 void deepcopy_VkDebugMetadataGuestThreadIdGOOGLE(Allocator* alloc, VkStructureType rootType,
                                                  const VkDebugMetadataGuestThreadIdGOOGLE* from,
                                                  VkDebugMetadataGuestThreadIdGOOGLE* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9914,10 +8961,53 @@ void deepcopy_VkDebugMetadataGuestThreadIdGOOGLE(Allocator* alloc, VkStructureTy
     }
 }
 
+void deepcopy_VkGuestCapabilitiesGOOGLE(Allocator* alloc, VkStructureType rootType,
+                                        const VkGuestCapabilitiesGOOGLE* from,
+                                        VkGuestCapabilitiesGOOGLE* to) {
+    *to = *from;
+    if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
+        rootType = from->sType;
+    }
+    const void* from_pNext = from;
+    size_t pNext_size = 0u;
+    while (!pNext_size && from_pNext) {
+        from_pNext = static_cast<const VkBaseOutStructure*>(from_pNext)->pNext;
+        pNext_size = goldfish_vk_extension_struct_size(rootType, from_pNext);
+    }
+    to->pNext = nullptr;
+    if (pNext_size) {
+        to->pNext = (void*)alloc->alloc(pNext_size);
+        deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
+    }
+}
+
+void deepcopy_VkHostPointerResolveGOOGLE(Allocator* alloc, VkStructureType rootType,
+                                         const VkHostPointerResolveGOOGLE* from,
+                                         VkHostPointerResolveGOOGLE* to) {
+    *to = *from;
+    if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
+        rootType = from->sType;
+    }
+    const void* from_pNext = from;
+    size_t pNext_size = 0u;
+    while (!pNext_size && from_pNext) {
+        from_pNext = static_cast<const VkBaseOutStructure*>(from_pNext)->pNext;
+        pNext_size = goldfish_vk_extension_struct_size(rootType, from_pNext);
+    }
+    to->pNext = nullptr;
+    if (pNext_size) {
+        to->pNext = (void*)alloc->alloc(pNext_size);
+        deepcopy_extension_struct(alloc, rootType, from_pNext, (void*)(to->pNext));
+    }
+    to->pHostPointer = nullptr;
+    if (from->pHostPointer) {
+        to->pHostPointer =
+            (uint8_t*)alloc->dupArray(from->pHostPointer, from->pointerSize * sizeof(uint8_t));
+    }
+}
+
 void deepcopy_VkDebugMetadataGOOGLE(Allocator* alloc, VkStructureType rootType,
                                     const VkDebugMetadataGOOGLE* from, VkDebugMetadataGOOGLE* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9941,8 +9031,6 @@ void deepcopy_VkPhysicalDeviceBorderColorSwizzleFeaturesEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceBorderColorSwizzleFeaturesEXT* from,
     VkPhysicalDeviceBorderColorSwizzleFeaturesEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9964,8 +9052,6 @@ void deepcopy_VkSamplerBorderColorComponentMappingCreateInfoEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkSamplerBorderColorComponentMappingCreateInfoEXT* from,
     VkSamplerBorderColorComponentMappingCreateInfoEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -9991,8 +9077,6 @@ void deepcopy_VkPhysicalDeviceImageCompressionControlSwapchainFeaturesEXT(
     Allocator* alloc, VkStructureType rootType,
     const VkPhysicalDeviceImageCompressionControlSwapchainFeaturesEXT* from,
     VkPhysicalDeviceImageCompressionControlSwapchainFeaturesEXT* to) {
-    (void)alloc;
-    (void)rootType;
     *to = *from;
     if (rootType == VK_STRUCTURE_TYPE_MAX_ENUM) {
         rootType = from->sType;
@@ -10025,11 +9109,27 @@ void deepcopy_extension_struct(Allocator* alloc, VkStructureType rootType,
                 reinterpret_cast<VkShaderModuleCreateInfo*>(structExtension_out));
             break;
         }
+        case VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO: {
+            deepcopy_VkComputePipelineCreateInfo(
+                alloc, rootType,
+                reinterpret_cast<const VkComputePipelineCreateInfo*>(structExtension),
+                reinterpret_cast<VkComputePipelineCreateInfo*>(structExtension_out));
+            break;
+        }
         case VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO: {
             deepcopy_VkPipelineLayoutCreateInfo(
                 alloc, rootType,
                 reinterpret_cast<const VkPipelineLayoutCreateInfo*>(structExtension),
                 reinterpret_cast<VkPipelineLayoutCreateInfo*>(structExtension_out));
+            break;
+        }
+#endif
+#ifdef VK_GRAPHICS_VERSION_1_0
+        case VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO: {
+            deepcopy_VkGraphicsPipelineCreateInfo(
+                alloc, rootType,
+                reinterpret_cast<const VkGraphicsPipelineCreateInfo*>(structExtension),
+                reinterpret_cast<VkGraphicsPipelineCreateInfo*>(structExtension_out));
             break;
         }
 #endif
@@ -11135,6 +10235,15 @@ void deepcopy_extension_struct(Allocator* alloc, VkStructureType rootType,
             break;
         }
 #endif
+#ifdef VK_KHR_pipeline_library
+        case VK_STRUCTURE_TYPE_PIPELINE_LIBRARY_CREATE_INFO_KHR: {
+            deepcopy_VkPipelineLibraryCreateInfoKHR(
+                alloc, rootType,
+                reinterpret_cast<const VkPipelineLibraryCreateInfoKHR*>(structExtension),
+                reinterpret_cast<VkPipelineLibraryCreateInfoKHR*>(structExtension_out));
+            break;
+        }
+#endif
 #ifdef VK_KHR_maintenance7
         case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_7_FEATURES_KHR: {
             deepcopy_VkPhysicalDeviceMaintenance7FeaturesKHR(
@@ -11786,6 +10895,20 @@ void deepcopy_extension_struct(Allocator* alloc, VkStructureType rootType,
                 alloc, rootType,
                 reinterpret_cast<const VkDebugMetadataGuestThreadIdGOOGLE*>(structExtension),
                 reinterpret_cast<VkDebugMetadataGuestThreadIdGOOGLE*>(structExtension_out));
+            break;
+        }
+        case VK_STRUCTURE_TYPE_GUEST_CAPABILITIES_GOOGLE: {
+            deepcopy_VkGuestCapabilitiesGOOGLE(
+                alloc, rootType,
+                reinterpret_cast<const VkGuestCapabilitiesGOOGLE*>(structExtension),
+                reinterpret_cast<VkGuestCapabilitiesGOOGLE*>(structExtension_out));
+            break;
+        }
+        case VK_STRUCTURE_TYPE_HOST_POINTER_RESOLVE_GOOGLE: {
+            deepcopy_VkHostPointerResolveGOOGLE(
+                alloc, rootType,
+                reinterpret_cast<const VkHostPointerResolveGOOGLE*>(structExtension),
+                reinterpret_cast<VkHostPointerResolveGOOGLE*>(structExtension_out));
             break;
         }
 #endif

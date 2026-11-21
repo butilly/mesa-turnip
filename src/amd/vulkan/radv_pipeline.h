@@ -46,20 +46,11 @@ struct radv_pipeline {
    struct vk_pipeline_cache_object *cache_object;
 
    bool is_internal;
-   bool need_indirect_descriptors;
-   bool need_push_constants_upload;
    struct radv_shader *shaders[MESA_VULKAN_SHADER_STAGES];
    struct radv_shader *gs_copy_shader;
 
    /* Unique pipeline hash identifier. */
    uint64_t pipeline_hash;
-
-   /* Pipeline layout info. */
-   uint32_t push_constant_size;
-
-   /* Dynamic buffers info. */
-   bool need_dynamic_descriptors_offset_addr;
-   uint32_t dynamic_offset_count;
 };
 
 VK_DEFINE_NONDISP_HANDLE_CASTS(radv_pipeline, base, VkPipeline, VK_OBJECT_TYPE_PIPELINE)
@@ -93,11 +84,6 @@ void radv_shader_layout_init(const struct radv_pipeline_layout *pipeline_layout,
 
 void radv_pipeline_stage_finish(struct radv_shader_stage *stage);
 
-void radv_postprocess_nir(const struct radv_compiler_info *compiler_info,
-                          const struct radv_graphics_state_key *gfx_state, struct radv_shader_stage *stage);
-
-bool radv_shader_should_clear_lds(const struct radv_compiler_info *compiler_info, const nir_shader *shader);
-
 VkPipelineShaderStageCreateInfo *radv_copy_shader_stage_create_info(struct radv_device *device, uint32_t stageCount,
                                                                     const VkPipelineShaderStageCreateInfo *pStages,
                                                                     void *mem_ctx);
@@ -116,5 +102,8 @@ void radv_pipeline_report_pso_history(const struct radv_device *device, struct r
 
 struct radv_shader *radv_get_shader_from_executable_index(struct radv_pipeline *pipeline, int index,
                                                           mesa_shader_stage *stage);
+
+VkResult radv_dump_shader_stats(struct radv_device *device, struct radv_pipeline *pipeline, struct radv_shader *shader,
+                                FILE *output);
 
 #endif /* RADV_PIPELINE_H */

@@ -5,7 +5,12 @@ use crate::debug::*;
 use crate::ir::*;
 use rustc_hash::FxHashSet;
 
-fn validate_instr(instr: &Instr, ssa_vals: &mut FxHashSet<SSAValue>) {
+fn validate_instr(
+    model: &dyn Model,
+    shader_info: &ShaderInfo,
+    instr: &Instr,
+    ssa_vals: &mut FxHashSet<SSAValue>,
+) {
     for (src, src_type) in instr.srcs_types() {
         if let SrcRef::SSA(vec) = &src.src_ref {
             for ssa in vec {
@@ -20,18 +25,29 @@ fn validate_instr(instr: &Instr, ssa_vals: &mut FxHashSet<SSAValue>) {
             assert!(src.src_ref.bytes_read() <= 4);
         }
 
-        if src_type.comps() == 1 {
-            if src_type.bits() == 8 {
-                assert!(src.replicates_byte());
-            } else if src_type.bits() == 16 {
-                assert!(src.replicates_half());
-            }
+        if shader_info.src_swizzles_legal {
+            assert!(
+                model.op_src_supports_swizzle(&instr.op, src, src.swizzle),
+                "{instr} uses an unsupported swizzles for {src:?}"
+            );
         }
 
         let src_bytes = src_type.total_bytes();
         if src_type == DataType::SR || src_bytes > 8 {
             assert!(src.swizzle == Swizzle::NONE);
         } else {
+            if src_bytes == 1 {
+                assert!(
+                    src.swizzle.replicates_byte(),
+                    "{instr} uses invalid swizzle for {src:?}",
+                );
+            } else if src_bytes == 2 {
+                assert!(
+                    src.swizzle.replicates_half(),
+                    "{instr} uses invalid swizzle for {src:?}",
+                );
+            }
+
             let src_ref_byte_mask = match &src.src_ref {
                 SrcRef::Zero => 0xff,
                 SrcRef::Imm32(_) => 0xf,
@@ -78,6 +94,12 @@ fn validate_instr(instr: &Instr, ssa_vals: &mut FxHashSet<SSAValue>) {
             continue;
         }
 
+        if dst_type == DataType::SR {
+            let dst_bytes = dst.dst_ref.bytes_written();
+            assert_eq!(dst_bytes, dst.lanes.bytes(dst_bytes));
+            continue;
+        }
+
         let dst_type_bits = dst_type.bits();
         let dst_type_comps = dst_type.comps();
         if dst_type_bits >= 32 {
@@ -94,8 +116,8 @@ fn validate_instr(instr: &Instr, ssa_vals: &mut FxHashSet<SSAValue>) {
     }
 }
 
-impl Shader<'_> {
-    pub fn validate(&self) {
+impl Function {
+    pub fn validate(&self, model: &dyn Model, shader_info: &ShaderInfo) {
         if !cfg!(debug_assertions) && !DEBUG.contains(DebugFlags::VALIDATE) {
             return;
         }
@@ -123,7 +145,7 @@ impl Shader<'_> {
                     is_prelude = false;
                 }
 
-                validate_instr(instr, &mut ssa_vals);
+                validate_instr(model, shader_info, instr, &mut ssa_vals);
             }
 
             let mut is_postlude = true;
@@ -139,5 +161,22 @@ impl Shader<'_> {
                 }
             }
         }
+    }
+}
+
+impl Shader<'_> {
+    pub fn validate(&self) {
+        let mut entrypoint_count = 0;
+        for f in self.functions.iter() {
+            f.validate(self.model, &self.info);
+            if f.is_entrypoint {
+                entrypoint_count += 1;
+            }
+        }
+
+        assert!(
+            entrypoint_count == 1,
+            "We must have exactly one entrypoint per shader"
+        );
     }
 }

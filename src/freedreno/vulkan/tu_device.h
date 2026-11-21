@@ -52,6 +52,7 @@ enum global_shader {
    GLOBAL_SH_FS_BLIT_SWAP_COORDS,
    GLOBAL_SH_FS_BLIT_ZSCALE_SWAP_COORDS,
    GLOBAL_SH_FS_COPY_MS,
+   GLOBAL_SH_FS_COPY_MS_HALF,
    GLOBAL_SH_FS_RESOLVE_MS2,
    GLOBAL_SH_FS_RESOLVE_MS4,
    GLOBAL_SH_FS_RESOLVE_MS8,
@@ -138,6 +139,8 @@ struct tu_physical_device
    bool has_lazy_bos;
    /* Whether allocations can be aligned. */
    bool has_iova_align;
+   /* Whether the kernel can read the GPU timestamp. */
+   bool has_gpu_timestamp;
    uint64_t va_start;
    uint64_t va_size;
 
@@ -436,6 +439,7 @@ struct tu_device
    struct tu_cs sub_cs;
 
    /* Command streams to set pass index to a scratch reg */
+   struct tu_cs perfcntrs_pass_cs;
    struct tu_cs_entry *perfcntrs_pass_cs_entries;
 
    struct tu_cs_entry cmdbuf_QCTDD09112208_cmdbuf_start_cs_entry;
@@ -733,14 +737,17 @@ tu_bo_init_new_cached(struct tu_device *dev, struct vk_object_base *base,
       flags, NULL, name);
 }
 
-/* Return BO flags necessary for IBs */
+/* Return BO flags necessary for IB1s */
 static inline enum tu_bo_alloc_flags
-tu_bo_ib_flags(struct tu_device *dev)
+tu_bo_ib1_flags(struct tu_device *dev)
 {
    (void)dev; /* TODO don't do this workaround when newer FW comes out */
    /* All known firmwares have a bug where preemption can cause the wrong IB
     * contents to be fetched if there is 32B rollover (i.e. the IB crosses a
     * 4GB boundary). Avoid rollover here to workaround it.
+    *
+    * Only relevant for IB1, setting for other buffers may cause issues on
+    * A8XX / KGSL for some unknown reason.
     */
    return TU_BO_ALLOC_NO_32B_ROLLOVER;
 }

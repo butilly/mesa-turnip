@@ -87,6 +87,9 @@ impl WordCopies<'_> {
                 }
             }
             Op::FAdd(op) => {
+                if op.dst.lanes.is_f16_narrow() {
+                    return;
+                }
                 if let DstRef::SSA(vec) = &op.dst.dst_ref {
                     debug_assert_eq!(vec.comps(), 1);
                     let ssa = vec[0];
@@ -248,7 +251,7 @@ impl WordCopies<'_> {
             SrcMod::None => (),
             SrcMod::BNot => {
                 // BNot requires an integer type
-                if !src_type.is_int_type() {
+                if !src_type.is_any_int_type() {
                     return;
                 }
             }
@@ -448,10 +451,10 @@ impl WordCopies<'_> {
     }
 }
 
-fn copy_prop_words(s: &mut Shader) {
-    let mut copies = WordCopies::new(s.model);
+fn copy_prop_words(f: &mut Function, model: &dyn Model) {
+    let mut copies = WordCopies::new(model);
 
-    for block in s.blocks.iter_mut() {
+    for block in f.blocks.iter_mut() {
         for instr in block.instrs.iter_mut() {
             for src_idx in 0..instr.srcs().len() {
                 copies.try_prop_to_src(instr, src_idx);
@@ -785,10 +788,10 @@ impl ByteCopies<'_> {
     }
 }
 
-fn copy_prop_bytes(s: &mut Shader) {
-    let mut copies = ByteCopies::new(s.model);
+fn copy_prop_bytes(f: &mut Function, model: &dyn Model) {
+    let mut copies = ByteCopies::new(model);
 
-    for block in s.blocks.iter_mut() {
+    for block in f.blocks.iter_mut() {
         for instr in block.instrs.iter_mut() {
             for src_idx in 0..instr.srcs().len() {
                 copies.try_prop_to_src(instr, src_idx);
@@ -800,7 +803,9 @@ fn copy_prop_bytes(s: &mut Shader) {
 
 impl Shader<'_> {
     pub fn opt_copy_prop(&mut self) {
-        copy_prop_words(self);
-        copy_prop_bytes(self);
+        for f in self.functions.iter_mut() {
+            copy_prop_words(f, self.model);
+            copy_prop_bytes(f, self.model);
+        }
     }
 }

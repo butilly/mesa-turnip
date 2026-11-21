@@ -1026,16 +1026,20 @@ vk_color_blend_state_init(struct vk_color_blend_state *cb,
    cb->logic_op_enable = cb_info->logicOpEnable;
    cb->logic_op = cb_info->logicOp;
 
-   assert(cb_info->attachmentCount <= MESA_VK_MAX_COLOR_ATTACHMENTS);
-   cb->attachment_count = cb_info->attachmentCount;
-
-   /* Per spec, pAttachments is ignored if BLEND_ENABLES, BLEND_EQUATIONS,
-    * WRITE_MASKS, and BLEND_ADVANCED are all dynamic.
+   /* Per spec, attachmentCount and pAttachments are ignored if
+    * BLEND_ENABLES, BLEND_EQUATIONS, WRITE_MASKS, and BLEND_ADVANCED are all
+    * dynamic. BLEND_ADVANCED is implicitly dynamic when
+    * advancedBlendCoherentOperations is not enabled.
     */
    bool full_dynamic = IS_DYNAMIC(CB_BLEND_ENABLES) &&
                        IS_DYNAMIC(CB_BLEND_EQUATIONS) &&
                        IS_DYNAMIC(CB_WRITE_MASKS) &&
                        IS_DYNAMIC(CB_BLEND_ADVANCED);
+
+   if (!full_dynamic) {
+      assert(cb_info->attachmentCount <= MESA_VK_MAX_COLOR_ATTACHMENTS);
+      cb->attachment_count = cb_info->attachmentCount;
+   }
 
    /* Advanced blend state is ignored if CB_BLEND_ADVANCED is dynamic */
    const VkPipelineColorBlendAdvancedStateCreateInfoEXT *advanced = NULL;
@@ -1044,9 +1048,8 @@ vk_color_blend_state_init(struct vk_color_blend_state *cb,
          PIPELINE_COLOR_BLEND_ADVANCED_STATE_CREATE_INFO_EXT);
    }
 
-   for (uint32_t a = 0; a < cb_info->attachmentCount; a++) {
-      const VkPipelineColorBlendAttachmentState *att =
-         full_dynamic ? NULL : &cb_info->pAttachments[a];
+   for (uint32_t a = 0; a < cb->attachment_count; a++) {
+      const VkPipelineColorBlendAttachmentState *att = &cb_info->pAttachments[a];
 
       cb->attachments[a] = (struct vk_color_blend_attachment_state) {
          .blend_enable = IS_DYNAMIC(CB_BLEND_ENABLES) || att->blendEnable,
@@ -1071,7 +1074,8 @@ vk_color_blend_state_init(struct vk_color_blend_state *cb,
       vk_find_struct_const(cb_info->pNext, PIPELINE_COLOR_WRITE_CREATE_INFO_EXT);
    if (!IS_DYNAMIC(CB_COLOR_WRITE_ENABLES) && cw_info != NULL) {
       uint8_t color_write_enables = 0;
-      assert(cb_info->attachmentCount == cw_info->attachmentCount);
+      assert(full_dynamic ||
+             cb_info->attachmentCount == cw_info->attachmentCount);
       for (uint32_t a = 0; a < cw_info->attachmentCount; a++) {
          if (cw_info->pColorWriteEnables[a])
             color_write_enables |= BITFIELD_BIT(a);
@@ -1309,14 +1313,6 @@ vk_render_pass_state_init(struct vk_render_pass_state *rp,
    if (r_info == NULL)
       return;
 
-   VkPipelineRenderingCreateInfo local_rendering_info;
-   VkFormat local_color_format;
-   if (vk_android_is_efr_pipeline_rendering_info(info, r_info)) {
-      r_info = vk_android_get_efr_pipeline_rendering_info(
-         info, r_info, &local_rendering_info,
-         &local_color_format);
-   }
-
    const VkCustomResolveCreateInfoEXT *crc_info =
       vk_find_struct_const(info->pNext, CUSTOM_RESOLVE_CREATE_INFO_EXT);
    rp->custom_resolve = crc_info != NULL && crc_info->customResolve;
@@ -1340,6 +1336,19 @@ vk_render_pass_state_init(struct vk_render_pass_state *rp,
    if (info->renderPass == VK_NULL_HANDLE &&
        !(lib & VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT)) {
       return;
+   }
+
+   /* Perform the EFR check after verifying the fragment output interface
+    * is present, since it reads pColorAttachmentFormats which is ignored
+    * (and may be NULL or invalid) when fragment output interface state is
+    * absent.
+    */
+   VkPipelineRenderingCreateInfo local_rendering_info;
+   VkFormat local_color_format;
+   if (vk_android_is_efr_pipeline_rendering_info(info, r_info)) {
+      r_info = vk_android_get_efr_pipeline_rendering_info(
+         info, r_info, &local_rendering_info,
+         &local_color_format);
    }
 
    assert(r_info->colorAttachmentCount <= MESA_VK_MAX_COLOR_ATTACHMENTS);
@@ -1828,10 +1837,12 @@ vk_graphics_pipeline_state_fill(const struct vk_device *device,
    const VkPipelineFragmentShadingRateStateCreateInfoKHR *fsr_info =
       vk_find_struct_const(info->pNext, PIPELINE_FRAGMENT_SHADING_RATE_STATE_CREATE_INFO_KHR);
 
-   const VkRenderingInputAttachmentIndexInfoKHR *ial_info =
-      !driver_rp ? vk_get_pipeline_rendering_ial_info(info)
-                 : vk_find_struct_const(
-                      info->pNext, RENDERING_INPUT_ATTACHMENT_INDEX_INFO_KHR);
+   const VkRenderingInputAttachmentIndexInfoKHR *ial_info = NULL;
+   if (needs & MESA_VK_GRAPHICS_STATE_INPUT_ATTACHMENT_MAP_BIT) {
+      ial_info = !driver_rp ? vk_get_pipeline_rendering_ial_info(info)
+                            : vk_find_struct_const(
+                                info->pNext, RENDERING_INPUT_ATTACHMENT_INDEX_INFO_KHR);
+   }
 
    const VkRenderingAttachmentLocationInfoKHR *cal_info =
       vk_find_struct_const(info->pNext, RENDERING_ATTACHMENT_LOCATION_INFO_KHR);

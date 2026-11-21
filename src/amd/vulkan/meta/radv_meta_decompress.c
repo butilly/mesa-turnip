@@ -109,14 +109,6 @@ get_pipeline_gfx(struct radv_device *device, struct radv_image *image, VkPipelin
             .attachmentCount = 0,
             .pAttachments = NULL,
          },
-      .pDepthStencilState =
-         &(VkPipelineDepthStencilStateCreateInfo){
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-            .depthTestEnable = false,
-            .depthWriteEnable = false,
-            .depthBoundsTestEnable = false,
-            .stencilTestEnable = false,
-         },
       .pDynamicState =
          &(VkPipelineDynamicStateCreateInfo){
             .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
@@ -448,37 +440,87 @@ radv_expand_depth_stencil_compute(struct radv_cmd_buffer *cmd_buffer, struct rad
 }
 
 void
-radv_expand_depth_stencil(struct radv_cmd_buffer *cmd_buffer, struct radv_image *image,
-                          const VkImageSubresourceRange *subresourceRange, const VkSampleLocationsInfoEXT *sample_locs)
+radv_decompress_depth_stencil(struct radv_cmd_buffer *cmd_buffer, struct radv_image *image,
+                              const VkImageSubresourceRange *subresourceRange,
+                              const VkSampleLocationsInfoEXT *sample_locs)
 {
    const struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
    const struct radv_physical_device *pdev = radv_device_physical(device);
+   const bool use_gang = cmd_buffer->qf == RADV_QUEUE_TRANSFER;
    struct radv_barrier_data barrier = {0};
 
-   if (cmd_buffer->qf != RADV_QUEUE_GENERAL && cmd_buffer->qf != RADV_QUEUE_COMPUTE &&
-       !radv_cmd_buffer_is_transfer_gang(cmd_buffer))
+   if (cmd_buffer->qf != RADV_QUEUE_GENERAL && cmd_buffer->qf != RADV_QUEUE_COMPUTE && !use_gang)
       return;
+
+   enum ac_barrier_flags *flush_bits = use_gang ? &cmd_buffer->gang.flush_bits : &cmd_buffer->state.flush_bits;
 
    barrier.layout_transitions.depth_stencil_expand = 1;
    radv_describe_layout_transition(cmd_buffer, &barrier);
 
-   if (cmd_buffer->qf == RADV_QUEUE_GENERAL) {
+   /* We can only do draw-based decompression outside render passes. */
+   const bool use_draw_based_decompression = cmd_buffer->qf == RADV_QUEUE_GENERAL && !cmd_buffer->state.render.active;
+
+   if (use_draw_based_decompression) {
       radv_process_depth_stencil(cmd_buffer, image, subresourceRange, sample_locs);
 
-      cmd_buffer->state.flush_bits |=
-         AC_BARRIER_SYNC_AND_INV_DB | (pdev->info.gfx_level < GFX10 ? AC_BARRIER_SYNC_AND_INV_DB_META : 0);
+      *flush_bits |= AC_BARRIER_SYNC_AND_INV_DB | (pdev->info.gfx_level < GFX10 ? AC_BARRIER_SYNC_AND_INV_DB_META : 0);
    } else {
-      radv_expand_depth_stencil_compute(cmd_buffer, image, subresourceRange);
+      /* Fallback to compute because HTILE decompression on SDMA isn't possible. */
+      if (use_gang) {
+         if (!radv_gang_init(cmd_buffer))
+            return;
 
-      cmd_buffer->state.flush_bits |= AC_BARRIER_SYNC_CS | AC_BARRIER_INV_VMEM |
-                                      radv_src_access_flush(cmd_buffer, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                                            VK_ACCESS_2_SHADER_WRITE_BIT, 0, image, subresourceRange);
+         /* Wait for all pending work on SDMA. */
+         cmd_buffer->gang.sem.leader_value++;
+         if (radv_flush_gang_leader_semaphore(cmd_buffer)) {
+            radv_wait_gang_leader(cmd_buffer);
+            cmd_buffer->gang.flush_bits |= AC_BARRIER_INV_L2;
+         }
 
-      if (!radv_image_decompress_htile_on_image_stores(device, image)) {
-         /* Initialize the HTILE metadata as "fully expanded". */
-         uint32_t htile_value = radv_get_htile_initial_value(device, image);
+         /* Emit pending cache flushes on ACE. */
+         radv_gang_cache_flush(cmd_buffer);
+      }
 
-         cmd_buffer->state.flush_bits |= radv_clear_htile(cmd_buffer, image, subresourceRange, htile_value, false);
+      u_foreach_bit (i, subresourceRange->aspectMask) {
+         VkImageSubresourceRange range = *subresourceRange;
+         range.aspectMask = 1 << i;
+
+         radv_expand_depth_stencil_compute(cmd_buffer, image, &range);
+
+         *flush_bits |= AC_BARRIER_SYNC_CS | AC_BARRIER_INV_VMEM |
+                        radv_src_access_flush(cmd_buffer, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                              VK_ACCESS_2_SHADER_WRITE_BIT, 0, image, &range);
+      }
+
+      if (use_gang) {
+         /* Wait on SDMA for the ACE decompress to finish. */
+         cmd_buffer->gang.sem.follower_value++;
+         if (radv_flush_gang_follower_semaphore(cmd_buffer))
+            radv_wait_gang_follower(cmd_buffer);
       }
    }
+
+   enum radv_meta_htile_preserve_flags preserve = RADV_HTILE_PRESERVE_VRS | RADV_HTILE_DYNAMIC_ZRANGE_PRECISION;
+
+   if (use_draw_based_decompression) {
+      /* Z/S decompression via DB always sets the compression bits. */
+      preserve |= RADV_HTILE_PRESERVE_Z_COMPRESSION | RADV_HTILE_PRESERVE_STENCIL_COMPRESSION;
+   } else if (radv_image_decompress_htile_on_image_stores(device, image)) {
+      /* Clear the Z/S compression bits only if image stores don't decompress Z/S. */
+      preserve |= RADV_HTILE_PRESERVE_Z_COMPRESSION | RADV_HTILE_PRESERVE_STENCIL_COMPRESSION;
+
+      /* If image stores update HTILE, we must invalidate L2 metadata before clearing. Unfortunately,
+       * only VK_ACCESS_2_SHADER_STORAGE_READ_BIT sets that, while WRITE_BIT doesn't.
+       */
+      *flush_bits |= radv_dst_access_flush(cmd_buffer, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                           VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                                           0, image, subresourceRange);
+   }
+
+   /* Reset the HiZ range in HTILE to [0, 1] because the decompress pass doesn't do it.
+    *
+    * For compute-based decompression without image stores updating HTILE, we also need to clear the compression
+    * bits to uncompressed.
+    */
+   *flush_bits |= radv_clear_htile_rmw_to_uncompressed(cmd_buffer, image, subresourceRange, preserve);
 }

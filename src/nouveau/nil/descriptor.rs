@@ -7,20 +7,21 @@ extern crate mesa_util;
 extern crate nvidia_headers;
 
 use mesa_util::bitview::*;
+use mesa_util::format::pipe_format::*;
 use nil_rs_bindings::*;
-use nvidia_headers::classes::cl9097::tex as cl9097;
 use nvidia_headers::classes::cl9097::FERMI_A;
-use nvidia_headers::classes::clb097::tex as clb097;
+use nvidia_headers::classes::cl9097::tex as cl9097;
 use nvidia_headers::classes::clb097::MAXWELL_A;
-use nvidia_headers::classes::clc097::tex as clc097;
+use nvidia_headers::classes::clb097::tex as clb097;
 use nvidia_headers::classes::clc097::PASCAL_A;
+use nvidia_headers::classes::clc097::tex as clc097;
 use nvidia_headers::classes::clc397::VOLTA_A;
-use nvidia_headers::classes::clcb97::tex as clcb97;
 use nvidia_headers::classes::clcb97::HOPPER_A;
+use nvidia_headers::classes::clcb97::tex as clcb97;
 use paste::paste;
 use std::ops::Range;
 
-use crate::extent::{units, Extent4D};
+use crate::extent::{Extent4D, units};
 use crate::format::Format;
 use crate::image::{Image, ImageDim, SampleLayout, View, ViewAccess, ViewType};
 
@@ -760,7 +761,6 @@ fn nv9097_nil_fill_buffer_desc(
     let mut th = BitMutView::new(desc_out);
     th.set_field(cl9097::TEXHEADV2_USE_TEXTURE_HEADER_VERSION2, true);
 
-    assert!(format.supports_buffer());
     nv9097_set_th_v2_0(&mut th, &format, IDENTITY_SWIZZLE);
 
     th.set_field(cl9097::TEXHEADV2_OFFSET_LOWER, base_address as u32);
@@ -771,6 +771,8 @@ fn nv9097_nil_fill_buffer_desc(
     th.set_field(cl9097::TEXHEADV2_WIDTH, num_elements);
 
     set_enum!(th, cl9097, TEXHEADV2_TEXTURE_TYPE, ONE_D_BUFFER);
+
+    assert!(!format.is_srgb());
 }
 
 fn nvb097_nil_fill_buffer_desc(
@@ -782,7 +784,6 @@ fn nvb097_nil_fill_buffer_desc(
     *desc_out = [0u32; 8];
     let mut th = BitMutView::new(desc_out);
 
-    assert!(format.supports_buffer());
     nvb097_set_th_bl_0(&mut th, &format, IDENTITY_SWIZZLE);
 
     th.set_field2(
@@ -801,8 +802,29 @@ fn nvb097_nil_fill_buffer_desc(
 
     set_enum!(th, clb097, TEXHEAD_1D_TEXTURE_TYPE, ONE_D_BUFFER);
 
+    th.set_field(clb097::TEXHEAD_1D_S_R_G_B_CONVERSION, format.is_srgb());
+
     // TODO: Do we need this?
     set_enum!(th, clb097, TEXHEAD_1D_SECTOR_PROMOTION, NO_PROMOTION);
+}
+
+#[rustfmt::skip]
+fn nvcb97_comp_sizes_to_1d_srgb(comp_sizes: u32) -> u32 {
+    match comp_sizes {
+        clcb97::TEXHEAD_V2_1DRT_COMPONENTS_SIZES_1D_X8B8G8R8 =>
+        clcb97::TEXHEAD_V2_1DRT_COMPONENTS_SIZES_1D_X8B8G8R8_SRGB,
+
+        clcb97::TEXHEAD_V2_1DRT_COMPONENTS_SIZES_1D_A8B8G8R8 =>
+        clcb97::TEXHEAD_V2_1DRT_COMPONENTS_SIZES_1D_A8B8G8R8_SRGB,
+
+        clcb97::TEXHEAD_V2_1DRT_COMPONENTS_SIZES_1D_G8R8 =>
+        clcb97::TEXHEAD_V2_1DRT_COMPONENTS_SIZES_1D_G8R8_SRGB,
+
+        clcb97::TEXHEAD_V2_1DRT_COMPONENTS_SIZES_1D_R8 =>
+        clcb97::TEXHEAD_V2_1DRT_COMPONENTS_SIZES_1D_R8_SRGB,
+
+        _ => panic!(),
+    }
 }
 
 fn nvcb97_nil_fill_buffer_desc(
@@ -814,7 +836,6 @@ fn nvcb97_nil_fill_buffer_desc(
     *desc_out = [0u32; 8];
     let mut th = BitMutView::new(desc_out);
 
-    assert!(format.supports_buffer());
     nvcb97_set_th_bl_0(&mut th, &format, IDENTITY_SWIZZLE);
 
     th.set_field2(
@@ -831,6 +852,15 @@ fn nvcb97_nil_fill_buffer_desc(
     );
 
     th.set_field(clcb97::TEXHEAD_V2_1DRT_WIDTH_MINUS_ONE, num_elements - 1);
+
+    if format.is_srgb() {
+        // Overwrite the format with the sRGB version
+        let fmt = &format.info().tic;
+        th.set_field(
+            clcb97::TEXHEAD_V2_BL_COMPONENTS,
+            nvcb97_comp_sizes_to_1d_srgb(fmt.comp_sizes()),
+        );
+    }
 
     // TODO: Do we need this?
     set_enum!(th, clcb97, TEXHEAD_1D_SECTOR_PROMOTION, NO_PROMOTION);
@@ -955,6 +985,7 @@ impl Descriptor {
     ) -> Self {
         let mut desc = Descriptor { bits: [0_u32; 8] };
 
+        assert!(format.supports_buffer(dev));
         if dev.cls_eng3d >= HOPPER_A {
             nvcb97_nil_fill_buffer_desc(
                 base_address,

@@ -1,10 +1,10 @@
 // Copyright © 2023 Collabora, Ltd.
 // SPDX-License-Identifier: MIT
 
-use crate::api::{GetDebugFlags, DEBUG};
+use crate::api::{DEBUG, GetDebugFlags};
 use crate::ir::*;
 
-use compiler::bitset::BitSet;
+use mesa_util::bitset::BitSet;
 use rustc_hash::FxHashMap;
 
 struct PhiMap {
@@ -242,8 +242,10 @@ impl BarPropPass {
                                         .into(),
                                 }),
                             );
+                            bmovs.insert(1, instr);
+                        } else {
+                            bmovs.insert(0, instr);
                         }
-                        bmovs.insert(1, instr);
                         bmovs.into()
                     }
                 }

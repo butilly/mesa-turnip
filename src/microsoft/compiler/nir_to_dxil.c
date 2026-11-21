@@ -113,8 +113,6 @@ nir_options = {
    .lower_uadd_sat = true,
    .lower_usub_sat = true,
    .lower_iadd_sat = true,
-   .lower_uadd_carry = true,
-   .lower_usub_borrow = true,
    .lower_mul_high = true,
    .lower_pack_half_2x16 = true,
    .lower_pack_unorm_4x8 = true,
@@ -606,6 +604,7 @@ struct ntd_context {
 
    BITSET_WORD *float_types;
    BITSET_WORD *int_types;
+   bool disable_math_refactoring;
 
    const struct dxil_logger *logger;
 };
@@ -1888,7 +1887,7 @@ get_module_flags(struct ntd_context *ctx)
    if (ctx->mod.feats.extended_command_info)
       flags |= (1ull << 38);
 
-   if (ctx->opts->disable_math_refactoring)
+   if (ctx->opts->disable_math_refactoring || ctx->disable_math_refactoring)
       flags |= (1 << 1);
 
    /* Work around https://github.com/microsoft/DirectXShaderCompiler/issues/4616
@@ -2119,6 +2118,9 @@ bitcast_to_int(struct ntd_context *ctx, unsigned bit_size,
    if (!type)
       return NULL;
 
+   if (bit_size == 16)
+      ctx->mod.feats.native_low_precision = true;
+
    return dxil_emit_cast(&ctx->mod, DXIL_CAST_BITCAST, type, value);
 }
 
@@ -2129,6 +2131,9 @@ bitcast_to_float(struct ntd_context *ctx, unsigned bit_size,
    const struct dxil_type *type = dxil_module_get_float_type(&ctx->mod, bit_size);
    if (!type)
       return NULL;
+
+   if (bit_size == 16)
+      ctx->mod.feats.native_low_precision = true;
 
    return dxil_emit_cast(&ctx->mod, DXIL_CAST_BITCAST, type, value);
 }
@@ -2143,47 +2148,45 @@ is_phi_src(nir_def *ssa)
 }
 
 static void
-store_ssa_def(struct ntd_context *ctx, nir_def *ssa, unsigned chan,
-              const struct dxil_value *value)
+require_value_features(struct dxil_module *mod, const struct dxil_value *value)
+{
+   if (!value)
+      return;
+
+   const struct dxil_type *type = dxil_value_get_type(value);
+   if (type == mod->float64_type)
+      mod->feats.doubles = true;
+   if (type == mod->float16_type || type == mod->int16_type)
+      mod->feats.min_precision = true;
+   if (type == mod->int64_type)
+      mod->feats.int64_ops = true;
+}
+
+static void
+store_def(struct ntd_context *ctx, nir_def *ssa, unsigned chan,
+          const struct dxil_value *value)
 {
    assert(ssa->index < ctx->num_defs);
    assert(chan < ssa->num_components);
+   require_value_features(&ctx->mod, value);
+
    /* Insert bitcasts for phi srcs in the parent block */
-   if (is_phi_src(ssa)) {
+   if (value && is_phi_src(ssa)) {
       /* Prefer ints over floats if it could be both or if we have no type info */
       nir_alu_type expect_type =
          BITSET_TEST(ctx->int_types, ssa->index) ? nir_type_int :
          (BITSET_TEST(ctx->float_types, ssa->index) ? nir_type_float :
           nir_type_int);
       assert(ssa->bit_size != 1 || expect_type == nir_type_int);
-      if (ssa->bit_size != 1 && expect_type != dxil_type_to_nir_type(dxil_value_get_type(value)))
-         value = dxil_emit_cast(&ctx->mod, DXIL_CAST_BITCAST,
-                                expect_type == nir_type_int ?
-                                 dxil_module_get_int_type(&ctx->mod, ssa->bit_size) :
-                                 dxil_module_get_float_type(&ctx->mod, ssa->bit_size), value);
-      if (ssa->bit_size == 64) {
-         if (expect_type == nir_type_int)
-            ctx->mod.feats.int64_ops = true;
-         if (expect_type == nir_type_float)
-            ctx->mod.feats.doubles = true;
+      if (ssa->bit_size != 1 &&
+          expect_type != dxil_type_to_nir_type(dxil_value_get_type(value))) {
+         value = expect_type == nir_type_int ?
+            bitcast_to_int(ctx, ssa->bit_size, value) :
+            bitcast_to_float(ctx, ssa->bit_size, value);
+         require_value_features(&ctx->mod, value);
       }
    }
    ctx->defs[ssa->index].chans[chan] = value;
-}
-
-static void
-store_def(struct ntd_context *ctx, nir_def *def, unsigned chan,
-           const struct dxil_value *value)
-{
-   const struct dxil_type *type = dxil_value_get_type(value);
-   if (type == ctx->mod.float64_type)
-      ctx->mod.feats.doubles = true;
-   if (type == ctx->mod.float16_type ||
-       type == ctx->mod.int16_type)
-      ctx->mod.feats.min_precision = true;
-   if (type == ctx->mod.int64_type)
-      ctx->mod.feats.int64_ops = true;
-   store_ssa_def(ctx, def, chan, value);
 }
 
 static void
@@ -2223,8 +2226,6 @@ get_src(struct ntd_context *ctx, nir_src *src, unsigned chan,
          assert(ctx->mod.feats.doubles);
          ctx->mod.feats.int64_ops = true;
       }
-      if (bit_size == 16)
-         ctx->mod.feats.native_low_precision = true;
       assert(dxil_value_type_bitsize_equal_to(value, bit_size));
       return bitcast_to_int(ctx,  bit_size, value);
       }
@@ -2239,8 +2240,6 @@ get_src(struct ntd_context *ctx, nir_src *src, unsigned chan,
          assert(ctx->mod.feats.int64_ops);
          ctx->mod.feats.doubles = true;
       }
-      if (bit_size == 16)
-         ctx->mod.feats.native_low_precision = true;
       assert(dxil_value_type_bitsize_equal_to(value, bit_size));
       return bitcast_to_float(ctx, bit_size, value);
 
@@ -2272,7 +2271,8 @@ emit_binop(struct ntd_context *ctx, nir_alu_instr *alu,
    bool is_float_op = nir_alu_type_get_base_type(nir_op_infos[alu->op].output_type) == nir_type_float;
 
    enum dxil_opt_flags flags = 0;
-   if (is_float_op && !nir_alu_instr_is_exact(alu))
+   if (is_float_op && !nir_alu_instr_is_exact(alu) &&
+       !nir_alu_instr_is_signed_zero_inf_nan_preserve(alu))
       flags |= DXIL_UNSAFE_ALGEBRA;
 
    const struct dxil_value *v = dxil_emit_binop(&ctx->mod, opcode, op0, op1, flags);
@@ -2868,8 +2868,8 @@ emit_alu(struct ntd_context *ctx, nir_alu_instr *alu)
       return emit_vec(ctx, alu, nir_op_infos[alu->op].num_inputs);
    case nir_op_mov: {
          assert(alu->def.num_components == 1);
-         store_ssa_def(ctx, &alu->def, 0, get_src_ssa(ctx,
-                        alu->src->src.ssa, alu->src->swizzle[0]));
+         store_def(ctx, &alu->def, 0,
+                   get_src_ssa(ctx, alu->src->src.ssa, alu->src->swizzle[0]));
          return true;
       }
    case nir_op_pack_double_2x32_dxil:
@@ -4516,7 +4516,7 @@ emit_load_vulkan_descriptor(struct ntd_context *ctx, nir_intrinsic_instr *intr)
       handle = emit_annotate_handle(ctx, unannotated_handle, res_props);
    }
 
-   store_ssa_def(ctx, &intr->def, 0, handle);
+   store_def(ctx, &intr->def, 0, handle);
    store_def(ctx, &intr->def, 1, get_src(ctx, &intr->src[0], 1, nir_type_uint32));
 
    return true;
@@ -4979,7 +4979,8 @@ emit_load_const(struct ntd_context *ctx, nir_load_const_instr *load_const)
 {
    for (uint32_t i = 0; i < load_const->def.num_components; ++i) {
       const struct dxil_type *type = dxil_type_for_const(ctx, &load_const->def);
-      store_ssa_def(ctx, &load_const->def, i, get_value_for_const(&ctx->mod, &load_const->value[i], type));
+      store_def(ctx, &load_const->def, i,
+                get_value_for_const(&ctx->mod, &load_const->value[i], type));
    }
    return true;
 }
@@ -5071,7 +5072,7 @@ emit_deref(struct ntd_context* ctx, nir_deref_instr* instr)
    if (!handle)
       return false;
 
-   store_ssa_def(ctx, &instr->def, 0, handle);
+   store_def(ctx, &instr->def, 0, handle);
    return true;
 }
 
@@ -5135,7 +5136,7 @@ emit_phi(struct ntd_context *ctx, nir_phi_instr *instr)
       struct dxil_instr *phi = vphi->comp[i] = dxil_emit_phi(&ctx->mod, type);
       if (!phi)
          return false;
-      store_ssa_def(ctx, &instr->def, i, dxil_instr_get_return_value(phi));
+      store_def(ctx, &instr->def, i, dxil_instr_get_return_value(phi));
    }
    _mesa_hash_table_insert(ctx->phis, instr, vphi);
    return true;
@@ -5565,12 +5566,14 @@ emit_tex(struct ntd_context *ctx, nir_tex_instr *instr)
          break;
 
       case nir_tex_src_texture_offset:
-         params.tex = emit_createhandle_call_dynamic(ctx, DXIL_RESOURCE_CLASS_SRV,
-            0, instr->texture_index,
-            dxil_emit_binop(&ctx->mod, DXIL_BINOP_ADD,
-               get_src(ctx, &instr->src[i].src, 0, nir_type_uint),
-               dxil_module_get_int32_const(&ctx->mod, instr->texture_index), 0),
-            instr->texture_non_uniform);
+         if (!instr->input_attachment_index) {
+            params.tex = emit_createhandle_call_dynamic(ctx, DXIL_RESOURCE_CLASS_SRV,
+               0, instr->texture_index,
+               dxil_emit_binop(&ctx->mod, DXIL_BINOP_ADD,
+                  get_src(ctx, &instr->src[i].src, 0, nir_type_uint),
+                  dxil_module_get_int32_const(&ctx->mod, instr->texture_index), 0),
+               instr->texture_non_uniform);
+         }
          break;
 
       case nir_tex_src_sampler_offset:
@@ -5718,17 +5721,26 @@ static bool
 emit_undefined(struct ntd_context *ctx, nir_undef_instr *undef)
 {
    for (unsigned i = 0; i < undef->def.num_components; ++i)
-      store_ssa_def(ctx, &undef->def, i, dxil_module_get_int32_const(&ctx->mod, 0));
+      store_def(ctx, &undef->def, i, dxil_module_get_int32_const(&ctx->mod, 0));
    return true;
 }
 
 static bool emit_instr(struct ntd_context *ctx, struct nir_instr* instr)
 {
    switch (instr->type) {
-   case nir_instr_type_alu:
-      return emit_alu(ctx, nir_instr_as_alu(instr));
-   case nir_instr_type_intrinsic:
-      return emit_intrinsic(ctx, nir_instr_as_intrinsic(instr));
+   case nir_instr_type_alu: {
+      nir_alu_instr *alu = nir_instr_as_alu(instr);
+      if ((alu->fp_math_ctrl & nir_fp_preserve_sz_inf_nan) == nir_fp_preserve_sz_inf_nan)
+         ctx->disable_math_refactoring = true;
+      return emit_alu(ctx, alu);
+   }
+   case nir_instr_type_intrinsic: {
+      nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+      if (nir_intrinsic_has_fp_math_ctrl(intr) &&
+          (nir_intrinsic_fp_math_ctrl(intr) & nir_fp_preserve_sz_inf_nan) == nir_fp_preserve_sz_inf_nan)
+         ctx->disable_math_refactoring = true;
+      return emit_intrinsic(ctx, intr);
+   }
    case nir_instr_type_load_const:
       return emit_load_const(ctx, nir_instr_as_load_const(instr));
    case nir_instr_type_deref:
@@ -6552,72 +6564,86 @@ static const unsigned dxil_validator_max_capable_version = DXIL_VALIDATOR_1_8;
 static const unsigned dxil_min_shader_model = SHADER_MODEL_6_0;
 static const unsigned dxil_max_shader_model = SHADER_MODEL_6_8;
 
-bool
-nir_to_dxil(struct nir_shader *s, const struct nir_to_dxil_options *opts,
-            const struct dxil_logger *logger, struct blob *blob)
+static bool
+write_dxil_container(struct ntd_context *ctx,
+                     struct dxil_container *container,
+                     struct blob *blob)
 {
-   assert(opts);
-   bool retval = true;
-   debug_dxil = (int)debug_get_option_debug_dxil();
-   blob_init(blob);
-
-   if (opts->shader_model_max < dxil_min_shader_model) {
-      debug_printf("D3D12: cannot support emitting shader models lower than %d.%d\n",
-                   dxil_min_shader_model >> 16,
-                   dxil_min_shader_model & 0xffff);
+   /* Native low precision disables min-precision */
+   if (ctx->mod.feats.native_low_precision)
+      ctx->mod.feats.min_precision = false;
+   if (!dxil_container_add_features(container, &ctx->mod.feats)) {
+      debug_printf("D3D12: dxil_container_add_features failed\n");
       return false;
    }
 
-   if (opts->shader_model_max > dxil_max_shader_model) {
-      debug_printf("D3D12: cannot support emitting higher than shader model %d.%d\n",
-                   dxil_max_shader_model >> 16,
-                   dxil_max_shader_model & 0xffff);
+   if (!dxil_container_add_io_signature(container,
+                                        DXIL_ISG1,
+                                        ctx->mod.num_sig_inputs,
+                                        ctx->mod.inputs,
+                                        ctx->mod.minor_validator >= 7)) {
+      debug_printf("D3D12: failed to write input signature\n");
       return false;
    }
 
-   if (opts->validator_version_max != NO_DXIL_VALIDATION &&
-       opts->validator_version_max < dxil_validator_min_capable_version) {
-      debug_printf("D3D12: Invalid validator version %d.%d, must be 1.4 or greater\n",
-         opts->validator_version_max >> 16,
-         opts->validator_version_max & 0xffff);
+   if (!dxil_container_add_io_signature(container,
+                                        DXIL_OSG1,
+                                        ctx->mod.num_sig_outputs,
+                                        ctx->mod.outputs,
+                                        ctx->mod.minor_validator >= 7)) {
+      debug_printf("D3D12: failed to write output signature\n");
       return false;
    }
 
-   /* If no validation, write a blob as if it was going to be validated by the newest understood validator.
-    * Same if the validator is newer than we know how to write for.
-    */
-   uint32_t validator_version =
-      opts->validator_version_max == NO_DXIL_VALIDATION ||
-      opts->validator_version_max > dxil_validator_max_capable_version ?
-      dxil_validator_max_capable_version : opts->validator_version_max;
-
-   struct ntd_context *ctx = calloc(1, sizeof(*ctx));
-   if (!ctx)
+   if ((ctx->mod.shader_kind == DXIL_HULL_SHADER ||
+        ctx->mod.shader_kind == DXIL_DOMAIN_SHADER) &&
+       !dxil_container_add_io_signature(container,
+                                        DXIL_PSG1,
+                                        ctx->mod.num_sig_patch_consts,
+                                        ctx->mod.patch_consts,
+                                        ctx->mod.minor_validator >= 7)) {
+      debug_printf("D3D12: failed to write patch constant signature\n");
       return false;
-
-   ctx->opts = opts;
-   ctx->shader = s;
-   ctx->logger = logger ? logger : &default_logger;
-
-   ctx->ralloc_ctx = ralloc_context(NULL);
-   if (!ctx->ralloc_ctx) {
-      retval = false;
-      goto out;
    }
 
-   util_dynarray_init(&ctx->srv_metadata_nodes, ctx->ralloc_ctx);
-   util_dynarray_init(&ctx->uav_metadata_nodes, ctx->ralloc_ctx);
-   util_dynarray_init(&ctx->cbv_metadata_nodes, ctx->ralloc_ctx);
-   util_dynarray_init(&ctx->sampler_metadata_nodes, ctx->ralloc_ctx);
-   util_dynarray_init(&ctx->resources, ctx->ralloc_ctx);
-   dxil_module_init(&ctx->mod, ctx->ralloc_ctx);
-   ctx->mod.shader_kind = get_dxil_shader_kind(s);
-   ctx->mod.major_version = 6;
-   /* Use the highest shader model that's supported and can be validated */
-   ctx->mod.minor_version =
-      MIN2(opts->shader_model_max & 0xffff, validator_version & 0xffff);
-   ctx->mod.major_validator = validator_version >> 16;
-   ctx->mod.minor_validator = validator_version & 0xffff;
+   struct dxil_validation_state validation_state;
+   memset(&validation_state, 0, sizeof(validation_state));
+   dxil_fill_validation_state(ctx, &validation_state);
+
+   if (!dxil_container_add_state_validation(container, &ctx->mod,
+                                            &validation_state)) {
+      debug_printf("D3D12: failed to write state-validation\n");
+      return false;
+   }
+
+   if (!dxil_container_add_module(container, &ctx->mod)) {
+      debug_printf("D3D12: failed to write module\n");
+      return false;
+   }
+
+   if (!dxil_container_write(container, blob)) {
+      debug_printf("D3D12: dxil_container_write failed\n");
+      return false;
+   }
+
+   return true;
+}
+
+static bool
+emit_dxil_container(struct ntd_context *ctx, struct blob *blob)
+{
+   struct dxil_container container;
+   dxil_container_init(&container);
+   bool ret = write_dxil_container(ctx, &container, blob);
+   dxil_container_finish(&container);
+   return ret;
+}
+
+static bool
+nir_to_dxil_impl(struct ntd_context *ctx, struct blob *blob)
+{
+   struct nir_shader *s = ctx->shader;
+   const struct nir_to_dxil_options *opts = ctx->opts;
 
    if (s->info.stage <= MESA_SHADER_FRAGMENT) {
       uint64_t in_mask =
@@ -6695,6 +6721,9 @@ nir_to_dxil(struct nir_shader *s, const struct nir_to_dxil_options *opts,
       return false;
 
    NIR_PASS(_, s, dxil_nir_lower_sysval_to_load_input, ctx->system_value);
+   /* Must run after optimize_nir(), whose nir_opt_peephole_select folds if/phi into bcsel */
+   if (opts->lower_fp32_compare_select)
+      NIR_PASS(_, s, dxil_nir_lower_fp32_compare_select);
    NIR_PASS(_, s, nir_opt_dce);
 
    /* This needs to be after any copy prop is done to prevent these movs from being erased */
@@ -6708,8 +6737,7 @@ nir_to_dxil(struct nir_shader *s, const struct nir_to_dxil_options *opts,
 
    if (!emit_module(ctx, opts)) {
       debug_printf("D3D12: dxil_container_add_module failed\n");
-      retval = false;
-      goto out;
+      return false;
    }
 
    if (debug_dxil & DXIL_DEBUG_DUMP_MODULE) {
@@ -6721,72 +6749,8 @@ nir_to_dxil(struct nir_shader *s, const struct nir_to_dxil_options *opts,
       dxil_dump_free(dumper);
    }
 
-   struct dxil_container container;
-   dxil_container_init(&container);
-   /* Native low precision disables min-precision */
-   if (ctx->mod.feats.native_low_precision)
-      ctx->mod.feats.min_precision = false;
-   if (!dxil_container_add_features(&container, &ctx->mod.feats)) {
-      debug_printf("D3D12: dxil_container_add_features failed\n");
-      retval = false;
-      goto out;
-   }
-
-   if (!dxil_container_add_io_signature(&container,
-                                        DXIL_ISG1,
-                                        ctx->mod.num_sig_inputs,
-                                        ctx->mod.inputs,
-                                        ctx->mod.minor_validator >= 7)) {
-      debug_printf("D3D12: failed to write input signature\n");
-      retval = false;
-      goto out;
-   }
-
-   if (!dxil_container_add_io_signature(&container,
-                                        DXIL_OSG1,
-                                        ctx->mod.num_sig_outputs,
-                                        ctx->mod.outputs,
-                                        ctx->mod.minor_validator >= 7)) {
-      debug_printf("D3D12: failed to write output signature\n");
-      retval = false;
-      goto out;
-   }
-
-   if ((ctx->mod.shader_kind == DXIL_HULL_SHADER ||
-        ctx->mod.shader_kind == DXIL_DOMAIN_SHADER) &&
-       !dxil_container_add_io_signature(&container,
-                                        DXIL_PSG1,
-                                        ctx->mod.num_sig_patch_consts,
-                                        ctx->mod.patch_consts,
-                                        ctx->mod.minor_validator >= 7)) {
-      debug_printf("D3D12: failed to write patch constant signature\n");
-      retval = false;
-      goto out;
-   }
-
-   struct dxil_validation_state validation_state;
-   memset(&validation_state, 0, sizeof(validation_state));
-   dxil_fill_validation_state(ctx, &validation_state);
-
-   if (!dxil_container_add_state_validation(&container,&ctx->mod,
-                                            &validation_state)) {
-      debug_printf("D3D12: failed to write state-validation\n");
-      retval = false;
-      goto out;
-   }
-
-   if (!dxil_container_add_module(&container, &ctx->mod)) {
-      debug_printf("D3D12: failed to write module\n");
-      retval = false;
-      goto out;
-   }
-
-   if (!dxil_container_write(&container, blob)) {
-      debug_printf("D3D12: dxil_container_write failed\n");
-      retval = false;
-      goto out;
-   }
-   dxil_container_finish(&container);
+   if (!emit_dxil_container(ctx, blob))
+      return false;
 
    if (debug_dxil & DXIL_DEBUG_DUMP_BLOB) {
       static int shader_id = 0;
@@ -6801,9 +6765,79 @@ nir_to_dxil(struct nir_shader *s, const struct nir_to_dxil_options *opts,
       }
    }
 
-out:
+   return true;
+}
+
+bool
+nir_to_dxil(struct nir_shader *s, const struct nir_to_dxil_options *opts,
+            const struct dxil_logger *logger, struct blob *blob)
+{
+   assert(opts);
+   debug_dxil = (int)debug_get_option_debug_dxil();
+   blob_init(blob);
+
+   if (opts->shader_model_max < dxil_min_shader_model) {
+      debug_printf("D3D12: cannot support emitting shader models lower than %d.%d\n",
+                   dxil_min_shader_model >> 16,
+                   dxil_min_shader_model & 0xffff);
+      return false;
+   }
+
+   if (opts->shader_model_max > dxil_max_shader_model) {
+      debug_printf("D3D12: cannot support emitting higher than shader model %d.%d\n",
+                   dxil_max_shader_model >> 16,
+                   dxil_max_shader_model & 0xffff);
+      return false;
+   }
+
+   if (opts->validator_version_max != NO_DXIL_VALIDATION &&
+       opts->validator_version_max < dxil_validator_min_capable_version) {
+      debug_printf("D3D12: Invalid validator version %d.%d, must be 1.4 or greater\n",
+         opts->validator_version_max >> 16,
+         opts->validator_version_max & 0xffff);
+      return false;
+   }
+
+   /* If no validation, write a blob as if it was going to be validated by the newest understood validator.
+    * Same if the validator is newer than we know how to write for.
+    */
+   uint32_t validator_version =
+      opts->validator_version_max == NO_DXIL_VALIDATION ||
+      opts->validator_version_max > dxil_validator_max_capable_version ?
+      dxil_validator_max_capable_version : opts->validator_version_max;
+
+   struct ntd_context *ctx = calloc(1, sizeof(*ctx));
+   if (!ctx)
+      return false;
+
+   ctx->opts = opts;
+   ctx->shader = s;
+   ctx->logger = logger ? logger : &default_logger;
+
+   ctx->ralloc_ctx = ralloc_context(NULL);
+   if (!ctx->ralloc_ctx) {
+      free(ctx);
+      return false;
+   }
+
+   util_dynarray_init(&ctx->srv_metadata_nodes, ctx->ralloc_ctx);
+   util_dynarray_init(&ctx->uav_metadata_nodes, ctx->ralloc_ctx);
+   util_dynarray_init(&ctx->cbv_metadata_nodes, ctx->ralloc_ctx);
+   util_dynarray_init(&ctx->sampler_metadata_nodes, ctx->ralloc_ctx);
+   util_dynarray_init(&ctx->resources, ctx->ralloc_ctx);
+   dxil_module_init(&ctx->mod, ctx->ralloc_ctx);
+   ctx->mod.shader_kind = get_dxil_shader_kind(s);
+   ctx->mod.major_version = 6;
+   /* Use the highest shader model that's supported and can be validated */
+   ctx->mod.minor_version =
+      MIN2(opts->shader_model_max & 0xffff, validator_version & 0xffff);
+   ctx->mod.major_validator = validator_version >> 16;
+   ctx->mod.minor_validator = validator_version & 0xffff;
+
+   bool ret = nir_to_dxil_impl(ctx, blob);
+
    dxil_module_release(&ctx->mod);
    ralloc_free(ctx->ralloc_ctx);
    free(ctx);
-   return retval;
+   return ret;
 }

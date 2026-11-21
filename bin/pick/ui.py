@@ -24,8 +24,8 @@ import asyncio
 import itertools
 import textwrap
 import typing
+from dataclasses import dataclass, field
 
-import attr
 import urwid
 
 from . import core
@@ -54,7 +54,7 @@ class CommitList(urwid.ListBox):
         super().__init__(*args, **kwargs)
         self.ui = ui
 
-    def keypress(self, size: int, key: str) -> typing.Optional[str]:
+    def keypress(self, size: int, key: str) -> str | None:
         if key == 'q':
             raise urwid.ExitMainLoop()
         elif key == 'u':
@@ -97,7 +97,7 @@ class CommitWidget(urwid.Text):
             await self.commit.backport(self.ui)
             self.ui.remove_commit(self)
 
-    def keypress(self, size: int, key: str) -> typing.Optional[str]:
+    def keypress(self, size: int, key: str) -> str | None:
         if key == 'c':
             asyncio.ensure_future(self.apply())
         elif key == 'd':
@@ -119,14 +119,14 @@ class FocusAwareEdit(urwid.Edit):
         super().__init__(*args, **kwargs)
         self.__is_focus = False
 
-    def render(self, size: typing.Tuple[int], focus: bool = False) -> urwid.Canvas:
+    def render(self, size: tuple[int], focus: bool = False) -> urwid.Canvas:
         if focus != self.__is_focus:
             self._emit("focus_changed", focus)
             self.__is_focus = focus
         return super().render(size, focus)
 
 
-@attr.s(slots=True)
+@dataclass(slots=True)
 class UI:
 
     """Main management object.
@@ -135,18 +135,26 @@ class UI:
     :new_commits: Commits added to main since the last time this script was run
     """
 
-    commit_list: typing.List['urwid.Button'] = attr.ib(factory=lambda: urwid.SimpleFocusListWalker([]), init=False)
-    feedback_box: typing.List['urwid.Text'] = attr.ib(factory=lambda: urwid.SimpleFocusListWalker([]), init=False)
-    notes: 'FocusAwareEdit' = attr.ib(factory=lambda: FocusAwareEdit('', multiline=True), init=False)
-    header: 'urwid.Text' = attr.ib(factory=lambda: urwid.Text('Mesa Stable Picker', align='center'), init=False)
-    body: 'urwid.Columns' = attr.ib(attr.Factory(lambda s: s._make_body(), True), init=False)
-    footer: 'urwid.Columns' = attr.ib(attr.Factory(lambda s: s._make_footer(), True), init=False)
-    root: RootWidget = attr.ib(attr.Factory(lambda s: s._make_root(), True), init=False)
-    mainloop: urwid.MainLoop = attr.ib(None, init=False)
+    commit_list: list['urwid.Button'] = field(
+        default_factory=lambda: urwid.SimpleFocusListWalker([]), init=False)
+    feedback_box: list['urwid.Text'] = field(
+        default_factory=lambda: urwid.SimpleFocusListWalker([]), init=False)
+    notes: 'FocusAwareEdit' = field(default_factory=lambda: FocusAwareEdit('', multiline=True), init=False)
+    header: 'urwid.Text' = field(
+        default_factory=lambda: urwid.Text('Mesa Stable Picker', align='center'), init=False)
+    body: 'urwid.Columns' = field(init=False)
+    footer: 'urwid.Columns' = field(init=False)
+    root: RootWidget = field(init=False)
+    mainloop: urwid.MainLoop = field(default=None, init=False)
 
-    previous_commits: typing.List['core.Commit'] = attr.ib(factory=list, init=False)
-    new_commits: typing.List['core.Commit'] = attr.ib(factory=list, init=False)
-    git_lock: asyncio.Lock = attr.ib(factory=asyncio.Lock, init=False)
+    previous_commits: list['core.Commit'] = field(default_factory=list, init=False)
+    new_commits: list['core.Commit'] = field(default_factory=list, init=False)
+    git_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
+
+    def __post_init__(self) -> None:
+        self.body = self._make_body()
+        self.footer = self._make_footer()
+        self.root = self._make_root()
 
     def _get_current_commit(self) -> typing.Optional['core.Commit']:
         entry = self.commit_list.get_focus()[0]
@@ -202,7 +210,7 @@ class UI:
 
     async def update(self) -> None:
         self.load()
-        with open('VERSION', 'r') as f:
+        with open('VERSION') as f:
             version = '.'.join(f.read().split('.')[:2])
         if self.previous_commits:
             sha = self.previous_commits[0].sha

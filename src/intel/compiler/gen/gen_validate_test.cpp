@@ -312,7 +312,9 @@ static const struct {
    { "mad (8) r0:f bad:f r2:f r3:f",
      "3-source register sources must use GRF or ARF files.", { .ge = 110 }
    },
-
+   { "bfn.((a ^ ~b) & (b ^ ~c)) (1) r0.1 f0<0> r6.2<0> r6.1<0>",
+      "3-source ARF src0 must be null or accumulator",  { .ge = 120 } },
+   { "bfn.(a | c) (1) r0.1 null r6.2<0> r6.1<0>", VALID, { .ge = 120 } },
 
    { "mov (4) r0.:d r1<4;4,1>.x:d {Align16}", VALID, { .eq = 90 } },
    { "mov (4) r0.:d r1<4;4,1>.x:d {Align16}",
@@ -597,6 +599,36 @@ static const struct {
      "Vx1 and VxH indirect addressing are not allowed for float, bfloat, and 64-bit source types.", { .ge = 125, .has_64bit_float = true }
    },
    { "mov (4) r0:df r[a0.0]<VxH;1,0>:df", SAME_ERROR, { .ge = 125, .has_64bit_float = true } },
+
+   { "mov (8) r0:b r[a0.0]<VxH;8,1>:b",   VALID, { .lt = 200 } },
+   { "mov (8) r0:b r[a0.0]<VxH;1,0>:b",   VALID, { .lt = 200 } },
+   { "mov (8) r0:ub r[a0.0]<VxH;8,1>:ub", VALID, { .lt = 200 } },
+   { "mov (8) r0:ub r[a0.0]<VxH;1,0>:ub", VALID, { .lt = 200 } },
+   { "mov (8) r0:ud r[a0.0]<VxH;1,0>:ub", VALID, { .lt = 200 } },
+
+   { "mov (8) r0:b r[a0.0]<VxH;8,1>:b",
+     "Vx1 and VxH indirect addressing are not allowed for byte source types.", { .ge = 200 }
+   },
+   { "mov (8) r0:b r[a0.0]<VxH;1,0>:b",   SAME_ERROR, { .ge = 200 } },
+   { "mov (8) r0:ub r[a0.0]<VxH;8,1>:ub", SAME_ERROR, { .ge = 200 } },
+   { "mov (8) r0:ub r[a0.0]<VxH;1,0>:ub", SAME_ERROR, { .ge = 200 } },
+   { "mov (8) r0:ud r[a0.0]<VxH;1,0>:ub", SAME_ERROR, { .ge = 200 } },
+
+   { "mov (1) r0:b r[a0.0]<0;1,0>:b",   VALID },
+   { "mov (1) r0:ub r[a0.0]<0;1,0>:ub", VALID },
+   { "mov (8) r0:b r[a0.0]<0;1,0>:b",   VALID },
+   { "mov (8) r0:ub r[a0.0]<0;1,0>:ub", VALID },
+
+   { "mov (8) r0:w r[a0.0]<VxH;8,1>:w",   VALID },
+   { "mov (8) r0:w r[a0.0]<VxH;1,0>:w",   VALID },
+   { "mov (8) r0:uw r[a0.0]<VxH;8,1>:uw", VALID },
+   { "mov (8) r0:uw r[a0.0]<VxH;1,0>:uw", VALID },
+   { "mov (8) r0:d r[a0.0]<VxH;8,1>:d",   VALID },
+   { "mov (8) r0:d r[a0.0]<VxH;1,0>:d",   VALID },
+   { "mov (8) r0:ud r[a0.0]<VxH;8,1>:ud", VALID },
+   { "mov (8) r0:ud r[a0.0]<VxH;1,0>:ud", VALID },
+   { "mov (8) r0<2>:ub r[a0.0]<VxH;1,0>:uw", VALID },
+   { "mov (8) r0<4>:b r[a0.0]<VxH;1,0>:d",   VALID },
 
 
    { "add (8) r0<2>:hf r1:f r2:hf", VALID, { .lt = 125 } },
@@ -917,7 +949,7 @@ static const struct {
 
    { "mov (8) r0<2>:bf r1:f", VALID, { .has_bfloat16 = true } },
    { "mov (8) r0<2>:bf r1:bf",
-     "Instructions with pure bfloat operands are not supported.", { .has_bfloat16 = true }
+     "Instructions with pure bfloat operands are not supported.", { .lt = 350, .has_bfloat16 = true }
    },
    { "mov (16) r0<2>:bf r1:f",
      "Mixed bfloat mode is limited to SIMD8 before Gfx20.", { .lt = 200, .has_bfloat16 = true }
@@ -925,18 +957,24 @@ static const struct {
    { "mov (32) r0<2>:bf r1:f",
      "Mixed bfloat mode is limited to SIMD16 on Gfx20+.", { .ge = 200, .has_bfloat16 = true }
    },
-   { "add (8) r0<2>:bf r1:f r2:f", VALID, { .has_bfloat16 = true } },
+   { "add (8) r0<2>:bf r1:f r2:f", VALID, { .lt = 350, .has_bfloat16 = true } },
+   { "add (8) r0.1<2>:bf r1:f r2:f", VALID, { .ge = 350, .has_bfloat16 = true } },
    { "add (8) r0<2>:bf r1:bf r2:bf",
-     "Instructions with pure bfloat operands are not supported.", { .has_bfloat16 = true }
+     "Instructions with pure bfloat operands are not supported.", { .lt = 350, .has_bfloat16 = true }
    },
    { "add (8) r0<2>:bf r1:f r2<0>:bf",
-     "Broadcast of bfloat scalar is not supported.", { .has_bfloat16 = true }
+     "Broadcast of bfloat scalar is not supported.", { .lt = 350, .has_bfloat16 = true }
    },
+   { "add (8) r0.1<2>:bf r1:f r2<0>:bf", VALID, { .ge = 350, .has_bfloat16 = true } },
    { "mul (8) r0:bf r1:bf r2:f", VALID, { .lt = 350, .has_bfloat16 = true } },
+   { "mul (16) r0.1<2>:bf r1.1<2>:bf r2:f", VALID, { .ge = 350, .has_bfloat16 = true } },
    { "mul (8) r0:bf r1:f r2:bf",
      "Bfloat is not allowed in src1 of 2-source multiplier instructions.", { .has_bfloat16 = true }
    },
-   { "mad (8) r0:bf r1:bf r2:bf r3:f", VALID, { .has_bfloat16 = true } },
+   { "mad (8) r0:bf r1:bf r2:bf r3:f", VALID, { .lt = 350, .has_bfloat16 = true } },
+   { "mad (16) r0.1<2>:bf r1.1<16;2>:bf r2.1<16;2>:bf r3:f", VALID,
+     { .ge = 350, .has_bfloat16 = true }
+   },
    { "mad (8) r0:bf r1:bf r2:f r3:bf",
      "Bfloat is not allowed in src2 of 3-source multiplier instructions.", { .has_bfloat16 = true }
    },
@@ -947,15 +985,24 @@ static const struct {
      { .lt = 350, .has_bfloat16 = true }
    },
    { "add (8) r0.2<2>:bf r1:f r2:f",
-     "Unpacked bfloat destination must have stride 2 and register offset 0 or 1 element.", { .has_bfloat16 = true }
+     "Unpacked bfloat destination must have stride 2 and register offset 0 or 1 element.",
+     { .lt = 350, .has_bfloat16 = true }
+   },
+   { "add (8) r0.2<2>:bf r1:f r2:f",
+     "Mixed mode bfloat destination must have stride 2 and be aligned to the upper bfloat",
+     { .ge = 350, .has_bfloat16 = true }
    },
    { "add (8) r0:bf r1<2>:bf r2:f",
-     "Bfloat sources must be packed.", { .has_bfloat16 = true }
+     "Bfloat sources must be packed.", { .lt = 350, .has_bfloat16 = true }
+   },
+   { "add (8) r0.1<2>:bf r1<2>:bf r2:f",
+     "Mixed mode bfloat sources must have stride 2 and be aligned to the upper bfloat",
+     { .ge = 350, .has_bfloat16 = true }
    },
    { "add (8) r0:bf r1.8:bf r2:f", VALID, { .lt = 200, .has_bfloat16 = true } },
    { "add (8) r0:bf r1.16:bf r2:f", VALID, { .ge = 200, .lt = 350, .has_bfloat16 = true } },
    { "add (8) r0:bf r1.2:bf r2:f",
-     "Bfloat sources must have register offset 0 or half a GRF.", { .has_bfloat16 = true }
+     "Bfloat sources must have register offset 0 or half a GRF.", { .lt = 350, .has_bfloat16 = true }
    },
 
 
@@ -971,7 +1018,8 @@ static const struct {
    { "add (16) r0<2>:bf r1:f r2:f",
      "Mixed bfloat mode is limited to SIMD8 before Gfx20.", { .lt = 200, .has_bfloat16 = true }
    },
-   { "add (16) r0<2>:bf r1:f r2:f", VALID, { .ge = 200, .has_bfloat16 = true } },
+   { "add (16) r0<2>:bf r1:f r2:f", VALID, { .ge = 200, .lt = 350, .has_bfloat16 = true } },
+   { "add (16) r0.1<2>:bf r1:f r2:f", VALID, { .ge = 350, .has_bfloat16 = true } },
    { "add (32) r0<2>:bf r1:f r2:f",
      "Mixed bfloat mode is limited to SIMD8 before Gfx20.", { .lt = 200, .has_bfloat16 = true }
    },
@@ -980,11 +1028,13 @@ static const struct {
    },
 
 
-   { "mul (8) r0:f r1:bf r2:f", VALID, { .has_bfloat16 = true } },
+   { "mul (8) r0:f r1:bf r2:f", VALID, { .lt = 350, .has_bfloat16 = true } },
+   { "mul (8) r0:f r1.1<2>:bf r2:f", VALID, { .ge = 350, .has_bfloat16 = true } },
    { "mul (8) r0:f r1:f r2:bf",
      "Bfloat is not allowed in src1 of 2-source multiplier instructions.", { .has_bfloat16 = true }
    },
-   { "mad (8) r0:f r1:bf r2:f r3:f", VALID, { .has_bfloat16 = true } },
+   { "mad (8) r0:f r1:bf r2:f r3:f", VALID, { .lt = 350, .has_bfloat16 = true } },
+   { "mad (8) r0:f r1.1<16;2>:bf r2:f r3:f", VALID, { .ge = 350, .has_bfloat16 = true } },
    { "mad (8) r0:f r1:f r2:bf r3:f", VALID, { .lt = 350, .has_bfloat16 = true } },
    { "mad (8) r0:f r1:f r2:f r3:bf",
      "Bfloat is not allowed in src2 of 3-source multiplier instructions.", { .has_bfloat16 = true }
@@ -994,9 +1044,11 @@ static const struct {
    { "add (8) r0<2>:bf r1:f r2.8:bf", VALID, { .lt = 200, .has_bfloat16 = true } },
    { "add (8) r0<2>:bf r1:f r2.16:bf", VALID, { .ge = 200, .lt = 350, .has_bfloat16 = true } },
    { "add (8) r0<2>:bf r1:f r2.2:bf",
-     "Bfloat sources must have register offset 0 or half a GRF.", { .has_bfloat16 = true }
+     "Bfloat sources must have register offset 0 or half a GRF.", { .lt = 350, .has_bfloat16 = true }
    },
-   { "add (8) r0<2>:bf r1:f r2<2>:bf", "Bfloat sources must be packed.", { .has_bfloat16 = true } },
+   { "add (8) r0<2>:bf r1:f r2<2>:bf", "Bfloat sources must be packed.",
+     { .lt = 350, .has_bfloat16 = true }
+   },
 
 
    { "add (8) r0:d r1:d r2:b", VALID, { .le = 100 } },
@@ -2070,6 +2122,20 @@ static const struct {
    { "add (8) r0.4<2>:b r2.2<2>:w r4:w",      SAME_ERROR, { .ge = 200 } },
    { "add (8) r0.4<2>:b r2<16;2,4>:w r4:w",   SAME_ERROR, { .ge = 200 } },
    { "add (8) r0.4<2>:b r2.2<16;2,4>:w r4:w", SAME_ERROR, { .ge = 200 } },
+
+   /* Source 0. Packed B->B cases. */
+   { "mov (16) r40.0<1>:ub r20.0<8;2,4>:ub",  VALID, { .ge = 200 } },
+   { "mov (16) r40.16<1>:ub r21.0<8;2,4>:ub", VALID, { .ge = 200 } },
+   { "mov (16) r40.32<1>:ub r22.0<8;2,4>:ub", VALID, { .ge = 200 } },
+   { "mov (16) r40.48<1>:ub r23.0<8;2,4>:ub", VALID, { .ge = 200 } },
+   { "mov (16) r40.0<1>:ub r20.0<4;1,0>:ub",  VALID, { .ge = 200 } },
+   { "mov (16) r40.16<1>:ub r21.0<4;1,0>:ub", VALID, { .ge = 200 } },
+   { "mov (16) r40.32<1>:ub r22.0<4;1,0>:ub", VALID, { .ge = 200 } },
+   { "mov (16) r40.48<1>:ub r23.0<4;1,0>:ub", VALID, { .ge = 200 } },
+   { "mov (16) r40.4<1>:ub r20.0<8;2,4>:ub",
+     "Invalid register region for source 0. See special restrictions section.", { .ge = 200 }
+   },
+   { "mov (16) r40.20<1>:ub r21.0<8;2,4>:ub", SAME_ERROR, { .ge = 200 } },
 
    /* Source 1. One element per dword channel. */
    { "add (8) r0:d r2:d r4:w",    VALID, { .ge = 200, .lt = 350 } },

@@ -34,9 +34,6 @@ struct gl_shader;
 struct gl_linked_shader;
 struct gl_shader_program;
 
-bool do_common_optimization(ir_exec_list *ir, bool linked, mesa_shader_stage stage,
-                            const struct pipe_screen *screen);
-
 bool do_rebalance_tree(ir_exec_list *instructions);
 bool do_algebraic(ir_exec_list *instructions);
 bool do_dead_code(ir_exec_list *instructions);
@@ -52,12 +49,10 @@ bool do_vec_index_to_cond_assign(ir_exec_list *instructions);
 bool lower_instructions(ir_exec_list *instructions,
                         bool force_abs_sqrt, bool have_gpu_shader5);
 bool lower_packing_builtins(ir_exec_list *instructions,
-                            bool has_shading_language_packing,
-                            bool has_gpu_shader5,
                             bool has_half_float_packing);
 bool lower_vector_derefs(gl_shader *shader, linear_ctx *linalloc);
 void optimize_dead_builtin_variables(ir_exec_list *instructions,
-                                     enum ir_variable_mode other);
+                                     mesa_shader_stage stage);
 
 bool lower_builtins(ir_exec_list *instructions);
 bool lower_subroutine(ir_exec_list *instructions, struct _mesa_glsl_parse_state *state);

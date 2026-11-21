@@ -24,6 +24,12 @@ extern "C" {
 #define VK_GOOGLE_GFXSTREAM_SPEC_VERSION 0
 #define VK_GOOGLE_GFXSTREAM_NUMBER 386
 #define VK_GOOGLE_GFXSTREAM_EXTENSION_NAME "VK_GOOGLE_gfxstream"
+typedef enum VkGuestCapabilityFlagBitsGOOGLE {
+    VK_GUEST_CAPABILITY_BATCHED_INLINE_UNIFORM_BLOCK_BIT_GOOGLE = 0x00000001,
+    VK_GUEST_CAPABILITY_HOST_POINTER_RESOLVE_BIT_GOOGLE = 0x00000002,
+} VkGuestCapabilityFlagBitsGOOGLE;
+
+typedef VkFlags VkGuestCapabilityFlagsGOOGLE;
 typedef struct VkImportColorBufferGOOGLE {
     VkStructureType sType;
     void* pNext;
@@ -67,6 +73,19 @@ typedef struct VkDebugMetadataGuestThreadIdGOOGLE {
     const void* pNext;
     uint64_t id;
 } VkDebugMetadataGuestThreadIdGOOGLE;
+
+typedef struct VkGuestCapabilitiesGOOGLE {
+    VkStructureType sType;
+    const void* pNext;
+    VkGuestCapabilityFlagsGOOGLE capabilities;
+} VkGuestCapabilitiesGOOGLE;
+
+typedef struct VkHostPointerResolveGOOGLE {
+    VkStructureType sType;
+    const void* pNext;
+    uint32_t pointerSize;
+    uint8_t* pHostPointer;
+} VkHostPointerResolveGOOGLE;
 
 typedef struct VkDebugMetadataGOOGLE {
     VkStructureType sType;
@@ -157,6 +176,15 @@ typedef VkResult(VKAPI_PTR* PFN_vkGetSemaphoreGOOGLE)(VkDevice device, VkSemapho
 typedef void(VKAPI_PTR* PFN_vkTraceAsyncGOOGLE)(uint64_t id);
 typedef void(VKAPI_PTR* PFN_vkSetDebugMetadataAsyncGOOGLE)(
     const VkDebugMetadataGOOGLE* pDebugMetadata);
+typedef void(VKAPI_PTR* PFN_vkResetFencesAsyncGOOGLE)(VkDevice device, uint32_t fenceCount,
+                                                      const VkFence* pFences);
+typedef void(VKAPI_PTR* PFN_vkResetCommandPoolAsyncGOOGLE)(VkDevice device,
+                                                           VkCommandPool commandPool,
+                                                           VkCommandPoolResetFlags flags);
+typedef void(VKAPI_PTR* PFN_vkResetDescriptorPoolAsyncGOOGLE)(VkDevice device,
+                                                              VkDescriptorPool descriptorPool,
+                                                              VkDescriptorPoolResetFlags flags);
+typedef void(VKAPI_PTR* PFN_vkResetEventAsyncGOOGLE)(VkDevice device, VkEvent event);
 
 VKAPI_ATTR VkResult VKAPI_CALL vkMapMemoryIntoAddressSpaceGOOGLE(VkDevice device,
                                                                  VkDeviceMemory memory,
@@ -265,6 +293,18 @@ VKAPI_ATTR void VKAPI_CALL vkTraceAsyncGOOGLE(uint64_t id);
 
 VKAPI_ATTR void VKAPI_CALL
 vkSetDebugMetadataAsyncGOOGLE(const VkDebugMetadataGOOGLE* pDebugMetadata);
+
+VKAPI_ATTR void VKAPI_CALL vkResetFencesAsyncGOOGLE(VkDevice device, uint32_t fenceCount,
+                                                    const VkFence* pFences);
+
+VKAPI_ATTR void VKAPI_CALL vkResetCommandPoolAsyncGOOGLE(VkDevice device, VkCommandPool commandPool,
+                                                         VkCommandPoolResetFlags flags);
+
+VKAPI_ATTR void VKAPI_CALL vkResetDescriptorPoolAsyncGOOGLE(VkDevice device,
+                                                            VkDescriptorPool descriptorPool,
+                                                            VkDescriptorPoolResetFlags flags);
+
+VKAPI_ATTR void VKAPI_CALL vkResetEventAsyncGOOGLE(VkDevice device, VkEvent event);
 
 #ifdef __cplusplus
 }

@@ -49,6 +49,39 @@ info on what was updated.
 Workarounds
 ===========
 
+KK_WORKAROUND_20
+----------------
+| macOS version: 26
+| Metal ticket: Unreported
+| Metal ticket status: Fixed in macOS 27
+| CTS test failure:
+| Comments:
+
+Allocating more than ``recommendedMaxWorkingSetSize`` and making it resident
+runs into a kernel panic on macOS 26. Guard against allocations that go over
+the limit allowing only 95% usage. If multiple processes allocate below the
+limit, applications may still run into the kernel panic, but that is outside
+of our scope to fix.
+
+| Log:
+| 2026-11-16: Workaround implemented
+
+KK_WORKAROUND_19
+----------------
+| macOS version: 26 and 27
+| Metal ticket: FB25516856 (@aitor)
+| Metal ticket status: Waiting resolution
+| CTS test failure: ``dEQP-VK.clipping.*vert_tess_geom*`` and ``dEQP-VK.tessellation.geometry_interaction.*``
+| Comments:
+
+Only affects M1/2. When a kernel has enough register pressure, the compiler may
+spill registers to threadgroup memory. Whether it does depends on the pipeline's
+``maxTotalThreadsPerThreadgroup``. Under ``dispatchThreadsWithIndirectBuffer:``,
+only the first few bytes of a threadgroup's spill area work and spilled values
+beyond that read back as zero. A simple workaround is to add a 16 byte
+``[[threadgroup(0)]]`` argument and a conditional read and write in the shader
+that will never execute to stop the compiler from spilling.
+
 KK_WORKAROUND_18
 ----------------
 | macOS version: 26.x
@@ -72,10 +105,13 @@ KK_WORKAROUND_17
 | CTS test failure: ``dEQP-VK.spirv_assembly.instruction.compute.float_controls2.fp*.input_args.tanh_testedWithout_NotNaN_arg1_nan_arg2_one_res_nan_*``
 | Comments:
 
-Same issue as KK_WORKAROUND_14 but we need to add ``isNan`` to fix it
+Same issue as KK_WORKAROUND_14 but we need to add ``isNan`` to fix it.
+
+No longer needed after KK_WORKAROUND_10 swapped the true value to be last.
 
 | Log:
 | 2026-08-10: Workaround implemented
+| 2026-11-17: Disabled after WA10 rework
 
 KK_WORKAROUND_16
 ----------------
@@ -195,8 +231,14 @@ handle ``bcsel`` and the compiled shader misbehaves while the ``ior`` version
 does not. This is worked around by adding a known true value to the conditional
 of the ``bcsel``.
 
+The known true value is placed after the condition to avoid an interaction with
+KK_WORKAROUND_6 and KK_WORKAROUND_17 leading to compiler crashes in tests:
+``dEQP-VK.robustness.image_robustness.*.notemplate.r*32f.unroll.nonvolatile.sampled_image.no_fmt_qual.img.samples_1.2d_array.frag``
+
 | Log:
 | 2026-05-14: Workaround implemented
+| 2026-11-05: Workaround disabled on M3+
+| 2026-11-17: Swapped conditional so that the true value is last
 
 KK_WORKAROUND_9
 ---------------

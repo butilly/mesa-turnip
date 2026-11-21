@@ -69,7 +69,7 @@ struct vc1_picparm_bsp {
 
 struct h264_picparm_bsp {
    // 00
-   uint32_t unk00;
+   uint32_t chroma_format_idc;
    // 04
    uint32_t log2_max_frame_num_minus4; // 04 checked
    uint32_t pic_order_cnt_type; // 08 checked
@@ -168,7 +168,7 @@ nouveau_vp3_fill_picparm_h264_bsp(struct nouveau_vp3_decoder *dec,
       caps |= 1 << 20;
 
    assert(offsetof(struct h264_picparm_bsp, bottom_field_flag) == (0x39 + 0x24));
-   h->unk00 = 1;
+   h->chroma_format_idc = d->pps->sps->chroma_format_idc;
    h->pad1 = h->pad2 = 0;
    h->unk = 0;
    h->log2_max_frame_num_minus4 = d->pps->sps->log2_max_frame_num_minus4;
@@ -189,7 +189,8 @@ nouveau_vp3_fill_picparm_h264_bsp(struct nouveau_vp3_decoder *dec,
    h->deblocking_filter_control_present_flag = d->pps->deblocking_filter_control_present_flag;
    h->redundant_pic_cnt_present_flag = d->pps->redundant_pic_cnt_present_flag;
    h->transform_8x8_mode_flag = d->pps->transform_8x8_mode_flag;
-   h->mb_adaptive_frame_field_flag = d->pps->sps->mb_adaptive_frame_field_flag;
+   h->mb_adaptive_frame_field_flag = d->pps->sps->mb_adaptive_frame_field_flag &&
+                                     !d->field_pic_flag;
    h->field_pic_flag = d->field_pic_flag;
    h->bottom_field_flag = d->bottom_field_flag;
    memset(h->real_pad, 0, sizeof(h->real_pad));

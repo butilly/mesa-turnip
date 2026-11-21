@@ -147,7 +147,7 @@ TODO rename UAV src to "UAV" so disasm_field_cb can find it easily?
 		zero-extended to 64b first.
 	</doc>
 
-	<gen min="600" max="699"/>
+	<gen min="500" max="699"/>
 
 	<display>
 		{SY}{JP}{NAME}.{TYPE} {TYPE_HALF}{DST}, g[{SRC1}+((({SRC2}&lt;&lt;{SRC2_SHIFT}){OFF})&lt;&lt;{TYPE_SHIFT})], {SIZE}
@@ -318,7 +318,7 @@ TODO rename UAV src to "UAV" so disasm_field_cb can find it easily?
 		See the doc of ldg.a for how the address is calculated.
 	</doc>
 
-	<gen min="600" max="699"/>
+	<gen min="500" max="699"/>
 
 	<display>
 		{SY}{JP}{NAME}.{TYPE} g[{SRC1}+((({SRC2}&lt;&lt;{SRC2_SHIFT}){OFF})&lt;&lt;{TYPE_SHIFT})], {TYPE_HALF}{SRC3}, {SIZE}
@@ -415,7 +415,7 @@ TODO rename UAV src to "UAV" so disasm_field_cb can find it easily?
 		LoaD Local
 	</doc>
 	<display>
-		{SY}{JP}{NAME}.{TYPE} {DST}, l[{SRC}{OFF}], {SIZE}
+		{SY}{JP}{NAME}.{TYPE} {TYPE_HALF}{DST}, l[{SRC}{OFF}], {SIZE}
 	</display>
 	<pattern low="54" high="58">00001</pattern>  <!-- OPC -->
 </bitset>
@@ -435,9 +435,60 @@ TODO rename UAV src to "UAV" so disasm_field_cb can find it easily?
 		LoaD Local (variant used for passing data between geom stages)
 	</doc>
 	<display>
-		{SY}{JP}{NAME}.{TYPE} {DST}, l[{SRC}{OFF}], {SIZE}
+		{SY}{JP}{NAME}.{TYPE} {TYPE_HALF}{DST}, l[{SRC}{OFF}], {SIZE}
 	</display>
 	<pattern low="54" high="58">01010</pattern>  <!-- OPC -->
+</bitset>
+
+<bitset name="#instruction-cat6-a3xx-blockcopy" extends="#instruction-cat6-a3xx">
+	<gen max="599"/>
+	<doc>
+		A block copy between global memory and local (LDS), which the vendor
+		compiler emits for async_work_group_copy.  SIZE is a byte count and
+		the hardware takes 1, 2, 4, 8 or 16 of them; a longer copy is a loop
+		of 16 byte steps and a tail of the remaining powers of two.  The
+		global side names the first register of an address pair, the local
+		side a single address register.
+	</doc>
+
+	<pattern pos="0"           >1</pattern>
+	<pattern low="1"  high="13">0000000000000</pattern>
+	<field   low="14" high="21" name="SRC" type="#reg-gpr"/>
+	<pattern pos="22"          >0</pattern>
+	<pattern pos="23"          >1</pattern>
+	<field   low="24" high="31" name="SIZE" type="uint"/>
+	<pattern low="32" high="39">00000000</pattern>
+	<pattern pos="40"          >1</pattern>
+	<field   low="41" high="48" name="DST" type="#reg-gpr"/>
+	<pattern low="52" high="53">00</pattern>
+
+	<encode>
+		<map name="DST">src->srcs[0]</map>
+		<map name="SRC">src->srcs[1]</map>
+		<map name="SIZE">extract_reg_uim(src->srcs[2])</map>
+	</encode>
+</bitset>
+
+<bitset name="g2l" extends="#instruction-cat6-a3xx-blockcopy">
+	<doc>
+		Global to Local: copy SIZE bytes from the global address in the
+		register pair SRC into local memory at DST.
+	</doc>
+	<display>
+		{SY}{JP}{NAME}.{TYPE} l[{DST}], g[{SRC}], {SIZE}
+	</display>
+	<pattern low="54" high="58">00111</pattern>  <!-- OPC -->
+</bitset>
+
+<bitset name="l2g" extends="#instruction-cat6-a3xx-blockcopy">
+	<doc>
+		Local to Global: copy SIZE bytes from local memory at SRC to the
+		global address in the register pair DST.
+	</doc>
+	<display>
+		{SY}{JP}{NAME}.{TYPE} g[{DST}], l[{SRC}], {SIZE}
+	</display>
+	<pattern low="54" high="58">01000</pattern>  <!-- OPC -->
 </bitset>
 
 <bitset name="ldlv" extends="#instruction-cat6-a3xx">
@@ -445,7 +496,7 @@ TODO rename UAV src to "UAV" so disasm_field_cb can find it easily?
 		LoaD Local Varying - read directly from varying storage
 	</doc>
 	<display>
-		{SY}{JP}{NAME}.{TYPE} {DST}, l[{OFF}], {SIZE}
+		{SY}{JP}{NAME}.{TYPE} {TYPE_HALF}{DST}, l[{OFF}], {SIZE}
 	</display>
 	<pattern pos="0"           >0</pattern>
 	<field   low="1"  high="13" name="OFF" type="uint"/>
@@ -495,7 +546,7 @@ TODO rename UAV src to "UAV" so disasm_field_cb can find it easily?
 		STore Local
 	</doc>
 	<display>
-		{SY}{JP}{NAME}.{TYPE} l[{DST}{OFF}], {SRC}, {SIZE}
+		{SY}{JP}{NAME}.{TYPE} l[{DST}{OFF}], {TYPE_HALF}{SRC}, {SIZE}
 	</display>
 	<pattern pos="0"           >x</pattern>
 	<pattern low="54" high="58">00100</pattern>  <!-- OPC -->
@@ -506,7 +557,7 @@ TODO rename UAV src to "UAV" so disasm_field_cb can find it easily?
 		STore Private
 	</doc>
 	<display>
-		{SY}{JP}{NAME}.{TYPE} p[{DST}{OFF}], {SRC}, {SIZE}
+		{SY}{JP}{NAME}.{TYPE} p[{DST}{OFF}], {TYPE_HALF}{SRC}, {SIZE}
 	</display>
 	<pattern pos="0"           >0</pattern>  <!-- SRC_OFF -->
 	<pattern low="54" high="58">00101</pattern>  <!-- OPC -->
@@ -517,7 +568,7 @@ TODO rename UAV src to "UAV" so disasm_field_cb can find it easily?
 		STore Local (variant used for passing data between geom stages)
 	</doc>
 	<display>
-		{SY}{JP}{NAME}.{TYPE} l[{DST}{OFF}], {SRC}, {SIZE}
+		{SY}{JP}{NAME}.{TYPE} l[{DST}{OFF}], {TYPE_HALF}{SRC}, {SIZE}
 	</display>
 	<pattern pos="0"           >x</pattern>
 	<pattern low="54" high="58">01011</pattern>  <!-- OPC -->
@@ -746,6 +797,88 @@ TODO rename UAV src to "UAV" so disasm_field_cb can find it easily?
 <bitset name="stib" extends="#instruction-cat6-a3xx-ibo-store-a4xx">
 	<gen max="499"/>
 	<pattern low="54" high="58">11101</pattern>  <!-- OPC -->
+</bitset>
+
+<bitset name="#instruction-cat6-a3xx-ldc" extends="#instruction-cat6">
+	<doc>
+		LoaD Constant - UBO load, in the a3xx-style encoding.
+
+		The offset (in vec4s) and UBO fields are in the same place as
+		a6xx's, with the UBO's immediate flag in bit 53 as for ldgb's
+		UAV.  Uniform and dynamically uniform UBO indexing produce the
+		same instruction, displayed as "uniform".  Truly nonuniform UBO
+		indexing hasn't been seen: the blobs are Vulkan 1.0 without
+		descriptor indexing, so they never need it, and it's unknown
+		whether a register UBO index may diverge within a wave.
+	</doc>
+	<derived name="TYPE_SIZE" expr="#cat6-type-size" type="uint"/>
+	<derived name="MODE" type="#cat6-src-mode">
+		<expr>{UBO_IM} ? 0 : 1</expr>
+	</derived>
+
+	<field   low="12" high="13" name="TYPE_SIZE_MINUS_ONE" type="uint"/>
+	<field   pos="23"           name="SRC1_IM" type="bool"/>
+	<field   low="24" high="31" name="SRC1" type="#cat6-src">
+		<param name="SRC1_IM" as="SRC_IM"/>
+	</field>
+	<field   low="32" high="39" name="DST" type="#reg-gpr"/>
+	<pattern pos="40"          >0</pattern>
+	<field   low="41" high="48" name="UBO" type="#cat6-src">
+		<param name="UBO_IM" as="SRC_IM"/>
+	</field>
+	<pattern low="49" high="51">011</pattern>      <!-- TYPE -->
+	<pattern pos="52"          >0</pattern>
+	<field   pos="53"           name="UBO_IM" type="bool"/>
+	<pattern low="54" high="58">11110</pattern>  <!-- OPC -->
+	<encode>
+		<map name="TYPE_SIZE_MINUS_ONE">src->cat6.iim_val - 1</map>
+		<map name="SRC1">src->srcs[1]</map>
+		<map name="SRC1_IM">!!(src->srcs[1]->flags &amp; IR3_REG_IMMED)</map>
+		<map name="UBO">src->srcs[0]</map>
+		<map name="UBO_IM">!!(src->srcs[0]->flags &amp; IR3_REG_IMMED)</map>
+	</encode>
+</bitset>
+
+<bitset name="ldc" extends="#instruction-cat6-a3xx-ldc">
+	<doc>
+		a4xx's ldc also takes the UBO's address (plus the offset in
+		bytes, in the blob's shaders) in a register, SRC2, which the
+		a4xx blob loads from the UBO pointers it uploads to the const
+		file.  The UBO (whose size the a4xx blob still uploads to
+		SB4_UBO/SB4_CS_UBO, presumably for bounds checking) and offset
+		operands are as on a5xx.  Bit 0 is always set, as for a4xx's
+		ldgb.
+	</doc>
+	<gen min="400" max="499"/>
+	<display>
+		{SY}{JP}{NAME}.offset{OFFSET}.{TYPE_SIZE}.{MODE} {DST}, g[{SRC2}], {SRC1}, {UBO}
+	</display>
+	<derived name="OFFSET" expr="#false" type="uint"/>
+	<pattern pos="0"           >1</pattern>
+	<pattern low="1"  high="11">00000000000</pattern>
+	<field   low="14" high="21" name="SRC2" type="#reg-gpr"/>
+	<pattern pos="22"          >0</pattern>
+	<encode>
+		<map name="SRC2">src->srcs[2]</map>
+	</encode>
+</bitset>
+
+<bitset name="ldc" extends="#instruction-cat6-a3xx-ldc">
+	<doc>
+		a5xx's ldc gets the UBO's address from the SB4_UBO/SB4_CS_UBO
+		state instead of a register.
+	</doc>
+	<gen min="500" max="599"/>
+	<display>
+		{SY}{JP}{NAME}.offset{OFFSET}.{TYPE_SIZE}.{MODE} {DST}, {SRC1}, {UBO}
+	</display>
+	<pattern pos="0"           >0</pattern>
+	<field   low="1"  high="2"  name="OFFSET" type="uint"/>
+	<pattern low="3"  high="11">000000000</pattern>
+	<pattern low="14" high="22">000000000</pattern>
+	<encode>
+		<map name="OFFSET">src->cat6.d</map>
+	</encode>
 </bitset>
 
 <bitset name="#instruction-cat6-a3xx-atomic" extends="#instruction-cat6">
@@ -1104,8 +1237,9 @@ TODO rename UAV src to "UAV" so disasm_field_cb can find it easily?
 	<doc>
 		Base for new instruction encoding that started being used
 		with a6xx for instructions supporting bindless mode.
+		getspid and getwid already use it on a5xx.
 	</doc>
-	<gen min="600"/>
+	<gen min="500"/>
 
 	<derived name="TYPE_SIZE" expr="#cat6-type-size" type="uint"/>
 
@@ -1131,6 +1265,7 @@ TODO rename UAV src to "UAV" so disasm_field_cb can find it easily?
 </bitset>
 
 <bitset name="#cat6-ldc-common" extends="#instruction-cat6-a6xx">
+	<gen min="600"/>
 	<pattern pos="0"           >x</pattern>
 	<pattern low="14" high="19">011110</pattern>   <!-- OPC -->
 	<pattern pos="20">x</pattern>
@@ -1275,6 +1410,7 @@ TODO rename UAV src to "UAV" so disasm_field_cb can find it easily?
 	<doc>
 		RESourceINFO - returns image/ssbo dimensions (3 components)
 	</doc>
+	<gen min="600"/>
 	<display>
 		{SY}{JP}{NAME}.{TYPED}.{D}d.{TYPE}.{TYPE_SIZE}.{MODE}{BASE} {DST}, {UAV}
 	</display>
@@ -1321,6 +1457,7 @@ TODO rename UAV src to "UAV" so disasm_field_cb can find it easily?
 	<doc>
 		UAV (ie. Image/SSBO) instructions
 	</doc>
+	<gen min="600"/>
 	<display>
 		{SY}{JP}{NAME}.{TYPED}.{D}d.{TYPE}{RCK}.{TYPE_SIZE}.{MODE}{BASE} {TYPE_HALF}{SRC1}, {SRC2}{OFFSET}, {UAV}
 	</display>

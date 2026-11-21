@@ -38,13 +38,19 @@ extern struct cffdec_options options;
 static inline bool
 have_rem_info(void)
 {
-   return options.info->chip == 6 || options.info->chip == 7;
+   return options.info->chip >= 6;
 }
 
 static inline bool
 has_a7xx_gen3_control_regs(void)
 {
    return options.info->props.new_control_regs;
+}
+
+static inline bool
+is_a8xx(void)
+{
+   return options.info->chip == 8;
 }
 
 static inline bool
@@ -85,7 +91,7 @@ is_gmu_legacy(void)
 }
 
 void dump_register(struct regacc *r);
-void dump_cp_mem_pool(uint32_t *mempool, bool is_bv);
+void dump_cp_mem_pool(uint32_t *mempool, uint32_t sizedwords, bool is_bv);
 void handle_prefetch(const uint32_t *dwords, uint32_t sizedwords);
 
 struct a6xx_hfi_state {

@@ -746,6 +746,17 @@ private:
                      src.subnr > 31,
                   "Align1 3-source source subregister offset is not encodable.");
 
+         ERROR_IF(src.file == GEN_ARF && i == 0 && (!is_null(src) && !is_accumulator(src)),
+                  "3-source ARF src0 must be null or accumulator");
+         ERROR_IF(src.file == GEN_ARF && i == 1 &&
+                  (!(is_null(src) && inst->opcode == GEN_OP_BFN) &&
+                   !is_accumulator(src)),
+                  "3-source ARF src1 must be an accumulator");
+         ERROR_IF(src.file == GEN_ARF && i == 2 &&
+                  (!is_null(src) && !
+                   (is_accumulator(src) && gen_type_is_float(src.type))),
+                  "3-source ARF src2 must be null or float accumulator (Bspec 56619)");
+
          if (i < 2) {
             ERROR_IF(src.region.vstride != 0  &&
                      src.region.vstride != 1  &&
@@ -1095,9 +1106,91 @@ private:
          }
       }
 
-      if (gen_inst_has_dst(inst->opcode) && !is_null(inst->dst)) {
+      if (devinfo->ver >= 12 ||
+          (gen_inst_has_dst(inst->opcode) && !is_null(inst->dst))) {
          ERROR_IF(inst->dst.region.hstride == 0,
                   "Destination horizontal stride must not be 0.");
+      }
+   }
+
+   /*
+    * Gfx35+ regioning rules for instructions mixing bfloat with other
+    * floating point types.
+    */
+   void
+   gfx35_bfloat_region_restrictions()
+   {
+      const bool has_dst = gen_inst_has_dst(inst->opcode);
+      const bool dst_is_bfloat = has_dst && gen_type_is_bfloat(inst->dst.type);
+      const unsigned dst_stride = has_dst ?
+         inst->dst.region.hstride * gen_type_size_bytes(inst->dst.type) : 0;
+
+      if (inst->opcode == GEN_OP_MOV) {
+         /* Format conversion. */
+         if (!dst_is_bfloat)
+            return;
+
+         const unsigned src_size = gen_type_size_bytes(inst->src[0].type);
+
+         if (dst_stride == gen_type_size_bytes(inst->dst.type) &&
+             src_size > gen_type_size_bytes(inst->dst.type)) {
+            ERROR_IF(inst->dst.file != GEN_GRF ||
+                     (inst->dst.subnr != 0 &&
+                      inst->dst.subnr != 16 * gen_type_size_bytes(inst->dst.type)),
+                     "Packed bfloat down conversion destination must be a GRF "
+                     "with register offset 0 or 16 elements.");
+            ERROR_IF(inst->src[0].file != GEN_GRF ||
+                     gen_byte_stride(inst->src[0]) != src_size ||
+                     inst->src[0].subnr != 0 ||
+                     inst->exec_size * src_size > devinfo->grf_size,
+                     "Packed bfloat down conversion source must be a packed GRF "
+                     "with register offset 0 within a single register.");
+         } else {
+            const unsigned elem_size = gen_type_size_bytes(inst->dst.type);
+            ERROR_IF(dst_stride != 2 * elem_size ||
+                     (inst->dst.subnr != 0 && inst->dst.subnr != elem_size),
+                     "Unpacked bfloat destination must have stride 2 and register offset 0 or 1 element.");
+         }
+         return;
+      }
+
+      if (inst->opcode == GEN_OP_MATH) {
+         ERROR_IF(dst_is_bfloat && dst_stride != 2 && dst_stride != 4,
+                  "Bfloat math destination must be packed or have stride 2.");
+
+         for (unsigned i = 0; i < num_sources; i++) {
+            if (!gen_type_is_bfloat(inst->src[i].type) ||
+                gen_region_is_scalar(inst->src[i].region))
+               continue;
+
+            const unsigned stride = gen_byte_stride(inst->src[i]);
+            ERROR_IF(stride != 2 && stride != 4,
+                     "Bfloat math sources must be packed or have stride 2.");
+            ERROR_IF(stride == 4 && i != 0 && inst->src[i].subnr % 4 != 0,
+                     "Only src0 of bfloat math may access the upper bfloat of "
+                     "the fp32 execution channel.");
+         }
+         return;
+      }
+
+      /* BF16 Mixed mode Operations: bfloat operands must be strided to align
+       * to the second lowest bfloat of the fp32 execution channel.
+       */
+      ERROR_IF(dst_is_bfloat &&
+               (dst_stride != 4 || inst->dst.subnr % 4 != 2),
+               "Mixed mode bfloat destination must have stride 2 and be aligned "
+               "to the upper bfloat of the fp32 execution channel.");
+
+      for (unsigned i = 0; i < num_sources; i++) {
+         if (!gen_type_is_bfloat(inst->src[i].type) ||
+             gen_region_is_scalar(inst->src[i].region))
+            continue;
+
+         ERROR_IF(gen_byte_stride(inst->src[i]) != 4 ||
+                  inst->src[i].subnr % 4 != 2 ||
+                  inst->src[i].subnr / 4 != inst->dst.subnr / 4,
+                  "Mixed mode bfloat sources must have stride 2 and be aligned "
+                  "to the upper bfloat of the fp32 execution channel.");
       }
    }
 
@@ -1117,7 +1210,8 @@ private:
                   "Mixed bfloat mode is limited to SIMD16 on Gfx20+.");
 
          for (unsigned i = 0; i < num_sources; i++) {
-            ERROR_IF(gen_type_is_bfloat(inst->src[i].type) &&
+            ERROR_IF(devinfo->ver < 35 &&
+                     gen_type_is_bfloat(inst->src[i].type) &&
                      gen_region_is_scalar(inst->src[i].region),
                      "Broadcast of bfloat scalar is not supported.");
          }
@@ -1134,7 +1228,11 @@ private:
 
          const unsigned half_offset = devinfo->grf_size / 2;
 
-         if (gen_inst_has_dst(inst->opcode) && gen_type_is_bfloat(inst->dst.type)) {
+         if (devinfo->ver >= 35)
+            gfx35_bfloat_region_restrictions();
+
+         if (devinfo->ver < 35 &&
+             gen_inst_has_dst(inst->opcode) && gen_type_is_bfloat(inst->dst.type)) {
             const unsigned dst_stride = inst->dst.region.hstride;
             const bool dst_is_packed =
                is_packed(inst->exec_size * dst_stride, inst->exec_size, dst_stride);
@@ -1151,7 +1249,7 @@ private:
          }
 
          for (unsigned i = 0; i < num_sources; i++) {
-            if (!gen_type_is_bfloat(inst->src[i].type))
+            if (devinfo->ver >= 35 || !gen_type_is_bfloat(inst->src[i].type))
                continue;
 
             ERROR_IF(!is_packed(inst->src[i].region.vstride,
@@ -1445,6 +1543,11 @@ private:
              (gen_type_is_float_or_bfloat(type) || type_size == 8)) {
             ERROR_IF(src_indirect && vstride == GEN_VSTRIDE_ONE_DIMENSIONAL,
                      "Vx1 and VxH indirect addressing are not allowed for float, bfloat, and 64-bit source types.");
+         }
+
+         if (devinfo->ver >= 20 && (type == GEN_TYPE_B || type == GEN_TYPE_UB)) {
+            ERROR_IF(src_indirect && vstride == GEN_VSTRIDE_ONE_DIMENSIONAL,
+                     "Vx1 and VxH indirect addressing are not allowed for byte source types.");
          }
       }
 
@@ -1943,7 +2046,7 @@ private:
       if (!gen_inst_is_send(inst) || inst->send.desc_is_reg)
          return;
 
-      if (inst->opcode == GEN_OP_SENDG) {
+      if (inst->opcode == GEN_OP_SENDG || inst->opcode == GEN_OP_SENDGC) {
          sendg_descriptor_restrictions();
          return;
       }
@@ -2098,7 +2201,7 @@ private:
                    (h == 2 && v < 2) ||
                    (h == 1 && v == 4 && (dst_subnr % 32 == 2 * (src_subnr / 4)) && (src_subnr % 2 == 0)) ||
                    (h == 2 && v == 4 && (dst_subnr % 32 == src_subnr / 2)) ||
-                   (h == 4 && v == 8 && (dst_subnr % 32 == src_subnr / 4)))
+                   (h == 4 && v == 8 && (dst_subnr % 16 == src_subnr / 4)))
                   allowed = true;
             }
          }

@@ -52,8 +52,6 @@ spec@!opengl 1.2@copyteximage 3d,Fail
 spec@arb_gpu_shader_fp64@execution@arb_gpu_shader_fp64-tf-separate,Fail
 spec@arb_pipeline_statistics_query@arb_pipeline_statistics_query-frag,Fail
 spec@arb_point_sprite@arb_point_sprite-mipmap,Fail
-spec@arb_program_interface_query@arb_program_interface_query-getprogramresourceindex,Fail
-spec@arb_program_interface_query@arb_program_interface_query-getprogramresourceindex@'vs_input2[1][0]' on GL_PROGRAM_INPUT,Fail
 spec@arb_sample_shading@samplemask 2,Fail
 spec@arb_sample_shading@samplemask 2@0.250000 mask_in_one,Fail
 spec@arb_sample_shading@samplemask 2@0.500000 mask_in_one,Fail
@@ -112,12 +110,6 @@ spec@arb_shader_image_load_store@early-z@occlusion query test/early-z pass,Fail
 
 spec@arb_shader_image_load_store@execution@image-array-out-of-bounds-access-load,Crash
 spec@arb_shader_image_load_store@execution@image-array-out-of-bounds-access-store,Crash
-
-#literally no driver can pass these
-spec@!opengl 1.0@rasterpos,Fail
-spec@!opengl 1.0@rasterpos@glsl_vs_gs_linked,Fail
-spec@!opengl 1.0@rasterpos@glsl_vs_tes_linked,Fail
-
 
 spec@arb_arrays_of_arrays@execution@image_store@basic-imagestore-mixed-const-non-const-uniform-index,Fail
 spec@arb_arrays_of_arrays@execution@image_store@basic-imagestore-mixed-const-non-const-uniform-index2,Fail

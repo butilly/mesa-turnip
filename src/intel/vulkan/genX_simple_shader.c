@@ -45,8 +45,7 @@ genX(emit_simpler_shader_init_fragment)(struct anv_simple_shader *state)
    struct anv_batch *batch = state->batch;
    struct anv_device *device = state->device;
    const struct anv_physical_device *pdevice = device->physical;
-   const struct brw_fs_prog_data *prog_data =
-      brw_fs_prog_data_const(state->kernel->prog_data);
+   const struct intel_shader_info *info = &state->kernel->bin->info;
 
    uint32_t *dw = anv_batch_emitn(batch,
                                   1 + 2 * GENX(VERTEX_ELEMENT_STATE_length),
@@ -185,9 +184,9 @@ genX(emit_simpler_shader_init_fragment)(struct anv_simple_shader *state)
 
    anv_batch_emit(batch, GENX(3DSTATE_SBE), sbe) {
       sbe.VertexURBEntryReadOffset = 1;
-      sbe.NumberofSFOutputAttributes = prog_data->num_varying_inputs;
-      sbe.VertexURBEntryReadLength = MAX2((prog_data->num_varying_inputs + 1) / 2, 1);
-      sbe.ConstantInterpolationEnable = prog_data->flat_inputs;
+      sbe.NumberofSFOutputAttributes = info->fs.num_varying_inputs;
+      sbe.VertexURBEntryReadLength = MAX2((info->fs.num_varying_inputs + 1) / 2, 1);
+      sbe.ConstantInterpolationEnable = info->fs.flat_inputs;
       sbe.ForceVertexURBEntryReadLength = true;
       sbe.ForceVertexURBEntryReadOffset = true;
       for (unsigned i = 0; i < 32; i++)
@@ -197,41 +196,43 @@ genX(emit_simpler_shader_init_fragment)(struct anv_simple_shader *state)
    anv_batch_emit(batch, GENX(3DSTATE_WM), wm);
 
    anv_batch_emit(batch, GENX(3DSTATE_PS), ps) {
-      intel_set_ps_dispatch_state(&ps, device->info, prog_data,
+      intel_set_ps_dispatch_state(&ps, device->info,
+                                  &state->kernel->bin->info,
                                   1 /* rasterization_samples */,
                                   0 /* fs_config */);
 
-      ps.VectorMaskEnable       = prog_data->uses_vmask;
+      ps.VectorMaskEnable       = info->fs.uses_vmask;
 
       ps.BindingTableEntryCount = GFX_VER == 9 ? 1 : 0;
 #if GFX_VER < 20
-      ps.PushConstantEnable     = prog_data->base.push_sizes[0] > 0;
+      ps.PushConstantEnable     = state->kernel->bin->info.push_layout.push_sizes[0] > 0;
 #endif
 
+      const struct intel_shader_info *info = &state->kernel->bin->info;
       ps.DispatchGRFStartRegisterForConstantSetupData0 =
-         brw_fs_prog_data_dispatch_grf_start_reg(prog_data, ps, 0);
+         intel_shader_info_fs_dispatch_grf_start_reg(info, ps, 0);
       ps.DispatchGRFStartRegisterForConstantSetupData1 =
-         brw_fs_prog_data_dispatch_grf_start_reg(prog_data, ps, 1);
+         intel_shader_info_fs_dispatch_grf_start_reg(info, ps, 1);
 #if GFX_VER < 20
       ps.DispatchGRFStartRegisterForConstantSetupData2 =
-         brw_fs_prog_data_dispatch_grf_start_reg(prog_data, ps, 2);
+         intel_shader_info_fs_dispatch_grf_start_reg(info, ps, 2);
 #endif
 
       ps.KernelStartPointer0 =
          anv_shader_get_pointer(device, &state->kernel->kernel) +
-         brw_fs_prog_data_prog_offset(prog_data, ps, 0);
+         intel_shader_info_fs_prog_offset(info, ps, 0);
       ps.KernelStartPointer1 =
          anv_shader_get_pointer(device, &state->kernel->kernel) +
-         brw_fs_prog_data_prog_offset(prog_data, ps, 1);
+         intel_shader_info_fs_prog_offset(info, ps, 1);
 #if GFX_VER < 20
       ps.KernelStartPointer2 =
          anv_shader_get_pointer(device, &state->kernel->kernel) +
-         brw_fs_prog_data_prog_offset(prog_data, ps, 2);
+         intel_shader_info_fs_prog_offset(info, ps, 2);
 #endif
 
 #if GFX_VER >= 30
       ps.RegistersPerThread =
-         intel_register_blocks(device->info, prog_data->base.grf_used);
+         intel_register_blocks(device->info, state->kernel->bin->info.grf_used);
 #endif
 
       ps.MaximumNumberofThreadsPerPSD = device->info->max_threads_per_psd - 1;
@@ -246,18 +247,18 @@ genX(emit_simpler_shader_init_fragment)(struct anv_simple_shader *state)
    anv_batch_emit(batch, GENX(3DSTATE_PS_EXTRA), psx) {
       psx.PixelShaderValid = true;
 #if GFX_VER < 20
-      psx.AttributeEnable = prog_data->num_varying_inputs > 0;
+      psx.AttributeEnable = info->fs.num_varying_inputs > 0;
 #endif
-      psx.PixelShaderIsPerSample = prog_data->persample_dispatch;
-      psx.PixelShaderComputedDepthMode = prog_data->computed_depth_mode;
-      psx.PixelShaderComputesStencil = prog_data->computed_stencil;
+      psx.PixelShaderIsPerSample = info->fs.persample_dispatch;
+      psx.PixelShaderComputedDepthMode = info->fs.computed_depth_mode;
+      psx.PixelShaderComputesStencil = info->fs.computed_stencil;
 
 #if INTEL_WA_18038825448_GFX_VER
       psx.EnablePSDependencyOnCPsizeChange = needs_ps_dependency;
 #endif
 
 #if INTEL_WA_16030144090_GFX_VER
-      assert(!prog_data->persample_dispatch);
+      assert(!info->fs.persample_dispatch);
 #endif
    }
 
@@ -400,17 +401,14 @@ genX(emit_simpler_shader_init_compute)(struct anv_simple_shader *state)
           state->cmd_buffer->state.current_pipeline == GPGPU);
 
 #if GFX_VERx10 >= 125
-   struct anv_shader_internal *cs_bin = state->kernel;
-   const struct brw_cs_prog_data *prog_data =
-      (const struct brw_cs_prog_data *) cs_bin->prog_data;
    if (state->cmd_buffer != NULL) {
       genX(cmd_buffer_ensure_cfe_state)(state->cmd_buffer,
-                                        prog_data->base.total_scratch);
+                                        state->kernel->bin->info.total_scratch);
    } else {
       /* Currently our simple shaders not in the command buffers are simple
        * enough that they never spill.
        */
-      assert(prog_data->base.total_scratch == 0);
+      assert(state->kernel->bin->info.total_scratch == 0);
       anv_batch_emit(state->batch, GENX(CFE_STATE), cfe) {
          cfe.MaximumNumberofThreads =
             state->device->info->max_cs_threads *
@@ -573,11 +571,10 @@ genX(emit_simple_shader_dispatch)(struct anv_simple_shader *state,
       genX(batch_emit_post_3dprimitive_was)(batch, device, _3DPRIM_RECTLIST, 3);
       genX(emit_breakpoint)(batch, device, false);
    } else {
+      const intel_shader_bin *bin = state->kernel->bin;
       UNUSED const uint64_t push_addr64 = anv_address_physical(push_addr);
-      const struct brw_cs_prog_data *prog_data =
-         (const struct brw_cs_prog_data *) state->kernel->prog_data;
       const struct intel_cs_dispatch_info dispatch =
-         brw_cs_get_dispatch_info(devinfo, prog_data, NULL);
+         brw_cs_get_dispatch_info(devinfo, &bin->info, NULL);
 
       if (GFX_VERx10 >= 350 && device->physical->uses_efficient_64bit) {
 #if GFX_VERx10 >= 350
@@ -585,34 +582,39 @@ genX(emit_simple_shader_dispatch)(struct anv_simple_shader *state,
          uint8_t z_pass_async_compute_thread_limit;
          uint8_t np_z_async_throttle_settings;
          const bool slm_or_barrier_enabled =
-            prog_data->base.total_shared != 0 ||
-            prog_data->uses_barrier;
+            bin->info.total_shared != 0 || bin->info.wg.uses_barrier;
 
          intel_compute_engine_async_threads_limit(device->info, dispatch.threads,
                                                   slm_or_barrier_enabled,
-                                                  prog_data->uses_fence,
+                                                  bin->info.cs.uses_fence,
                                                   &pixel_async_compute_thread_limit,
                                                   &z_pass_async_compute_thread_limit,
                                                   &np_z_async_throttle_settings);
+
+         const enum intel_compute_walk_order walk_order =
+            anv_compute_walk_order(device->physical->drirc.perf.force_preferred_walk_order,
+                                   bin->info.cs.walk_order);
 
          struct GENX(COMPUTE_WALKER_BODY_2) body = {
             .MaximumNumberofThreads    = device->info->max_cs_threads * device->info->subslice_total,
             .StackIDControl            = genX(compute_walker2_get_stack_id_control_value)(device),
             .SIMDSize                  = dispatch.simd_size / 16,
             .MessageSIMD               = dispatch.simd_size / 16,
-            .GenerateLocalID           = prog_data->generate_local_id != 0,
-            .EmitLocal                 = prog_data->generate_local_id,
+            .GenerateLocalID           = bin->info.cs.generate_local_id != 0,
+            .EmitLocal                 = bin->info.cs.generate_local_id,
             .EmitInlineParameter       = true,
-            .WalkOrder                 = prog_data->walk_order,
-            .TileLayout                = prog_data->walk_order == INTEL_WALK_ORDER_YXZ ?
+            .WalkOrder                 = walk_order,
+            .TileLayout                = walk_order == INTEL_WALK_ORDER_YXZ ?
                                          TileY32bpe : Linear,
             .StatCountDisable          = true,
-            .DispatchWalkOrder         = prog_data->uses_sampler ? DWO_Morton2x2XYWalk : DWO_LinearWalk,
-            .ThreadGroupBatchSize      = prog_data->uses_sampler ? TGBS_TG_BATCH_4 : TGBS_TG_BATCH_1,
+            .DispatchWalkOrder         = bin->info.cs.uses_sampler ?
+                                         DWO_Morton2x2XYWalk : DWO_LinearWalk,
+            .ThreadGroupBatchSize      = bin->info.cs.uses_sampler ?
+                                         TGBS_TG_BATCH_4 : TGBS_TG_BATCH_1,
             .ExecutionMask             = dispatch.right_mask,
-            .LocalXMaximum             = prog_data->local_size[0] - 1,
-            .LocalYMaximum             = prog_data->local_size[1] - 1,
-            .LocalZMaximum             = prog_data->local_size[2] - 1,
+            .LocalXMaximum             = bin->info.wg.local_size[0] - 1,
+            .LocalYMaximum             = bin->info.wg.local_size[1] - 1,
+            .LocalZMaximum             = bin->info.wg.local_size[2] - 1,
             .ThreadGroupIDXDimension   = DIV_ROUND_UP(num_threads, dispatch.simd_size),
             .ThreadGroupIDYDimension   = 1,
             .ThreadGroupIDZDimension   = 1,
@@ -623,14 +625,15 @@ genX(emit_simple_shader_dispatch)(struct anv_simple_shader *state,
             .InterfaceDescriptor = (struct GENX(INTERFACE_DESCRIPTOR_DATA_2)) {
                .KernelStartPointer                 =
                   anv_shader_get_pointer(device, &state->kernel->kernel) +
-                  brw_cs_prog_data_prog_offset(prog_data, dispatch.simd_size),
-               .RegistersPerThread                 = intel_register_blocks(
-                  devinfo, prog_data->base.grf_used),
-               .NumberOfBarriers                   = prog_data->uses_barrier,
+                  intel_shader_info_cs_prog_offset(&bin->info, dispatch.simd_size),
+               .RegistersPerThread                 =
+                  intel_register_blocks(devinfo, bin->info.grf_used),
+               .NumberOfBarriers                   = bin->info.wg.uses_barrier,
                .NumberofThreadsinGPGPUThreadGroup  = dispatch.threads,
                .ThreadGroupDispatchSize            = intel_compute_threads_group_dispatch_size_walker_2(dispatch.threads),
                .PreferredSLMAllocationSize         = SLM_ENCODES_0K,
-               .SharedLocalMemorySize              = intel_compute_slm_encode_size(GFX_VER, prog_data->base.total_shared),
+               .SharedLocalMemorySize              = intel_compute_slm_encode_size(
+                  GFX_VER, bin->info.total_shared),
                .PSAsyncThreadLimit                 = pixel_async_compute_thread_limit,
                .ZPassAsyncComputeThreadLimit       = z_pass_async_compute_thread_limit,
                .NP_ZAsyncThrottlesettings          = np_z_async_throttle_settings,
@@ -651,11 +654,12 @@ genX(emit_simple_shader_dispatch)(struct anv_simple_shader *state,
          if (!has_vrt) {
             uint8_t pixel_async_compute_thread_limit, z_pass_async_compute_thread_limit,
                np_z_async_throttle_settings;
-            bool slm_or_barrier_enabled = prog_data->base.total_shared != 0 || prog_data->uses_barrier;
+            bool slm_or_barrier_enabled =
+               bin->info.total_shared != 0 || bin->info.wg.uses_barrier;
 
             intel_compute_engine_async_threads_limit(devinfo, dispatch.threads,
                                                      slm_or_barrier_enabled,
-                                                     prog_data->uses_fence,
+                                                     bin->info.cs.uses_fence,
                                                      &pixel_async_compute_thread_limit,
                                                      &z_pass_async_compute_thread_limit,
                                                      &np_z_async_throttle_settings);
@@ -680,39 +684,42 @@ genX(emit_simple_shader_dispatch)(struct anv_simple_shader *state,
             }
          }
 
+         const enum intel_compute_walk_order walk_order =
+            anv_compute_walk_order(device->physical->drirc.perf.force_preferred_walk_order,
+                                   bin->info.cs.walk_order);
+
          struct GENX(COMPUTE_WALKER_BODY) body = {
             .SIMDSize                       = dispatch.simd_size / 16,
             .MessageSIMD                    = dispatch.simd_size / 16,
-            .LocalXMaximum                  = prog_data->local_size[0] - 1,
-            .LocalYMaximum                  = prog_data->local_size[1] - 1,
-            .LocalZMaximum                  = prog_data->local_size[2] - 1,
+            .LocalXMaximum                  = bin->info.wg.local_size[0] - 1,
+            .LocalYMaximum                  = bin->info.wg.local_size[1] - 1,
+            .LocalZMaximum                  = bin->info.wg.local_size[2] - 1,
             .ThreadGroupIDXDimension        = DIV_ROUND_UP(num_threads,
                                                            dispatch.simd_size),
             .ThreadGroupIDYDimension        = 1,
             .ThreadGroupIDZDimension        = 1,
             .ExecutionMask                  = dispatch.right_mask,
             .PostSync.MOCS                  = anv_mocs(device, NULL, 0),
-            .GenerateLocalID                = prog_data->generate_local_id != 0,
-            .EmitLocal                      = prog_data->generate_local_id,
-            .WalkOrder                      = prog_data->walk_order,
-            .TileLayout = prog_data->walk_order == INTEL_WALK_ORDER_YXZ ?
-            TileY32bpe : Linear,
+            .GenerateLocalID                = bin->info.cs.generate_local_id != 0,
+            .EmitLocal                      = bin->info.cs.generate_local_id,
+            .WalkOrder                      = walk_order,
+            .TileLayout                     = walk_order == INTEL_WALK_ORDER_YXZ ?
+                                              TileY32bpe : Linear,
 
             .InterfaceDescriptor = (struct GENX(INTERFACE_DESCRIPTOR_DATA)) {
                .KernelStartPointer                = state->kernel->kernel.offset +
-               brw_cs_prog_data_prog_offset(prog_data,
-                                            dispatch.simd_size),
+                  intel_shader_info_cs_prog_offset(&bin->info, dispatch.simd_size),
                .SamplerStatePointer               = 0,
                .BindingTablePointer               = 0,
                .BindingTableEntryCount            = 0,
                .NumberofThreadsinGPGPUThreadGroup = dispatch.threads,
                .ThreadGroupDispatchSize           = intel_compute_threads_group_dispatch_size(dispatch.threads),
-               .SharedLocalMemorySize             = intel_compute_slm_encode_size(GFX_VER,
-                                                                                  prog_data->base.total_shared),
-               .NumberOfBarriers                  = prog_data->uses_barrier,
+               .SharedLocalMemorySize             = intel_compute_slm_encode_size(
+                  GFX_VER, bin->info.total_shared),
+               .NumberOfBarriers                  = bin->info.wg.uses_barrier,
 #if GFX_VER >= 30
                .RegistersPerThread =
-               intel_register_blocks(devinfo, prog_data->base.grf_used),
+                  intel_register_blocks(devinfo, bin->info.grf_used),
 #endif
             },
             .EmitInlineParameter            = true,
@@ -727,8 +734,8 @@ genX(emit_simple_shader_dispatch)(struct anv_simple_shader *state,
          }
 #else /* GFX_VERx10 < 125 */
          const uint32_t vfe_curbe_allocation =
-            align(prog_data->push.per_thread.regs * dispatch.threads +
-                  prog_data->push.cross_thread.regs, 2);
+            align(bin->info.cs.push.per_thread.regs * dispatch.threads +
+                  bin->info.cs.push.cross_thread.regs, 2);
 
          /* From the Sky Lake PRM Vol 2a, MEDIA_VFE_STATE:
           *
@@ -753,18 +760,17 @@ genX(emit_simple_shader_dispatch)(struct anv_simple_shader *state,
             vfe.URBEntryAllocationSize = 2;
             vfe.CURBEAllocationSize    = vfe_curbe_allocation;
 
-            if (prog_data->base.total_scratch) {
+            if (bin->info.total_scratch) {
                /* Broadwell's Per Thread Scratch Space is in the range [0, 11]
                 * where 0 = 1k, 1 = 2k, 2 = 4k, ..., 11 = 2M.
                 */
-               vfe.PerThreadScratchSpace =
-                  ffs(prog_data->base.total_scratch) - 11;
+               vfe.PerThreadScratchSpace = ffs(bin->info.total_scratch) - 11;
                vfe.ScratchSpaceBasePointer =
                   (struct anv_address) {
                   .bo = anv_scratch_pool_alloc(device,
                                                &device->scratch_pool,
                                                MESA_SHADER_COMPUTE,
-                                               prog_data->base.total_scratch),
+                                               bin->info.total_scratch),
                   .offset = 0,
                };
             }
@@ -777,18 +783,19 @@ genX(emit_simple_shader_dispatch)(struct anv_simple_shader *state,
 
          struct GENX(INTERFACE_DESCRIPTOR_DATA) iface_desc = {
             .KernelStartPointer                    = state->kernel->kernel.offset +
-            brw_cs_prog_data_prog_offset(prog_data,
-                                         dispatch.simd_size),
+               intel_shader_info_cs_prog_offset(&bin->info, dispatch.simd_size),
 
             .SamplerCount                          = 0,
             .BindingTableEntryCount                = 0,
-            .BarrierEnable                         = prog_data->uses_barrier,
-            .SharedLocalMemorySize                 = intel_compute_slm_encode_size(GFX_VER,
-                                                                                   prog_data->base.total_shared),
+            .BarrierEnable                         = bin->info.wg.uses_barrier,
+            .SharedLocalMemorySize                 = intel_compute_slm_encode_size(
+               GFX_VER, bin->info.total_shared),
 
             .ConstantURBEntryReadOffset            = 0,
-            .ConstantURBEntryReadLength            = prog_data->push.per_thread.regs,
-            .CrossThreadConstantDataReadLength     = prog_data->push.cross_thread.regs,
+            .ConstantURBEntryReadLength            =
+               bin->info.cs.push.per_thread.regs,
+            .CrossThreadConstantDataReadLength     =
+               bin->info.cs.push.cross_thread.regs,
 #if GFX_VER >= 12
             /* TODO: Check if we are missing workarounds and enable mid-thread
              * preemption.

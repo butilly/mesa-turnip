@@ -4,6 +4,7 @@
 use crate::bindings::*;
 use crate::memstream::MemStream;
 
+use mesa_util::format::pipe_format;
 use std::ffi::{c_void, CStr};
 use std::io;
 use std::marker::PhantomData;
@@ -348,7 +349,9 @@ impl nir_intrinsic_instr {
     }
 
     pub fn format(&self) -> pipe_format {
-        self.get_const_index(NIR_INTRINSIC_FORMAT) as pipe_format
+        self.get_const_index(NIR_INTRINSIC_FORMAT)
+            .try_into()
+            .unwrap()
     }
 
     pub fn access(&self) -> gl_access_qualifier {
@@ -714,6 +717,13 @@ impl nir_function_impl {
 }
 
 impl nir_function {
+    pub fn name(&self) -> Option<&str> {
+        if self.name.is_null() {
+            return None;
+        }
+        unsafe { CStr::from_ptr(self.name).to_str().ok() }
+    }
+
     pub fn get_impl(&self) -> Option<&nir_function_impl> {
         unsafe { self.impl_.as_ref() }
     }

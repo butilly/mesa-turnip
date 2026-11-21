@@ -141,6 +141,22 @@ struct fd_dev_info {
        */
       bool draw_auto_stale_stride_quirk;
 
+      /* Many A6XX GEN1/GEN2 devices have a newer a630_sqe.fw in which, only in CP_DRAW_INDX and
+       * CP_DRAW_INDX_OFFSET, visibility-based skipping happens *before* predication-based skipping.
+       * It seems this breaks predication, because draws skipped by predication will not be executed
+       * in the binning phase, and therefore won't have an entry in the draw stream, but the
+       * visibility-based skipping will expect it to have an entry. The result is a GPU hang when
+       * actually executing the first non-predicated draw. However, it seems that things still work
+       * if the whole renderpass is predicated. Affected tests (with hw binning) are:
+       *   dEQP-VK.conditional_rendering.draw_clear.draw.case_*_host_memory
+       *   dEQP-VK.conditional_rendering.draw_clear.draw.maintenance5
+       *
+       * linux-firmware (working) FW version: 016ee176
+       * Last known working FW version: 016ee17a
+       * Latest known broken FW version: 016ee207 (linux-firmware)
+       */
+      bool predicated_binning_quirk;
+
       /* On some GPUs, the depth test needs to be enabled when the
        * depth bounds test is enabled and the depth attachment uses UBWC.
        */
@@ -389,6 +405,12 @@ struct fd_dev_info {
        */
       bool enable_tp_ubwc_flag_hint;
 
+      /* Whether SP_CHICKEN_BITS_2.INDEPENDENT_ICACHE_MISS exists, A750 only.
+       * It helps some workloads and hurts others, so it is only set when
+       * the tu_independent_icache_miss driconf option asks for it.
+       */
+      bool has_independent_icache_miss;
+
       bool storage_8bit;
 
       /* A750+ added a special flag that allows HW to correctly interpret UBWC, including
@@ -437,9 +459,6 @@ struct fd_dev_info {
        */
       bool has_sw_fuse;
 
-      /* a750-specific HW bug workaround for ray tracing */
-      bool has_rt_workaround;
-
       /* Whether alias.rt is supported. */
       bool has_alias_rt;
 
@@ -484,6 +503,11 @@ struct fd_dev_info {
        */
       bool prefetch_sam_helpers_quirk;
 
+      /* Whether resbase can be used. It doesn't exist on a6xx, and on
+       * a7xx gen1 it hangs the GPU, even when its result is unused.
+       */
+      bool has_resbase;
+
       /* On a750+ SUBPASS_FENCE also implicitly does CCU_RESOLVE_CLEAN */
       bool subpass_fence_cleans_resolve;
    } props;
@@ -497,6 +521,16 @@ struct fd_dev_info {
        * of dst_type
        */
       bool QCTDD06363318_movs_half : 1;
+      /* On a7xx gen1/gen2, when the FS varyings in VPC take an odd number of
+       * vec4 slots (+ some conditions about number of contexts and visible
+       * prims that are impossible to detect), VPC_PS_CNTL::NUMNONPOSVAR has to
+       * be padded by one more vec4. Otherwise something goes wrong with varying
+       * storage alloc/dealloc: sometimes we get garbage in loaded varyings,
+       * unless (ei) is removed or moved much later. The padding of
+       * ::NUMNONPOSVAR is what prop driver is doing on a7xx gen1/gen2 and
+       * doesn't do on gen3.
+       */
+      bool QCTDD08049535_numnonposvar_alignment : 1;
       /* Is lock/unlock sequence needed at end of compute shader? */
       bool QCTDD08407086_cs_lock_unlock : 1;
       /* Having zero consts in one FS may corrupt consts in follow up FSs,
@@ -515,6 +549,8 @@ struct fd_dev_info {
       bool QCTDD09112208_cmdbuf_start_cs : 1;
       /* Need fake bary.f for (ei) if last input is flat: */
       bool QCTDD10204462_flat_ei : 1;
+      /* a750-specific HW bug workaround for ray tracing */
+      bool QCTDD10497382_rt_workaround;
       /* Do not use a0 in early preamble. */
       bool QCTDD10789828_no_a0_ep : 1;
       /* On a7xx alias.tex may hang when in between mova and (ul). */

@@ -41,7 +41,8 @@ blorp_nir_options_brw(struct blorp_context *blorp,
 }
 
 static nir_def *
-blorp_nir_rt_write(nir_builder *b, signed rt, void *data)
+blorp_nir_rt_write(nir_builder *b, UNUSED signed rt,
+                   UNUSED struct intel_shader_info *info, UNUSED void *data)
 {
    return nir_load_push_data_intel(b, 1, 64, nir_imm_int(b, 0), .base = 0, .range = 8);
 }
@@ -55,11 +56,6 @@ blorp_compile_fs_brw(struct blorp_context *blorp, void *mem_ctx,
                      const void *key, uint32_t key_size)
 {
    const struct brw_compiler *compiler = blorp->compiler->brw;
-
-   struct brw_fs_prog_data *fs_prog_data = rzalloc(mem_ctx, struct brw_fs_prog_data);
-
-   if (blorp->config.use_efficient_64bit)
-      fs_prog_data->base.push_sizes[0] = 32;
 
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
 
@@ -90,32 +86,34 @@ blorp_compile_fs_brw(struct blorp_context *blorp, void *mem_ctx,
    debug_archiver *archiver =
       blorp_debug_archiver_open(mem_ctx, nir, key, key_size);
 
-   struct brw_compile_fs_params params = {
-      .base = {
-         .mem_ctx = mem_ctx,
-         .nir = nir,
-         .key = &wm_key.base,
-         .prog_data = (struct brw_stage_prog_data *)fs_prog_data,
-         .log_data = blorp->driver_ctx,
-         .debug_flag = DEBUG_BLORP,
-         .archiver = archiver,
+   struct brw_compile_params params = {
+      .mem_ctx = mem_ctx,
+      .nir = nir,
+      .key = &wm_key.base,
+      .push_layout = {
+         .push_sizes = { blorp->config.use_efficient_64bit ? 32 : 0 },
       },
-
-      .rt_write_cb = blorp->config.use_efficient_64bit ? blorp_nir_rt_write : NULL,
-
-      .use_rep_send = use_repclear,
-      .max_polygons = 1,
+      .log_data = blorp->driver_ctx,
+      .debug_flag = DEBUG_BLORP,
+      .fs = {
+         .use_rep_send = use_repclear,
+         .max_polygons = 1,
+         .rt_write_cb = blorp->config.use_efficient_64bit ?
+                        blorp_nir_rt_write : NULL,
+      },
+      .archiver = archiver,
    };
 
-   const unsigned *kernel = brw_compile(compiler, &params.base);
+   const intel_shader_bin *bin = brw_compile(compiler, &params);
+   assert(bin != NULL);
+   const void *kernel = bin->code;
 
    debug_archiver_close(archiver);
 
    return (struct blorp_program){
+      .bin            = bin,
       .kernel         = kernel,
-      .kernel_size    = fs_prog_data->base.program_size,
-      .prog_data      = fs_prog_data,
-      .prog_data_size = sizeof(*fs_prog_data),
+      .kernel_size    = bin->code_size,
    };
 }
 
@@ -130,8 +128,6 @@ blorp_compile_vs_brw(struct blorp_context *blorp, void *mem_ctx,
    brw_preprocess_nir(compiler, nir, &opts);
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
 
-   struct brw_vs_prog_data *vs_prog_data = rzalloc(mem_ctx, struct brw_vs_prog_data);
-
    struct brw_vs_prog_key vs_key = {
       .base = {
          .use_efficient_64bit = blorp->config.use_efficient_64bit,
@@ -141,27 +137,25 @@ blorp_compile_vs_brw(struct blorp_context *blorp, void *mem_ctx,
    debug_archiver *archiver =
       blorp_debug_archiver_open(mem_ctx, nir, key, key_size);
 
-   struct brw_compile_vs_params params = {
-      .base = {
-         .mem_ctx = mem_ctx,
-         .nir = nir,
-         .key = &vs_key.base,
-         .prog_data = (struct brw_stage_prog_data *)vs_prog_data,
-         .log_data = blorp->driver_ctx,
-         .debug_flag = DEBUG_BLORP,
-         .archiver = archiver,
-      },
+   struct brw_compile_params params = {
+      .mem_ctx = mem_ctx,
+      .nir = nir,
+      .key = &vs_key.base,
+      .log_data = blorp->driver_ctx,
+      .debug_flag = DEBUG_BLORP,
+      .archiver = archiver,
    };
 
-   const unsigned *kernel = brw_compile(compiler, &params.base);
+   const intel_shader_bin *bin = brw_compile(compiler, &params);
+   assert(bin != NULL);
+   const void *kernel = bin->code;
 
    debug_archiver_close(archiver);
 
    return (struct blorp_program) {
+      .bin            = bin,
       .kernel         = kernel,
-      .kernel_size    = vs_prog_data->base.base.program_size,
-      .prog_data      = vs_prog_data,
-      .prog_data_size = sizeof(*vs_prog_data),
+      .kernel_size    = bin->code_size,
    };
 }
 
@@ -234,15 +228,19 @@ blorp_compile_cs_brw(struct blorp_context *blorp, void *mem_ctx,
    STATIC_ASSERT(offsetof(struct blorp_wm_inputs, subgroup_id) + 4 ==
                  sizeof(struct blorp_wm_inputs));
 
-   struct brw_cs_prog_data *cs_prog_data = rzalloc(mem_ctx, struct brw_cs_prog_data);
-   cs_prog_data->base.push_sizes[0] = sizeof(struct blorp_wm_inputs);
+   struct intel_push_layout push_layout = {
+      .push_sizes[0] = sizeof(struct blorp_wm_inputs),
+   };
 
-   brw_cs_fill_push_const_info(compiler->devinfo, cs_prog_data,
-                               offsetof(struct blorp_wm_inputs, subgroup_id) / 4);
-   cs_prog_data->base.push_sizes[0] = align(cs_prog_data->base.push_sizes[0], REG_SIZE);
+   struct brw_cs_push_const_info cs_push = {};
+   brw_cs_fill_push_const_info(compiler->devinfo, &push_layout,
+                               offsetof(struct blorp_wm_inputs, subgroup_id) / 4,
+                               &cs_push);
+   push_layout.push_sizes[0] = align(push_layout.push_sizes[0], REG_SIZE);
 
+   struct intel_cs_dispatch_params dispatch = {};
    NIR_PASS(_, nir, brw_nir_lower_cs_intrinsics, compiler->devinfo,
-              cs_prog_data);
+              &dispatch);
    NIR_PASS(_, nir, brw_nir_lower_cs_subgroup_id, compiler->devinfo,
                offsetof(struct blorp_wm_inputs, subgroup_id));
    NIR_PASS(_, nir, nir_shader_intrinsics_pass, lower_base_workgroup_id,
@@ -256,27 +254,30 @@ blorp_compile_cs_brw(struct blorp_context *blorp, void *mem_ctx,
    debug_archiver *archiver =
       blorp_debug_archiver_open(mem_ctx, nir, key, key_size);
 
-   struct brw_compile_cs_params params = {
-      .base = {
-         .mem_ctx = mem_ctx,
-         .nir = nir,
-         .key = &cs_key.base,
-         .prog_data = (struct brw_stage_prog_data *)cs_prog_data,
-         .log_data = blorp->driver_ctx,
-         .debug_flag = DEBUG_BLORP,
-         .archiver = archiver,
+   struct brw_compile_params params = {
+      .mem_ctx = mem_ctx,
+      .nir = nir,
+      .key = &cs_key.base,
+      .push_layout = push_layout,
+      .log_data = blorp->driver_ctx,
+      .debug_flag = DEBUG_BLORP,
+      .cs = {
+         .dispatch = dispatch,
+         .push = cs_push,
       },
+      .archiver = archiver,
    };
 
-   const unsigned *kernel = brw_compile(compiler, &params.base);
+   const intel_shader_bin *bin = brw_compile(compiler, &params);
+   assert(bin != NULL);
+   const void *kernel = bin->code;
 
    debug_archiver_close(archiver);
 
    return (struct blorp_program) {
+      .bin            = bin,
       .kernel         = kernel,
-      .kernel_size    = cs_prog_data->base.program_size,
-      .prog_data      = cs_prog_data,
-      .prog_data_size = sizeof(*cs_prog_data),
+      .kernel_size    = bin->code_size,
    };
 }
 
@@ -304,12 +305,12 @@ blorp_params_get_layer_offset_vs_brw(struct blorp_batch *batch,
                   BLORP_SHADER_TYPE_LAYER_OFFSET_VS,
                   BLORP_SHADER_PIPELINE_RENDER);
 
-   struct brw_fs_prog_data *fs_prog_data = params->fs_prog_data;
-   if (fs_prog_data)
-      blorp_key.num_inputs = fs_prog_data->num_varying_inputs;
+   if (params->fs_info)
+      blorp_key.num_inputs = params->fs_info->fs.num_varying_inputs;
 
    if (blorp->lookup_shader(batch, &blorp_key, sizeof(blorp_key),
-                            &params->vs_prog_kernel, &params->vs_prog_data))
+                            &params->vs_prog_kernel, &params->vs_prog_data,
+                            &params->vs_info))
       return true;
 
    void *mem_ctx = ralloc_context(NULL);
@@ -366,8 +367,9 @@ blorp_params_get_layer_offset_vs_brw(struct blorp_batch *batch,
       blorp->upload_shader(batch, MESA_SHADER_VERTEX,
                            &blorp_key, sizeof(blorp_key),
                            p.kernel, p.kernel_size,
-                           p.prog_data, p.prog_data_size,
-                           &params->vs_prog_kernel, &params->vs_prog_data);
+                           p.prog_data, p.prog_data_size, p.bin,
+                           &params->vs_prog_kernel, &params->vs_prog_data,
+                           &params->vs_info);
 
    ralloc_free(mem_ctx);
    return result;

@@ -413,6 +413,7 @@ anv_cmd_buffer_update_pending_query_bits(struct anv_cmd_buffer *cmd_buffer,
 {
    clear_pending_query_bits(&cmd_buffer->state.queries.clear_bits, flushed_bits);
    clear_pending_query_bits(&cmd_buffer->state.queries.buffer_write_bits, flushed_bits);
+   clear_pending_query_bits(&cmd_buffer->state.queries.copy_bits, flushed_bits);
 }
 
 static bool
@@ -772,6 +773,14 @@ anv_cmd_buffer_set_descriptor_buffer_offsets(struct anv_cmd_buffer *cmd_buffer,
 
    for (uint32_t i = 0; i < set_count; i++) {
       const uint32_t set_index = first_set + i;
+
+      /* With graphicsPipelineLibrary, pipeline layouts can have VK_NULL_HANDLE
+       * set layouts; there is nothing to set up for those (same as
+       * VK_NULL_HANDLE descriptor sets in vkCmdBindDescriptorSets).
+       */
+      if (layout->set_layouts[set_index] == NULL)
+         continue;
+
       const struct anv_descriptor_set_layout *set_layout =
          container_of(layout->set_layouts[set_index],
                       const struct anv_descriptor_set_layout, vk);
@@ -1091,13 +1100,12 @@ anv_cmd_buffer_cs_push_constants(struct anv_cmd_buffer *cmd_buffer)
    struct anv_cmd_compute_state *comp_state = &cmd_buffer->state.compute;
    struct anv_bind_point_state *bind_state = comp_state->base;
    struct anv_push_constants *data = &bind_state->push_constants;
-   const struct brw_cs_prog_data *cs_prog_data = get_cs_prog_data(comp_state);
    const struct anv_push_range *range = &comp_state->shader->bind_map.push_ranges[0];
-
+   const struct intel_shader_info *info = &comp_state->shader->bin->info;
    const struct intel_cs_dispatch_info dispatch =
-      brw_cs_get_dispatch_info(devinfo, cs_prog_data, NULL);
+      brw_cs_get_dispatch_info(devinfo, info, NULL);
    const unsigned total_push_constants_size =
-      brw_cs_push_const_total_size(cs_prog_data, dispatch.threads);
+      brw_cs_push_const_total_size(info, dispatch.threads);
    if (total_push_constants_size == 0)
       return (struct anv_state) { .offset = 0 };
 
@@ -1114,22 +1122,22 @@ anv_cmd_buffer_cs_push_constants(struct anv_cmd_buffer *cmd_buffer)
    void *dst = state.map;
    const void *src = (char *)data + (range->start * 32);
 
-   if (cs_prog_data->push.cross_thread.size > 0) {
-      memcpy(dst, src, cs_prog_data->push.cross_thread.size);
-      dst += cs_prog_data->push.cross_thread.size;
-      src += cs_prog_data->push.cross_thread.size;
+   if (info->cs.push.cross_thread.size > 0) {
+      memcpy(dst, src, info->cs.push.cross_thread.size);
+      dst += info->cs.push.cross_thread.size;
+      src += info->cs.push.cross_thread.size;
    }
 
-   if (cs_prog_data->push.per_thread.size > 0) {
+   if (info->cs.push.per_thread.size > 0) {
       for (unsigned t = 0; t < dispatch.threads; t++) {
-         memcpy(dst, src, cs_prog_data->push.per_thread.size);
+         memcpy(dst, src, info->cs.push.per_thread.size);
 
          uint32_t *subgroup_id = dst +
             offsetof(struct anv_push_constants, subgroup_id) -
-            (range->start * 32 + cs_prog_data->push.cross_thread.size);
+            (range->start * 32 + info->cs.push.cross_thread.size);
          *subgroup_id = t;
 
-         dst += cs_prog_data->push.per_thread.size;
+         dst += info->cs.push.per_thread.size;
       }
    }
 

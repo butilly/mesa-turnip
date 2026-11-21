@@ -30,6 +30,7 @@
 #include <assert.h>
 #include <stdint.h>
 #include "drm-uapi/drm_fourcc.h"
+#include "c11/time.h"
 
 #ifdef HAVE_VALGRIND
 #include <valgrind.h>
@@ -68,7 +69,7 @@
 #include "util/set.h"
 #include "util/sparse_array.h"
 #include "util/u_atomic.h"
-#if DETECT_OS_ANDROID
+#ifdef VK_USE_PLATFORM_ANDROID_KHR
 #include "util/u_gralloc/u_gralloc.h"
 #endif
 #include "util/u_vector.h"
@@ -154,11 +155,6 @@ struct intel_perf_query_result;
 #include "util/log.h"
 #include "wsi_common.h"
 
-/* The "RAW" clocks on Linux are called "FAST" on FreeBSD */
-#if !defined(CLOCK_MONOTONIC_RAW) && defined(CLOCK_MONOTONIC_FAST)
-#define CLOCK_MONOTONIC_RAW CLOCK_MONOTONIC_FAST
-#endif
-
 #define NSEC_PER_SEC 1000000000ull
 
 /* 3DSTATE_BINDING_TABLE_POINTERS_*::PointertoBindingTable resolution */
@@ -203,10 +199,52 @@ get_max_vbs(const struct intel_device_info *devinfo) {
  */
 #define ANV_COLOR_OUTPUT_UNKNOWN  (0xfd)
 
+static inline uint32_t
+anv_get_fs_color_map(const struct vk_color_attachment_location_state *cal,
+                     uint32_t color_att_count)
+{
+   assert(color_att_count <= MAX_RTS);
+
+   /* The surface states are layed out this way :
+    *   - null surface
+    *   - color attachment 0
+    *   - color attachment 1
+    *   - ...
+    *
+    * Hence we leave 0 if MESA_VK_ATTACHMENT_UNUSED and otherwise add 1 to
+    * the index.
+    */
+   uint32_t map = 0;
+   for (uint32_t i = 0; i < color_att_count; i++) {
+      if (cal->color_map[i] != MESA_VK_ATTACHMENT_UNUSED) {
+         assert(cal->color_map[i] < MAX_RTS);
+         map |= (1 + i) << (cal->color_map[i] * 4);
+      }
+   }
+   return map;
+}
+
 static inline uint64_t
 align_down_npot_u64(uint64_t v, uint64_t a)
 {
    return v - (v % a);
+}
+
+/*
+ * The DRIRC value anv_force_preferred_walk_order is an
+ * enum intel_compute_walk_order value + 1, so that 0 can mean "not set,
+ * use the compiled walk order".
+ *
+ * Returns the default walk_order when the DRIRC value is 0 (not set).
+ */
+static inline enum intel_compute_walk_order
+anv_compute_walk_order(unsigned force_preferred_walk_order, enum intel_compute_walk_order walk_order)
+{
+   if (force_preferred_walk_order == 0)
+      return walk_order;
+
+   assert(force_preferred_walk_order <= INTEL_WALK_ORDER_ZYX + 1);
+   return (enum intel_compute_walk_order)(force_preferred_walk_order - 1);
 }
 
 static inline union isl_color_value
@@ -330,8 +368,8 @@ enum anv_bo_alloc_flags {
     */
    ANV_BO_ALLOC_IMPLICIT_WRITE =          (1 << 7),
 
-   /** Has an address which is visible to the client */
-   ANV_BO_ALLOC_CLIENT_VISIBLE_ADDRESS =  (1 << 8),
+   /** Has an address visible to the client for capture and replay  */
+   ANV_BO_ALLOC_CAPTURE_REPLAY =          (1 << 8),
 
    /** Align the BO's virtual address to match AUX-TT requirements */
    ANV_BO_ALLOC_AUX_TT_ALIGNED =          (1 << 9),
@@ -590,6 +628,20 @@ static inline struct anv_address
 anv_address_add(struct anv_address addr, uint64_t offset)
 {
    addr.offset += offset;
+   return addr;
+}
+
+static inline struct anv_address
+anv_address_align_down(struct anv_address addr, uint64_t alignment)
+{
+   addr.offset -= (int64_t)(anv_address_physical(addr) & (alignment - 1));
+   return addr;
+}
+
+static inline struct anv_address
+anv_address_align(struct anv_address addr, uint64_t alignment)
+{
+   addr.offset += (int64_t)(-anv_address_physical(addr) & (alignment - 1));
    return addr;
 }
 
@@ -1117,7 +1169,7 @@ struct anv_pipeline_bind_map {
     * anv_push_constants, we can index up to 1024 bytes minus a few values
     * reserved, see ANV_INLINE_PARAM_* above) to inline data parameters.
     */
-   uint8_t                                      inline_dwords[8];
+   uint8_t                                      inline_dwords[ANV_MAX_INLINE_DWORDS];
 
    /* Bitfield of sets for which the surfaces are accessed */
    uint8_t                                      used_surface_sets;
@@ -1267,10 +1319,7 @@ struct anv_shader {
 
    struct anv_shader_alloc kernel;
 
-   const struct brw_stage_prog_data *prog_data;
-
-   struct genisa_stats stats[3];
-   uint32_t num_stats;
+   intel_shader_bin *bin;
 
    char *nir_str;
 
@@ -2463,6 +2512,11 @@ struct anv_gfx_dynamic_state {
    uint32_t first_vue_slot;
 
    /**
+    * Whether the HW has been programmed with non standard sample patterns.
+    */
+   bool non_standard_sample_pattern;
+
+   /**
     * DEPTH and STENCIL attachment write state for Wa_18019816803.
     */
    bool ds_write_state;
@@ -2562,6 +2616,7 @@ enum anv_internal_kernel_name {
    ANV_INTERNAL_KERNEL_MEMCPY_COMPUTE,
    ANV_INTERNAL_KERNEL_DGC_GFX_COMPUTE,
    ANV_INTERNAL_KERNEL_DGC_GFX_FRAGMENT,
+   ANV_INTERNAL_KERNEL_DGC_GFX_POSTPROCESS_FRAGMENT,
    ANV_INTERNAL_KERNEL_DGC_CS_COMPUTE,
    ANV_INTERNAL_KERNEL_DGC_CS_FRAGMENT,
    ANV_INTERNAL_KERNEL_DGC_CS_POSTPROCESS_COMPUTE,
@@ -2693,6 +2748,7 @@ struct anv_device {
 
     struct anv_bo *                             dummy_aux_bo;
     struct anv_bo *                             mem_fence_bo;
+    struct anv_bo *                             urb_memory_bo;
 
     /**
      * Workarounds for game bugs.
@@ -3184,6 +3240,7 @@ void anv_wait_for_attach(void);
 VkResult anv_queue_init(struct anv_device *device, struct anv_queue *queue,
                         const VkDeviceQueueCreateInfo *pCreateInfo,
                         uint32_t index_in_family);
+void anv_queue_drain(struct anv_queue *queue);
 void anv_queue_finish(struct anv_queue *queue);
 
 VkResult anv_queue_submit(struct vk_queue *queue,
@@ -3570,93 +3627,6 @@ struct anv_vue_header {
    uint32_t RTAIndex; /* RenderTargetArrayIndex */
    uint32_t ViewportIndex;
    float PointWidth;
-};
-
-/** Struct representing a sampled image descriptor
- *
- * This descriptor layout is used for sampled images, bare sampler, and
- * combined image/sampler descriptors.
- */
-struct anv_sampled_image_descriptor {
-   /** Bindless image handle
-    *
-    * This is expected to already be shifted such that the 20-bit
-    * SURFACE_STATE table index is in the top 20 bits.
-    */
-   uint32_t image;
-
-   /** Bindless sampler handle
-    *
-    * This is assumed to be a 32B-aligned SAMPLER_STATE pointer relative
-    * to the dynamic state base address.
-    */
-   uint32_t sampler;
-};
-
-/** Struct representing a storage image descriptor */
-struct anv_storage_image_descriptor {
-   /** Bindless image handles
-    *
-    * These are expected to already be shifted such that the 20-bit
-    * SURFACE_STATE table index is in the top 20 bits.
-    */
-   uint32_t vanilla;
-
-   /** Image depth
-    *
-    * By default the HW RESINFO message allows us to query the depth of an image :
-    *
-    * From the Kaby Lake docs for the RESINFO message:
-    *
-    *    "Surface Type | ... | Blue
-    *    --------------+-----+----------------
-    *    SURFTYPE_3D  | ... | (Depth+1)»LOD"
-    *
-    * With VK_EXT_sliced_view_of_3d, we have to support a slice of a 3D image,
-    * meaning at a depth offset with a new depth value potentially reduced
-    * from the original image. Unfortunately if we change the Depth value of
-    * the image, we then run into issues with Yf/Ys tilings where the HW fetch
-    * data at incorrect locations.
-    *
-    * To solve this, we put the slice depth in the descriptor and recompose
-    * the vec3 (width, height, depth) using this field for z and xy using the
-    * RESINFO result.
-    */
-   uint32_t image_depth;
-
-   /** Image address */
-   uint64_t image_address;
-
-   /** Image tiling mode
-    *
-    * 0 for linear, ~0 otherwise.
-    */
-   uint32_t tile_mode;
-
-   /** Image row pitch in bytes */
-   uint32_t row_pitch_B;
-
-   /** Image Q pitch (rows between array slices) */
-   uint32_t qpitch;
-
-   /** Image Format (enum isl_format) */
-   uint32_t format;
-
-   /** Image View VkImageSubresourceRange::baseArrayLayer */
-   uint32_t min_array_element;
-};
-
-/** Struct representing a address/range descriptor
- *
- * The fields of this struct correspond directly to the data layout of
- * nir_address_format_64bit_bounded_global addresses.  The last field is the
- * offset in the NIR address so it must be zero so that when you load the
- * descriptor you get a pointer to the start of the range.
- */
-struct anv_address_range_descriptor {
-   uint64_t address;
-   uint32_t range;
-   uint32_t zero;
 };
 
 enum anv_descriptor_data {
@@ -4859,6 +4829,20 @@ struct anv_cmd_state {
    enum anv_pipe_bits                           pending_pipe_bits;
 
    /**
+    * Tracks whether constant cache invalidation for the fragment shader stage
+    * has been delayed.
+    *
+    * Pushed UBO ranges (3DSTATE_CONSTANT_* buffer pointers) are fetched by
+    * the front end of the pipeline, ahead of the raster/pixel stages. To
+    * avoid a barrier with the TOP waiting stages that costs us some
+    * performance, we delay the push constant invalidation for the fragment
+    * stage until we detect a fragment shader with a push range other then
+    * push constants data.
+    */
+   bool                                         deferred_constant_cache_inval;
+   unsigned                                     deferred_constant_cache_stage;
+
+   /**
     * Whether the last programmed STATE_BASE_ADDRESS references
     * anv_device::dynamic_state_pool or anv_device::dynamic_state_pool_db for
     * the dynamic state heap.
@@ -4887,6 +4871,13 @@ struct anv_cmd_state {
        * the command streamer or a shader.
        */
       enum anv_pipe_bits                        clear_bits;
+
+      /**
+       * Tracks query pool copy synchronization bits that will need to be
+       * flushed before doing work in vkCmdQueryReset. If a copy operation is
+       * in flight, we need for it complete before resetting the query pool.
+       */
+      enum anv_pipe_bits                        copy_bits;
    } queries;
 
    /**
@@ -5186,7 +5177,8 @@ anv_cmd_buffer_is_chainable(struct anv_cmd_buffer *cmd_buffer)
 {
    return !(cmd_buffer->usage_flags &
             VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT) &&
-          !(cmd_buffer->is_companion_rcs_cmd_buffer);
+          !(cmd_buffer->is_companion_rcs_cmd_buffer) &&
+          cmd_buffer->companion_rcs_cmd_buffer == NULL;
 }
 
 static inline bool
@@ -5564,14 +5556,8 @@ struct anv_shader_upload_params {
    const void *key_data;
    uint32_t key_size;
 
-   const void *kernel_data;
-   uint32_t kernel_size;
-
-   const struct brw_stage_prog_data *prog_data;
-   uint32_t prog_data_size;
-
-   const struct genisa_stats *stats;
-   uint32_t num_stats;
+   /* Compile output bin; copied wholesale into the created shader. */
+   const intel_shader_bin *bin;
 
    const struct nir_xfb_info *xfb_info;
 
@@ -5615,13 +5601,8 @@ struct anv_shader_internal {
    void *code;
 
    struct anv_shader_alloc kernel;
-   uint32_t kernel_size;
 
-   const struct brw_stage_prog_data *prog_data;
-   uint32_t prog_data_size;
-
-   struct genisa_stats stats[3];
-   uint32_t num_stats;
+   intel_shader_bin *bin;
 };
 
 static inline struct anv_shader_internal *
@@ -5687,67 +5668,30 @@ anv_cmd_graphic_state_update_has_uint_rt(struct anv_cmd_graphics_state *state)
    }
 }
 
-#define ANV_DECL_GET_GRAPHICS_PROG_DATA_FUNC(prefix, stage)             \
-static inline const struct brw_##prefix##_prog_data *                   \
-get_gfx_##prefix##_prog_data(                                           \
-   const struct anv_cmd_graphics_state *gfx)                            \
-{                                                                       \
-   if (anv_gfx_has_stage(gfx, stage)) {                                 \
-      return (const struct brw_##prefix##_prog_data *)                  \
-         (gfx)->shaders[stage]->prog_data;                              \
-   } else {                                                             \
-      return NULL;                                                      \
-   }                                                                    \
-}                                                                       \
-                                                                        \
-static inline const struct brw_##prefix##_prog_data *                   \
-get_shader_##prefix##_prog_data(const struct anv_shader *shader)        \
-{                                                                       \
-   return (const struct brw_##prefix##_prog_data *)                     \
-      shader->prog_data;                                                \
+static inline const struct intel_shader_info *
+get_gfx_fs_info(const struct anv_cmd_graphics_state *gfx)
+{
+   if (anv_gfx_has_stage(gfx, MESA_SHADER_FRAGMENT))
+      return &gfx->shaders[MESA_SHADER_FRAGMENT]->bin->info;
+   return NULL;
 }
-
-ANV_DECL_GET_GRAPHICS_PROG_DATA_FUNC(vs, MESA_SHADER_VERTEX)
-ANV_DECL_GET_GRAPHICS_PROG_DATA_FUNC(tcs, MESA_SHADER_TESS_CTRL)
-ANV_DECL_GET_GRAPHICS_PROG_DATA_FUNC(tes, MESA_SHADER_TESS_EVAL)
-ANV_DECL_GET_GRAPHICS_PROG_DATA_FUNC(gs, MESA_SHADER_GEOMETRY)
-ANV_DECL_GET_GRAPHICS_PROG_DATA_FUNC(fs, MESA_SHADER_FRAGMENT)
-ANV_DECL_GET_GRAPHICS_PROG_DATA_FUNC(mesh, MESA_SHADER_MESH)
-ANV_DECL_GET_GRAPHICS_PROG_DATA_FUNC(task, MESA_SHADER_TASK)
 
 static inline const struct intel_vue_map *
 get_gfx_last_vue_map(const struct anv_cmd_graphics_state *gfx)
 {
    if (gfx->shaders[MESA_SHADER_MESH] != NULL) {
-      return &((const struct brw_mesh_prog_data *)
-               gfx->shaders[MESA_SHADER_MESH]->prog_data)->map.vue_map;
+      return &gfx->shaders[MESA_SHADER_MESH]->bin->info.mesh.map.vue_map;
    }
    if (gfx->shaders[MESA_SHADER_GEOMETRY] != NULL) {
-      return &((const struct brw_gs_prog_data *)
-               gfx->shaders[MESA_SHADER_GEOMETRY]->prog_data)->base.vue_map;
+      return &gfx->shaders[MESA_SHADER_GEOMETRY]->bin->info.vue.vue_map;
    }
    if (gfx->shaders[MESA_SHADER_TESS_EVAL] != NULL) {
-      return &((const struct brw_tes_prog_data *)
-               gfx->shaders[MESA_SHADER_TESS_EVAL]->prog_data)->base.vue_map;
+      return &gfx->shaders[MESA_SHADER_TESS_EVAL]->bin->info.vue.vue_map;
    }
    if (gfx->shaders[MESA_SHADER_VERTEX] != NULL) {
-      return &((const struct brw_vs_prog_data *)
-               gfx->shaders[MESA_SHADER_VERTEX]->prog_data)->base.vue_map;
+      return &gfx->shaders[MESA_SHADER_VERTEX]->bin->info.vue.vue_map;
    }
    UNREACHABLE("Invalid bound shaders");
-}
-
-static inline const struct brw_cs_prog_data *
-get_cs_prog_data(const struct anv_cmd_compute_state *comp_state)
-{
-   assert(comp_state->shader);
-   return (const struct brw_cs_prog_data *) comp_state->shader->prog_data;
-}
-
-static inline const struct brw_cs_prog_data *
-get_shader_cs_prog_data(const struct anv_shader *shader)
-{
-   return (const struct brw_cs_prog_data *) shader->prog_data;
 }
 
 VkResult
@@ -6552,8 +6496,8 @@ isl_surf_usage_flags_t
 anv_image_choose_isl_surf_usage(struct anv_physical_device *device,
                                 VkFormat vk_format,
                                 const VkImageFormatListCreateInfo *format_list_info,
-                                VkImageCreateFlags vk_create_flags,
-                                VkImageUsageFlags vk_usage,
+                                VkImageCreateFlags2KHR vk_create_flags,
+                                VkImageUsageFlags2KHR vk_usage,
                                 isl_surf_usage_flags_t isl_extra_usage,
                                 VkImageAspectFlagBits aspect,
                                 VkImageCompressionFlagsEXT comp_flags);
@@ -6637,7 +6581,7 @@ enum isl_aux_usage ATTRIBUTE_PURE
 anv_layout_to_aux_usage(const struct intel_device_info * const devinfo,
                         const struct anv_image *image,
                         const VkImageAspectFlagBits aspect,
-                        const VkImageUsageFlagBits usage,
+                        const VkImageUsageFlagBits2KHR usage,
                         const VkImageLayout layout,
                         const VkQueueFlagBits queue_flags);
 
@@ -6710,6 +6654,29 @@ struct anv_image_view {
        * RENDER_SURFACE_STATE when using image as a storage image.
        */
       struct anv_surface_state storage;
+
+      /**
+       * Indirect descriptor data written in descriptor sets for sampled
+       * images, with general/local-read layout.
+       *
+       * Only used pre Gfx12.5.
+       */
+      struct anv_image_descriptor general_indirect_descriptor;
+
+      /**
+       * Indirect descriptor data written in descriptor sets for sampled
+       * images, with non general/local-read layout.
+       *
+       * Only used pre Gfx12.5.
+       */
+      struct anv_image_descriptor optimal_indirect_descriptor;
+
+      /**
+       * Indirect descriptor data written in descriptor sets for storage images.
+       *
+       * Only used pre Gfx12.5.
+       */
+      struct anv_image_descriptor storage_indirect_descriptor;
    } planes[3];
 };
 
@@ -6725,7 +6692,8 @@ void anv_image_fill_surface_state(struct anv_device *device,
                                   enum isl_aux_usage aux_usage,
                                   const union isl_color_value *clear_color,
                                   enum anv_image_view_state_flags flags,
-                                  struct anv_surface_state *state_inout);
+                                  struct anv_surface_state *state_inout,
+                                  struct anv_image_descriptor *out_indirect_desc);
 
 
 static inline const struct anv_surface_state *
@@ -6736,6 +6704,16 @@ anv_image_view_texture_surface_state(const struct anv_image_view *iview,
            layout == VK_IMAGE_LAYOUT_RENDERING_LOCAL_READ_KHR) ?
           &iview->planes[plane].general_sampler :
           &iview->planes[plane].optimal_sampler;
+}
+
+static inline const struct anv_image_descriptor *
+anv_image_view_texture_indirect_descriptor(const struct anv_image_view *iview,
+                                           uint32_t plane, VkImageLayout layout)
+{
+   return (layout == VK_IMAGE_LAYOUT_GENERAL ||
+           layout == VK_IMAGE_LAYOUT_RENDERING_LOCAL_READ_KHR) ?
+          &iview->planes[plane].general_indirect_descriptor :
+          &iview->planes[plane].optimal_indirect_descriptor;
 }
 
 static inline const struct anv_surface_state *
@@ -6830,6 +6808,10 @@ struct gfx8_border_color {
 };
 
 extern const struct gfx8_border_color anv_default_border_colors[];
+
+union isl_color_value
+anv_sampler_border_color_value(const struct anv_physical_device *pdevice,
+                               VkFormat format, VkClearColorValue value);
 
 struct anv_sampler_state {
    /* Hashing key for embedded samplers */
@@ -7038,6 +7020,8 @@ struct anv_vid_mem {
 #define ANV_VIDEO_H264_MAX_NUM_REF_FRAME 16
 #define ANV_VIDEO_H265_MAX_NUM_REF_FRAME 16
 #define ANV_VIDEO_H265_HCP_NUM_REF_FRAME 8
+/* The most slice segments the HuC HEVC BRC kernels handle. */
+#define ANV_HUC_HEVC_BRC_MAX_NUM_SLICES 70
 #define ANV_MAX_H265_CTB_SIZE 64
 #define ANV_MAX_VP9_CTB_SIZE 64
 #define ANV_VP9_SCALE_FACTOR_SHIFT 14
@@ -7055,6 +7039,8 @@ struct anv_vid_mem {
 #define ANV_AV1_ROWSTORE_DFLU_OFFSET (1344 * ANV_AV1_ROWSTORE_CACHE_LINE)
 #define ANV_AV1_ROWSTORE_DFLV_OFFSET (1536 * ANV_AV1_ROWSTORE_CACHE_LINE)
 #define ANV_AV1_ROWSTORE_CDEF_OFFSET (1728 * ANV_AV1_ROWSTORE_CACHE_LINE)
+
+#define ANV_H264_ROWSTORE_IPDL_OFFSET (512 * ANV_AV1_ROWSTORE_CACHE_LINE)
 
 enum anv_vid_mem_h264_types {
    ANV_VID_MEM_H264_INTRA_ROW_STORE,
@@ -7154,8 +7140,37 @@ enum anv_vid_mem_av1_types {
    ANV_VID_MEM_AV1_DBD_BUFFER,
    ANV_VID_MEM_AV1_TILE_SIZE_STREAMOUT,
    ANV_VID_MEM_AV1_ENCODE_TILE_BITSTREAM_ACCUM,
+   ANV_VID_MEM_AV1_BRC_PAK_INSERT_OUT,
+   ANV_VID_MEM_AV1_BRC_CDF_TABLES,
+   ANV_VID_MEM_AV1_BRC_CDF_ACTIVE,
+   ANV_VID_MEM_AV1_BRC_DATA,
    ANV_VID_MEM_AV1_MAX,
 };
+
+#define ANV_AV1_CDF_TABLE_SIZE 15104
+
+/* HuC BRC session buffers, shared by the encode codecs. Based past every
+ * per-codec range so they never collide in vid_mem[].
+ */
+enum anv_vid_mem_brc_types {
+   ANV_VID_MEM_BRC_HISTORY = ANV_VID_MEM_AV1_MAX,
+   ANV_VID_MEM_BRC_VDENC_STATS,
+   ANV_VID_MEM_BRC_EXEC_SLB,
+   ANV_VID_MEM_BRC_WP_DATA,
+   ANV_VID_MEM_BRC_PAK_INFO,
+   ANV_VID_MEM_BRC_PAK_STATS,
+   ANV_VID_MEM_BRC_DEBUG,
+   ANV_VID_MEM_BRC_PAK_MMIO_SEM,
+   ANV_VID_MEM_BRC_HUC_ERR_SEM,
+   ANV_VID_MEM_BRC_MAX,
+};
+
+static_assert((unsigned)ANV_VID_MEM_H264_MAX <= (unsigned)ANV_VID_MEM_AV1_MAX,
+              "H.264 video memory range overlaps the BRC range");
+static_assert((unsigned)ANV_VID_MEM_H265_ENC_MAX <= (unsigned)ANV_VID_MEM_AV1_MAX,
+              "H.265 video memory range overlaps the BRC range");
+static_assert((unsigned)ANV_VID_MEM_VP9_DEC_MAX <= (unsigned)ANV_VID_MEM_AV1_MAX,
+              "VP9 video memory range overlaps the BRC range");
 
 #define ANV_VID_MEM_ADDR(vid_, type_)                                        \
    (struct anv_address) { (vid_)->vid_mem[type_].mem->bo,                    \
@@ -7200,14 +7215,36 @@ struct anv_vp9_last_frame_info {
    uint32_t height;
 };
 
+struct anv_video_rc_state {
+   uint64_t average_bitrate;
+   uint64_t max_bitrate;
+   uint32_t frame_rate_num;
+   uint32_t frame_rate_den;
+   uint32_t vbv_size_bits;
+   uint32_t vbv_initial_fullness_bits;
+   uint8_t min_qp;
+   uint8_t max_qp;
+   uint32_t gop_frame_count;
+   uint32_t idr_period;
+   uint32_t consecutive_b_frames;
+   /* H.264 and H.265 rate control flag bits share the same values. */
+   uint32_t rc_flags;
+   uint32_t frame_counter;
+   uint32_t brc_init_frame;
+   bool brc_reset;
+   double av1_target_fullness;
+   int32_t av1_hrd_fullness;
+};
+
 struct anv_video_session {
    struct vk_video_session vk;
 
    bool cdf_initialized;
    VkVideoEncodeRateControlModeFlagBitsKHR rc_mode;
+   struct anv_video_rc_state rc;
 
    /* the decoder needs some private memory allocations */
-   struct anv_vid_mem vid_mem[ANV_VID_MEM_AV1_MAX];
+   struct anv_vid_mem vid_mem[ANV_VID_MEM_BRC_MAX];
    struct anv_av1_video_refs_info prev_refs[ANV_VIDEO_AV1_MAX_DPB_SLOTS];
 
    /* For VP9 decoding from here */
@@ -7317,6 +7354,7 @@ anv_image_dpb_address(const struct anv_image_view *iv,
                                        iv->vk.base_array_layer + arrayLayer,
                                        0,
                                        &offset_B,
+                                       NULL,
                                        NULL,
                                        NULL);
 

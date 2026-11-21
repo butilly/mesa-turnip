@@ -84,10 +84,6 @@ algebraic_late = [
     (('f2u16', a), ('u2u16', ('f2u32', a)), 'is_kraid'),
     (('f2i16', a), ('u2u16', ('f2i32', a)), 'is_kraid'),
 
-    # Copy-prop will clean these up
-    (('pack_uvec2_to_uint', a), ('pack_32_2x16', ('u2u16', a))),
-    (('pack_uvec4_to_uint', a), ('pack_32_4x8', ('u2u8', a))),
-
     # On v11+, because FROUND.v2f16 is gone we end up with precision issues.
     # We lower ffract here instead to ensure lower_bit_size has been performed.
     (('ffract', a), ('fadd', a, ('fneg', ('ffloor', a))), 'gpu_arch >= 11'),
@@ -116,26 +112,34 @@ for cond in ['ilt', 'ige', 'ieq', 'ine', 'ult', 'uge']:
 # Because this lowering must happen late, NIR won't squash inot in
 # automatically. Do so explicitly. (The more specific pattern must be first.)
 for fsz in [16, 32]:
-    upcast = (f'i2i{fsz}', a)
-    downcast = a if fsz == 32 else (f'u2u{fsz}', a)
+    for bsz in [8, 16, 32, 64]:
+        if bsz > fsz:
+            bcast = (f'u2u{fsz}', a)
+        elif bsz < fsz:
+            bcast = (f'i2i{fsz}', a)
+        else:
+            bcast = a
 
-    algebraic_late += [
-        ((f'b2f{fsz}', ('inot', f'a@32')), ('bcsel_pan', downcast, 0.0, 1.0)),
-        ((f'b2f{fsz}', ('inot', a)), ('bcsel_pan', upcast, 0.0, 1.0)),
-        ((f'b2f{fsz}', f'a@32'), ('bcsel_pan', downcast, 1.0, 0.0)),
-        ((f'b2f{fsz}', a), ('bcsel_pan', upcast, 1.0, 0.0)),
-    ]
+        algebraic_late += [
+            ((f'b2f{fsz}', ('inot', f'a@{bsz}')), ('bcsel_pan', bcast, 0.0, 1.0)),
+            ((f'b2f{fsz}', f'a@{bsz}'), ('bcsel_pan', bcast, 1.0, 0.0)),
+        ]
 
-for isz in [8, 16, 32]:
-    upcast = (f'i2i{isz}', a)
-    downcast = a if isz == 32 else (f'u2u{isz}', a)
+for isz in [8, 16, 32, 64]:
+    for bsz in [8, 16, 32, 64]:
+        if bsz > isz:
+            bcast = (f'u2u{isz}', a)
+        elif bsz < isz:
+            bcast = (f'i2i{isz}', a)
+        else:
+            bcast = a
 
-    algebraic_late += [
-        ((f'b2i{isz}', ('inot', f'a@32')), ('bcsel_pan', downcast, 0, 1), 'is_kraid'),
-        ((f'b2i{isz}', ('inot', a)), ('bcsel_pan', upcast, 0, 1), 'is_kraid'),
-        ((f'b2i{isz}', f'a@{isz}'), ('bcsel_pan', downcast, 1, 0), 'is_kraid'),
-        ((f'b2i{isz}', a), ('bcsel_pan', upcast, 1, 0), 'is_kraid'),
-    ]
+        algebraic_late += [
+            ((f'b2i{isz}', ('inot', f'a@{bsz}')),
+             ('bcsel_pan', bcast, 0, 1), 'is_kraid'),
+            ((f'b2i{isz}', f'a@{bsz}'),
+             ('bcsel_pan', bcast, 1, 0), 'is_kraid'),
+        ]
 
 LOPS = ['and', 'or', 'xor']
 SHIFTS = [
@@ -196,6 +200,28 @@ algebraic_late += [
     (('umul_high', 'a@32', 'b@32'),
      ('unpack_64_2x32_split_y', ('umul_2x32_64', a, b)), 'is_kraid'),
 ]
+
+# Lowers small constant exponents fpows as a chain of fmuls, making it 
+# cheaper than the usual fpow lowering.  These rules come from
+# nir_opt_algebraic, but since Panfrost is using lower_fpow we are
+# enforcing them here.
+algebraic_late += [
+    (('~fpow', a, 5.0), ('fmul', ('fmul', ('fmul', a, a), ('fmul', a, a)), a)),
+    (('~fpow', a, 6.0), ('fmul', ('fmul', ('fmul', a, a), ('fmul', a, a)), ('fmul', a, a))),
+]
+
+# Returns fmul chain tuple for k-th power of 2.
+def expand_fpow(x, k):
+    if k == 0:
+        return x
+    inner = expand_fpow(x, k - 1)
+    return ('fmul', inner, inner)
+
+# Lowers fpows when the exponent is a power of 2 between 8 and 64.
+for k in range(3, 7):
+    algebraic_late += [
+        (('~fpow', a, float(1 << k)), expand_fpow('a', k))
+    ]
 
 # We don't have hardware fpow so we need to lower it.  However, the way we
 # implement 32-bit fexp makes it so we can do better than this for 32-bit

@@ -31,10 +31,6 @@ struct pvr_pipeline_stage_state {
 struct pvr_compute_shader_state {
    /* Pointer to a buffer object that contains the shader binary. */
    struct pvr_suballoc_bo *shader_bo;
-
-   /* Buffer object for the coefficient update shader binary. */
-   struct pvr_suballoc_bo *coeff_update_shader_bo;
-   uint32_t coeff_update_shader_temps;
 };
 
 struct pvr_pds_attrib_program {
@@ -89,6 +85,27 @@ struct pvr_fragment_shader_state {
    bool is_passthrough;
 };
 
+struct pvr_xfb_varying {
+   uint32_t register_start;
+   uint32_t register_count;
+   uint32_t xfb_buffer;
+   uint32_t xfb_offset;
+   uint32_t xfb_stride;
+};
+
+struct pvr_xfb_shader_state {
+   uint32_t varying_count;
+   struct pvr_xfb_varying *varyings;
+   uint32_t buffer_strides[PVR_XFB_MAX_BUFFERS];
+
+   uint32_t buffer_group_count;
+   uint32_t group_varying_count[PVR_XFB_MAX_BUFFERS];
+
+   struct pvr_suballoc_bo *counter_buffer_offsets;
+
+   struct pvr_suballoc_bo *indirect_byte_count;
+};
+
 struct pvr_pipeline {
    struct vk_object_base base;
    enum pvr_pipeline_type type;
@@ -103,15 +120,6 @@ struct pvr_compute_pipeline {
 
    struct pvr_compute_shader_state shader_state;
    struct pvr_stage_allocation_descriptor_state descriptor_state;
-
-   struct pvr_pds_upload pds_cs_program;
-   struct pvr_pds_info pds_cs_program_info;
-
-   uint32_t *pds_cs_data_section;
-   uint32_t base_workgroup_data_patching_offset;
-   uint32_t num_workgroups_data_patching_offset;
-   uint32_t num_workgroups_indirect_src_patching_offset;
-   uint32_t num_workgroups_indirect_src_dma_patching_offset;
 
    /* Debug Info */
    struct pvr_stats *cs_stats;
@@ -132,6 +140,7 @@ struct pvr_graphics_pipeline {
    struct {
       struct pvr_vertex_shader_state vertex;
       struct pvr_fragment_shader_state fragment;
+      struct pvr_xfb_shader_state xfb_shader_state;
    } shader_state;
 
    /* Debug Info */
@@ -198,7 +207,8 @@ pvr_stage_mask(VkPipelineStageFlags2 stage_mask)
                      VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
                      VK_PIPELINE_STAGE_2_TESSELLATION_CONTROL_SHADER_BIT |
                      VK_PIPELINE_STAGE_2_TESSELLATION_EVALUATION_SHADER_BIT |
-                     VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT)) {
+                     VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT |
+                     VK_PIPELINE_STAGE_2_TRANSFORM_FEEDBACK_BIT_EXT)) {
       stages |= PVR_PIPELINE_STAGE_GEOM_BIT;
    }
 
@@ -221,6 +231,9 @@ pvr_stage_mask(VkPipelineStageFlags2 stage_mask)
                      VK_PIPELINE_STAGE_2_RESOLVE_BIT |
                      VK_PIPELINE_STAGE_2_CLEAR_BIT))
       stages |= PVR_PIPELINE_STAGE_TRANSFER_BIT;
+
+   if (stage_mask & (VK_PIPELINE_STAGE_2_TRANSFORM_FEEDBACK_BIT_EXT))
+      stages |= PVR_PIPELINE_STAGE_QUERY_BIT;
 
    return stages;
 }

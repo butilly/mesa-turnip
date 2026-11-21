@@ -52,11 +52,11 @@ enum brw_shader_phase {
 struct brw_shader_params
 {
    const struct brw_compiler *compiler;
-   void *mem_ctx;
+   const struct brw_compile_params *compile_params;
 
+   /* This is the NIR specific to the variant being compiled. */
    const nir_shader *nir;
-   const brw_base_prog_key *key;
-   brw_stage_prog_data *prog_data;
+   struct intel_shader_info info;
    unsigned dispatch_width;
 
    /* Fragment shader. */
@@ -64,10 +64,7 @@ struct brw_shader_params
    const int *per_primitive_offsets;
 
    bool needs_register_pressure;
-   void *log_data;
    bool debug_enabled;
-
-   debug_archiver *archiver;
 };
 
 struct brw_shader
@@ -94,7 +91,11 @@ public:
    void emit_cs_terminate();
 
    const struct brw_compiler *compiler;
-   void *log_data; /* Passed to compiler->*_log functions */
+
+   /* Parameters for the whole compilation, shared by all the variants.
+    * Valid during the lifetime of this shader.
+    */
+   const struct brw_compile_params * const compile_params;
 
    const struct intel_device_info * const devinfo;
    const nir_shader *nir;
@@ -108,6 +109,7 @@ public:
    cfg_t *cfg;
 
    mesa_shader_stage stage;
+   struct intel_shader_info info;
    bool debug_enabled;
 
    /* VGRF allocation. */
@@ -123,7 +125,6 @@ public:
 
    const brw_base_prog_key *const key;
 
-   struct brw_stage_prog_data *prog_data;
    brw_analysis<brw_live_variables, brw_shader> live_analysis;
    brw_analysis<brw_register_pressure, brw_shader> regpressure_analysis;
    brw_analysis<brw_performance, brw_shader> performance_analysis;
@@ -208,8 +209,6 @@ public:
 
    /* Whether we've seen an RT write already */
    bool seen_rt_write;
-
-   unsigned grf_used;
    bool spilled_any_registers;
    bool needs_register_pressure;
 
@@ -221,14 +220,17 @@ public:
    const unsigned dispatch_width; /**< 8, 16 or 32 */
    const unsigned max_polygons;
 
+   /* Whether the (compute) shader uses BTD stack IDs, delivered in the
+    * thread payload.
+    */
+   const bool uses_btd_stack_ids;
+
    /* The API selected subgroup size */
    unsigned api_subgroup_size; /**< 0, 8, 16, 32 */
 
    unsigned next_address_register_nr;
 
    struct brw_shader_stats shader_stats;
-
-   debug_archiver *archiver;
 
    void debug_optimizer(const nir_shader *nir,
                         const char *pass_name,
@@ -272,22 +274,23 @@ sample_mask_flag_subreg(const brw_shader &s)
 }
 
 inline brw_reg
-brw_dynamic_fs_config(struct brw_fs_prog_data *fs_prog_data)
+brw_dynamic_fs_config(brw_shader &s)
 {
-   fs_prog_data->uses_fs_config = true;
+   const unsigned config_param =
+      s.compile_params->push_layout.fs_config_param;
+   s.info.fs.uses_fs_config = true;
    return byte_offset(
-      brw_uniform_reg(
-         fs_prog_data->fs_config_param / REG_SIZE, BRW_TYPE_UD),
-      fs_prog_data->fs_config_param % REG_SIZE);
+      brw_uniform_reg(config_param / REG_SIZE, BRW_TYPE_UD),
+      config_param % REG_SIZE);
 }
 
 enum intel_barycentric_mode
 brw_barycentric_mode(nir_intrinsic_instr *intr);
 
 uint32_t brw_fb_write_msg_control(const brw_inst *inst,
-                                  const struct brw_fs_prog_data *prog_data);
+                                  const struct intel_shader_info *info);
 
-void brw_compute_urb_setup_index(struct brw_fs_prog_data *fs_prog_data);
+void brw_compute_urb_setup_index(struct intel_shader_info *info);
 
 void brw_assign_urb_setup(brw_shader &s);
 
@@ -420,18 +423,16 @@ brw_inst *brw_transform_inst(brw_shader &s, brw_inst *inst, enum opcode new_opco
 /* Maximum number of entries in brw_to_binary_params::shaders.
  *
  * This covers the most demanding caller (brw_compile_fs, which emits up to
- * four variants: vmulti, simd8, simd16, simd32).
+ * three variants: vmulti or simd8, simd16, simd32).
  */
-#define BRW_TO_BINARY_MAX_SHADERS 4
+#define BRW_TO_BINARY_MAX_SHADERS INTEL_SHADER_BIN_MAX_STATS
 
 struct brw_to_binary_params {
    const struct brw_compiler *compiler;
    const struct brw_compile_params *params;
-   struct brw_stage_prog_data *prog_data;
 
    /* Main shaders.  Slots with shader == NULL are skipped.  Non-skipped
-    * slots are processed in array order, each consuming (in turn) one entry
-    * from params->stats if it is non-NULL.
+    * slots are processed in array order.
     *
     * After the call, each emitted shader's start_offset field is set to the
     * offset of its code within the returned binary.
@@ -453,6 +454,6 @@ struct brw_to_binary_params {
    unsigned extra_const_data_size;
 };
 
-const unsigned *brw_to_binary(const brw_to_binary_params *p);
+intel_shader_bin *brw_to_binary(const brw_to_binary_params *p);
 
 brw_reg brw_get_scratch64_surface_state_addr(brw_shader *shader);

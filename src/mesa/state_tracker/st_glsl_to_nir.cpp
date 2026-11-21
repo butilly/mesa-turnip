@@ -229,23 +229,17 @@ filter_double_subgroup(const nir_intrinsic_instr *intr, UNUSED const void *data)
    }
 }
 
-/* Second third of converting glsl_to_nir. This creates uniforms, gathers
- * info on varyings, etc after NIR link time opts have been applied.
+/* Make a pass over the IR to add state references for any built-in
+ * uniforms that are used.  This has to be done now (during linking).
+ * Code generation doesn't happen until the first time this shader is
+ * used for rendering.  Waiting until then to generate the parameters is
+ * too late.  At that point, the values for the built-in uniforms won't
+ * get sent to the shader.
  */
 static void
-st_glsl_to_nir_post_opts(struct st_context *st, struct gl_program *prog,
-                         struct gl_shader_program *shader_program)
+st_nir_add_builtin_state_references(struct st_context *st,
+                                    struct gl_program *prog, nir_shader *nir)
 {
-   nir_shader *nir = prog->nir;
-   struct pipe_screen *screen = st->screen;
-
-   /* Make a pass over the IR to add state references for any built-in
-    * uniforms that are used.  This has to be done now (during linking).
-    * Code generation doesn't happen until the first time this shader is
-    * used for rendering.  Waiting until then to generate the parameters is
-    * too late.  At that point, the values for the built-in uniforms won't
-    * get sent to the shader.
-    */
    nir_foreach_uniform_variable(var, nir) {
       const nir_state_slot *const slots = var->state_slots;
       if (slots != NULL) {
@@ -269,12 +263,14 @@ st_glsl_to_nir_post_opts(struct st_context *st, struct gl_program *prog,
          }
       }
    }
+}
 
-   /* Avoid reallocation of the program parameter list, because the uniform
-    * storage is only associated with the original parameter list.
-    * This should be enough for Bitmap and DrawPixels constants.
-    */
-   _mesa_ensure_and_associate_uniform_storage(st->ctx, shader_program, prog, 28);
+static void
+st_nir_lower_linked_program(struct st_context *st, struct gl_program *prog,
+                            struct gl_shader_program *shader_program,
+                            nir_shader *nir)
+{
+   struct pipe_screen *screen = st->screen;
 
    /* None of the builtins being lowered here can be produced by SPIR-V.  See
     * _mesa_builtin_uniform_desc. Also drivers that support packed uniform
@@ -364,10 +360,54 @@ st_glsl_to_nir_post_opts(struct st_context *st, struct gl_program *prog,
    }
 
    NIR_PASS(_, nir, nir_opt_intrinsics);
+}
+
+/* Second third of converting glsl_to_nir. This creates uniforms, gathers
+ * info on varyings, etc after NIR link time opts have been applied.
+ */
+static void
+st_glsl_to_nir_post_opts(struct st_context *st, struct gl_program *prog,
+                         struct gl_shader_program *shader_program)
+{
+   nir_shader *nir = prog->nir;
+   struct pipe_screen *screen = st->screen;
+
+   st_nir_add_builtin_state_references(st, prog, nir);
+   if (prog->raster_pos_nir)
+      st_nir_add_builtin_state_references(st, prog, prog->raster_pos_nir);
+
+   /* Avoid reallocation of the program parameter list, because the uniform
+    * storage is only associated with the original parameter list.
+    * This should be enough for Bitmap and DrawPixels constants.
+    */
+   _mesa_ensure_and_associate_uniform_storage(st->ctx, shader_program, prog, 28);
+
+   st_nir_lower_linked_program(st, prog, shader_program, nir);
 
    st_set_prog_affected_state_flags(st, prog);
    nir_shader_gather_info(nir, nir_shader_get_entrypoint(nir));
    st_update_state_param_locations(st->ctx, prog, nir);
+
+   /* The raster position copy of the vertex shader is only used by the draw
+    * module, which gets it in the same state as base_serialized_nir.
+    */
+   if (prog->raster_pos_nir) {
+      nir_shader *raster_pos_nir = prog->raster_pos_nir;
+      struct gl_vertex_program *vp = (struct gl_vertex_program *)prog;
+
+      st_nir_lower_linked_program(st, prog, shader_program, raster_pos_nir);
+      nir_shader_gather_info(raster_pos_nir,
+                             nir_shader_get_entrypoint(raster_pos_nir));
+      st_update_state_param_locations(st->ctx, prog, raster_pos_nir);
+      nir_recompute_io_bases(raster_pos_nir, nir_var_shader_in);
+
+      vp->raster_pos_attrib_mask = raster_pos_nir->info.inputs_read;
+      vp->raster_pos_outputs_written = raster_pos_nir->info.outputs_written;
+      st_serialize_raster_pos_nir(prog, raster_pos_nir);
+
+      ralloc_free(raster_pos_nir);
+      prog->raster_pos_nir = NULL;
+   }
 
    if (st->screen->caps.call_finalize_nir_in_linker) {
       st_serialize_base_nir(prog, nir);
@@ -434,6 +474,61 @@ st_nir_lower_wpos_ytransform(struct nir_shader *nir,
    return progress;
 }
 
+static void
+st_nir_lower_linked_shader(struct st_context *st,
+                           struct gl_shader_program *shader_program,
+                           struct gl_program *prog, nir_shader *nir)
+{
+   struct pipe_screen *screen = st->screen;
+   mesa_shader_stage stage = nir->info.stage;
+
+   /* Since IO is lowered, we won't need the IO variables from now on.
+    * nir_build_program_resource_list was the last pass that needed them.
+    */
+   NIR_PASS(_, nir, nir_remove_dead_variables,
+            nir_var_shader_in | nir_var_shader_out, NULL);
+
+   /* If there are forms of indirect addressing that the driver
+    * cannot handle, perform the lowering pass.
+    */
+   if (!screen->shader_caps[stage].indirect_temp_addr ||
+       !screen->shader_caps[stage].indirect_const_addr) {
+      nir_variable_mode mode = (nir_variable_mode)0;
+
+      mode |= !screen->shader_caps[stage].indirect_temp_addr ?
+         nir_var_function_temp : (nir_variable_mode)0;
+      mode |= !screen->shader_caps[stage].indirect_const_addr ?
+         nir_var_uniform | nir_var_mem_ubo | nir_var_mem_ssbo :
+         (nir_variable_mode)0;
+
+      if (mode)
+         nir_lower_indirect_derefs_to_if_else_trees(nir, mode, UINT32_MAX);
+   }
+
+   /* This needs to run after the initial pass of nir_lower_vars_to_ssa, so
+    * that the buffer indices are constants in nir where they where
+    * constants in GLSL. */
+   NIR_PASS(_, nir, gl_nir_lower_buffers, shader_program);
+
+   NIR_PASS(_, nir, st_nir_lower_wpos_ytransform, prog, screen);
+
+   /* needed to lower base_workgroup_id and base_global_invocation_id */
+   struct nir_lower_compute_system_values_options cs_options = {};
+   NIR_PASS(_, nir, nir_lower_system_values);
+   NIR_PASS(_, nir, nir_lower_compute_system_values, &cs_options);
+}
+
+/* Return whether the shader has 64-bit values. shader_info::bit_sizes_* are
+ * the bit sizes used by the shader ORed together.
+ */
+static bool
+st_nir_uses_64bit(const nir_shader *nir)
+{
+   const unsigned bit_size = 64;
+
+   return (nir->info.bit_sizes_int | nir->info.bit_sizes_float) & bit_size;
+}
+
 static bool
 st_link_glsl_to_nir(struct gl_context *ctx,
                     struct gl_shader_program *shader_program)
@@ -486,7 +581,20 @@ st_link_glsl_to_nir(struct gl_context *ctx,
       }
 
       nir_shader_gather_info(prog->nir, nir_shader_get_entrypoint(prog->nir));
-      if (!st->ctx->SoftFP64 && ((prog->nir->info.bit_sizes_int | prog->nir->info.bit_sizes_float) & 64) &&
+      bool uses_64bit = st_nir_uses_64bit(prog->nir);
+
+      /* The raster position copy of the vertex shader can use doubles that
+       * the vertex shader no longer uses.
+       */
+      if (prog->raster_pos_nir) {
+         nir_shader *raster_pos_nir = prog->raster_pos_nir;
+
+         nir_shader_gather_info(raster_pos_nir,
+                                nir_shader_get_entrypoint(raster_pos_nir));
+         uses_64bit |= st_nir_uses_64bit(raster_pos_nir);
+      }
+
+      if (!st->ctx->SoftFP64 && uses_64bit &&
           (options->lower_doubles_options & nir_lower_fp64_full_software) != 0) {
 
          /* It's not possible to use float64 on GLSL ES, so don't bother trying to
@@ -519,45 +627,13 @@ st_link_glsl_to_nir(struct gl_context *ctx,
                                    shader_program->data->spirv);
 
    for (unsigned i = 0; i < num_shaders; i++) {
-      struct gl_linked_shader *shader = linked_shader[i];
-      nir_shader *nir = shader->Program->nir;
-      mesa_shader_stage stage = shader->Stage;
+      struct gl_program *prog = linked_shader[i]->Program;
 
-      /* Since IO is lowered, we won't need the IO variables from now on.
-       * nir_build_program_resource_list was the last pass that needed them.
-       */
-      NIR_PASS(_, nir, nir_remove_dead_variables,
-               nir_var_shader_in | nir_var_shader_out, NULL);
-
-      /* If there are forms of indirect addressing that the driver
-       * cannot handle, perform the lowering pass.
-       */
-      if (!ctx->screen->shader_caps[stage].indirect_temp_addr ||
-          !ctx->screen->shader_caps[stage].indirect_const_addr) {
-         nir_variable_mode mode = (nir_variable_mode)0;
-
-         mode |= !ctx->screen->shader_caps[stage].indirect_temp_addr ?
-            nir_var_function_temp : (nir_variable_mode)0;
-         mode |= !ctx->screen->shader_caps[stage].indirect_const_addr ?
-            nir_var_uniform | nir_var_mem_ubo | nir_var_mem_ssbo :
-            (nir_variable_mode)0;
-
-         if (mode)
-            nir_lower_indirect_derefs_to_if_else_trees(nir, mode, UINT32_MAX);
+      st_nir_lower_linked_shader(st, shader_program, prog, prog->nir);
+      if (prog->raster_pos_nir) {
+         st_nir_lower_linked_shader(st, shader_program, prog,
+                                    prog->raster_pos_nir);
       }
-
-      /* This needs to run after the initial pass of nir_lower_vars_to_ssa, so
-       * that the buffer indices are constants in nir where they where
-       * constants in GLSL. */
-      NIR_PASS(_, nir, gl_nir_lower_buffers, shader_program);
-
-      NIR_PASS(_, nir, st_nir_lower_wpos_ytransform, shader->Program,
-               st->screen);
-
-      /* needed to lower base_workgroup_id and base_global_invocation_id */
-      struct nir_lower_compute_system_values_options cs_options = {};
-      NIR_PASS(_, nir, nir_lower_system_values);
-      NIR_PASS(_, nir, nir_lower_compute_system_values, &cs_options);
    }
 
    struct shader_info *prev_info = NULL;

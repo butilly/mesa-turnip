@@ -296,7 +296,10 @@ protected:
       optimize();
       nir_shader_gather_info(b1->shader, b1->impl);
       nir_shader_gather_info(b2->shader, b2->impl);
-      return progress;
+
+      /* The tests only check whether the IR changed. */
+      return (nir_opt_varyings_progress)
+             (progress & (nir_progress_producer | nir_progress_consumer));
    }
 
    nir_shader_compiler_options options;
@@ -340,6 +343,30 @@ shader_contains_undef(nir_builder *b, unsigned bit_size)
       }
    }
    return false;
+}
+
+static inline unsigned
+count_num_loads(nir_builder *b, unsigned vert)
+{
+   unsigned count = 0;
+   nir_foreach_block(block, b->impl) {
+      nir_foreach_instr(instr, block) {
+         if (instr->type != nir_instr_type_intrinsic)
+            continue;
+
+         nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
+         if (!nir_intrinsic_has_io_semantics(intrin) ||
+             !nir_intrinsic_infos[intrin->intrinsic].has_dest)
+            continue;
+
+         if (intrin->intrinsic == nir_intrinsic_load_per_vertex_input &&
+             (!nir_src_is_const(intrin->src[0]) || nir_src_as_uint(intrin->src[0]) != vert))
+            continue;
+
+         count++;
+      }
+   }
+   return count;
 }
 
 static inline bool
@@ -388,7 +415,8 @@ load_input_output(nir_builder *b, gl_varying_slot slot, unsigned component,
          def = nir_load_per_vertex_output(b, 1, bit_size,
                                           nir_imm_int(b, vertex_index), zero);
       } else {
-         if (b->shader->info.stage == MESA_SHADER_TESS_CTRL && vertex_index < 0)
+         if ((b->shader->info.stage == MESA_SHADER_TESS_CTRL ||
+              b->shader->info.stage == MESA_SHADER_TESS_EVAL) && vertex_index < 0)
             vertex_index_def = nir_load_invocation_id(b);
          else
             vertex_index_def = nir_imm_int(b, vertex_index);

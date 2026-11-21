@@ -43,11 +43,18 @@ compute_local_index_id(struct lower_intrinsics_state *state, nir_intrinsic_instr
 
       if (state->hw_generated_local_id) {
          assert(nir->info.derivative_group != DERIVATIVE_GROUP_QUADS);
+         assert(!nir->info.workgroup_size_variable);
 
+         /* Make sure we do not generate references to load_local_invocation_id
+          * components that the hardware will not actually produce.
+          */
          nir_def *local_id_vec = nir_load_local_invocation_id(b);
-         nir_def *local_id[3] = { nir_channel(b, local_id_vec, 0),
-                                  nir_channel(b, local_id_vec, 1),
-                                  nir_channel(b, local_id_vec, 2) };
+         nir_def *local_id[3];
+         for (unsigned i = 0; i < 3; ++i) {
+            local_id[i] = nir->info.workgroup_size[i] > 1 ?
+                          nir_channel(b, local_id_vec, i) : nir_imm_int(b, 0);
+         }
+
          nir_def *size_x = nir_imm_int(b, nir->info.workgroup_size[0]);
          nir_def *size_y = nir_imm_int(b, nir->info.workgroup_size[1]);
 
@@ -298,7 +305,7 @@ lower_cs_intrinsics_convert_impl(struct lower_intrinsics_state *state)
 bool
 brw_nir_lower_cs_intrinsics(nir_shader *nir,
                             const struct intel_device_info *devinfo,
-                            struct brw_cs_prog_data *prog_data)
+                            struct intel_cs_dispatch_params *dispatch)
 {
    assert(mesa_shader_stage_uses_workgroup(nir->info.stage));
 
@@ -321,13 +328,12 @@ brw_nir_lower_cs_intrinsics(nir_shader *nir,
       }
    }
 
-   if (devinfo->verx10 >= 125 && prog_data &&
+   if (devinfo->verx10 >= 125 && dispatch &&
        nir->info.stage == MESA_SHADER_COMPUTE &&
        nir->info.derivative_group != DERIVATIVE_GROUP_QUADS &&
        !nir->info.workgroup_size_variable &&
        util_is_power_of_two_nonzero(nir->info.workgroup_size[0]) &&
-       util_is_power_of_two_nonzero(nir->info.workgroup_size[1]) &&
-       !intel_use_jay(devinfo, nir)) {
+       util_is_power_of_two_nonzero(nir->info.workgroup_size[1])) {
 
       state.hw_generated_local_id = true;
 
@@ -340,7 +346,7 @@ brw_nir_lower_cs_intrinsics(nir_shader *nir,
           nir->info.workgroup_size[2] == 1) ||
          (nir->info.num_images == 0 && nir->info.num_textures == 0);
 
-      prog_data->walk_order =
+      dispatch->walk_order =
          linear ? INTEL_WALK_ORDER_XYZ : INTEL_WALK_ORDER_YXZ;
 
       /* nir_lower_compute_system_values will replace any references to
@@ -349,7 +355,7 @@ brw_nir_lower_cs_intrinsics(nir_shader *nir,
        * generating those.  However, the hardware can only generate
        * X, XY, or XYZ - it can't skip earlier components.
        */
-      prog_data->generate_local_id =
+      dispatch->generate_local_id =
          (nir->info.workgroup_size[0] > 1 ? WRITEMASK_X   : 0) |
          (nir->info.workgroup_size[1] > 1 ? WRITEMASK_XY  : 0) |
          (nir->info.workgroup_size[2] > 1 ? WRITEMASK_XYZ : 0);

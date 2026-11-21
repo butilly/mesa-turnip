@@ -105,8 +105,8 @@ device_image_get_buffers(struct dri_drawable *driDrawable, unsigned int format,
    return 1;
 }
 
-static _EGLSurface *
-dri2_device_create_surface(_EGLDisplay *disp, EGLint type, _EGLConfig *conf,
+static struct _egl_surface *
+dri2_device_create_surface(struct _egl_display *disp, EGLint type, struct _egl_config *conf,
                            const EGLint *attrib_list)
 {
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
@@ -151,7 +151,7 @@ cleanup_surface:
 }
 
 static EGLBoolean
-device_destroy_surface(_EGLDisplay *disp, _EGLSurface *surf)
+device_destroy_surface(struct _egl_display *disp, struct _egl_surface *surf)
 {
    struct dri2_egl_surface *dri2_surf = dri2_egl_surface(surf);
 
@@ -164,8 +164,8 @@ device_destroy_surface(_EGLDisplay *disp, _EGLSurface *surf)
    return EGL_TRUE;
 }
 
-static _EGLSurface *
-dri2_device_create_pbuffer_surface(_EGLDisplay *disp, _EGLConfig *conf,
+static struct _egl_surface *
+dri2_device_create_pbuffer_surface(struct _egl_display *disp, struct _egl_config *conf,
                                    const EGLint *attrib_list)
 {
    return dri2_device_create_surface(disp, EGL_PBUFFER_BIT, conf, attrib_list);
@@ -175,7 +175,6 @@ static const struct dri2_egl_display_vtbl dri2_device_display_vtbl = {
    .create_pbuffer_surface = dri2_device_create_pbuffer_surface,
    .destroy_surface = device_destroy_surface,
    .create_image = dri2_create_image_khr,
-   .get_dri_drawable = dri2_surface_get_dri_drawable,
 };
 
 static void
@@ -186,7 +185,7 @@ device_flush_front_buffer(struct dri_drawable *driDrawable, void *loaderPrivate)
 static unsigned
 device_get_capability(void *loaderPrivate, enum dri_loader_cap cap)
 {
-   /* Note: loaderPrivate is _EGLDisplay* */
+   /* Note: loaderPrivate is struct _egl_display* */
    switch (cap) {
    case DRI_LOADER_CAP_FP16:
       return 1;
@@ -196,28 +195,25 @@ device_get_capability(void *loaderPrivate, enum dri_loader_cap cap)
 }
 
 static const __DRIimageLoaderExtension image_loader_extension = {
-   .base = {__DRI_IMAGE_LOADER, 2},
    .getBuffers = device_image_get_buffers,
    .flushFrontBuffer = device_flush_front_buffer,
    .getCapability = device_get_capability,
 };
 
-static const __DRIextension *image_loader_extensions[] = {
-   &image_loader_extension.base,
-   &image_lookup_extension.base,
-   &kopper_pbuffer_loader_extension.base,
-   NULL,
+static const struct dri_loader_funcs image_loader_funcs = {
+   .image_lookup = &image_lookup_extension,
+   .image = &image_loader_extension,
+   .kopper = &kopper_pbuffer_loader_extension,
 };
 
-static const __DRIextension *swrast_loader_extensions[] = {
-   &swrast_pbuffer_loader_extension.base,
-   &image_lookup_extension.base,
-   &kopper_pbuffer_loader_extension.base,
-   NULL,
+static const struct dri_loader_funcs swrast_loader_funcs = {
+   .image_lookup = &image_lookup_extension,
+   .swrast = &swrast_pbuffer_loader_extension,
+   .kopper = &kopper_pbuffer_loader_extension,
 };
 
 static int
-device_get_fd(_EGLDisplay *disp, _EGLDevice *dev)
+device_get_fd(struct _egl_display *disp, struct _egl_device *dev)
 {
 #ifdef HAVE_LIBDRM
    int fd = disp->Options.fd;
@@ -257,7 +253,7 @@ device_get_fd(_EGLDisplay *disp, _EGLDevice *dev)
 }
 
 static bool
-device_probe_device(_EGLDisplay *disp)
+device_probe_device(struct _egl_display *disp)
 {
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
 
@@ -290,7 +286,7 @@ device_probe_device(_EGLDisplay *disp)
 
    dri2_detect_swrast_kopper(disp);
 
-   dri2_dpy->loader_extensions = image_loader_extensions;
+   dri2_dpy->loader_funcs = &image_loader_funcs;
    return true;
 
 err_name:
@@ -300,7 +296,7 @@ err_name:
 }
 
 static bool
-device_probe_device_sw(_EGLDisplay *disp)
+device_probe_device_sw(struct _egl_display *disp)
 {
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
 
@@ -313,12 +309,12 @@ device_probe_device_sw(_EGLDisplay *disp)
    /* HACK: should be driver_swrast_null */
    dri2_detect_swrast_kopper(disp);
 
-   dri2_dpy->loader_extensions = swrast_loader_extensions;
+   dri2_dpy->loader_funcs = &swrast_loader_funcs;
    return true;
 }
 
 EGLBoolean
-dri2_initialize_device(_EGLDisplay *disp)
+dri2_initialize_device(struct _egl_display *disp)
 {
    const char *err;
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
@@ -353,8 +349,10 @@ dri2_initialize_device(_EGLDisplay *disp)
 
    dri2_setup_screen(disp);
 #ifdef HAVE_WAYLAND_PLATFORM
-   dri2_dpy->device_name =
-      loader_get_device_name_for_fd(dri2_dpy->fd_render_gpu);
+   if (dri2_dpy->fd_render_gpu >= 0) {
+      dri2_dpy->device_name =
+         loader_get_device_name_for_fd(dri2_dpy->fd_render_gpu);
+   }
 #endif
    dri2_set_WL_bind_wayland_display(disp);
 

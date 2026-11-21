@@ -235,12 +235,12 @@
 #include <util/os_time.h>
 #include <util/perf/cpu_trace.h>
 #include <util/perf/u_perfetto.h>
+#include <util/perf/u_perfetto_api.h>
 #include <util/perf/u_trace.h>
 #include <util/ptralloc.h>
 #include <util/ralloc.h>
 #include <util/rand_xor.h>
 #include <util/rb_tree.h>
-#include <util/reallocarray.h>
 #include <util/register_allocate.h>
 #include <util/register_allocate_internal.h>
 #include <util/rgtc.h>

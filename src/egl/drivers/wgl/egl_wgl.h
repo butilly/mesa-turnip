@@ -34,38 +34,38 @@
 
 struct wgl_egl_display {
    struct pipe_frontend_screen base;
-   _EGLDisplay *parent;
+   struct _egl_display *parent;
    int ref_count;
    struct pipe_screen *screen;
 };
 
 struct wgl_egl_config {
-   _EGLConfig base;
+   struct _egl_config base;
    const struct stw_pixelformat_info *stw_config[2];
 };
 
 struct wgl_egl_context {
-   _EGLContext base;
+   struct _egl_context base;
    struct stw_context *ctx;
 };
 
 struct wgl_egl_surface {
-   _EGLSurface base;
+   struct _egl_surface base;
    struct stw_framebuffer *fb;
 };
 
 struct wgl_egl_image {
-   _EGLImage base;
+   struct _egl_image base;
    struct stw_image *img;
 };
 
 struct wgl_egl_sync {
-   _EGLSync base;
+   struct _egl_sync base;
    int refcount;
    struct pipe_fence_handle *fence;
    HANDLE event;
 };
 
 _EGL_DRIVER_STANDARD_TYPECASTS(wgl_egl)
-_EGL_DRIVER_TYPECAST(wgl_egl_image, _EGLImage, obj)
-_EGL_DRIVER_TYPECAST(wgl_egl_sync, _EGLSync, obj)
+_EGL_DRIVER_TYPECAST(wgl_egl_image, struct _egl_image, obj)
+_EGL_DRIVER_TYPECAST(wgl_egl_sync, struct _egl_sync, obj)

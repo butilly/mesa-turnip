@@ -41,6 +41,7 @@
 #include "util/perf/cpu_trace.h"
 #include "util/ralloc.h"
 #include "util/timespec.h"
+#include "c11/time.h"
 
 /* Breaks linking cycles since WSI common depends on runtime,
  * and Meson does not allow runtime to depend on WSI common. */
@@ -249,10 +250,8 @@ vk_device_init(struct vk_device *device,
       UNREACHABLE("Invalid timeline mode");
    }
 
-#ifdef VK_USE_PLATFORM_ANDROID_KHR
    mtx_init(&device->swapchain_private_mtx, mtx_plain);
    device->swapchain_private = NULL;
-#endif /* VK_USE_PLATFORM_ANDROID_KHR */
 
    simple_mtx_init(&device->trace_mtx, mtx_plain);
 
@@ -270,7 +269,8 @@ vk_device_init(struct vk_device *device,
    }
 
    if (device->enabled_extensions.KHR_calibrated_timestamps ||
-       device->enabled_extensions.EXT_calibrated_timestamps) {
+       device->enabled_extensions.EXT_calibrated_timestamps ||
+       device->enabled_extensions.AMD_anti_lag) {
       /* sorted by preference */
       const VkTimeDomainKHR calibrate_domains[] = {
          VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR,
@@ -329,15 +329,16 @@ vk_device_finish(struct vk_device *device)
    vk_device_memory_report_finish(device);
    vk_memory_trace_finish(device);
 
-#ifdef VK_USE_PLATFORM_ANDROID_KHR
    if (device->swapchain_private) {
       hash_table_foreach(device->swapchain_private, entry)
          util_sparse_array_finish(entry->data);
       ralloc_free(device->swapchain_private);
    }
-#endif /* VK_USE_PLATFORM_ANDROID_KHR */
+   mtx_destroy(&device->swapchain_private_mtx);
 
    simple_mtx_destroy(&device->trace_mtx);
+
+   vk_free(&device->alloc, device->app_workarounds_dispatch_table);
 
    vk_object_base_finish(&device->base);
 }
@@ -879,12 +880,8 @@ vk_device_get_timestamp(struct vk_device *device, VkTimeDomainKHR domain,
       clockid = CLOCK_MONOTONIC;
       break;
    case VK_TIME_DOMAIN_CLOCK_MONOTONIC_RAW_KHR:
-      /* The "RAW" clocks on Linux are called "FAST" on FreeBSD */
 #if defined(CLOCK_MONOTONIC_RAW)
       clockid = CLOCK_MONOTONIC_RAW;
-      break;
-#elif defined(CLOCK_MONOTONIC_FAST)
-      clockid = CLOCK_MONOTONIC_FAST;
       break;
 #else
       FALLTHROUGH;

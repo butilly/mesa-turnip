@@ -1,4 +1,5 @@
 import copy
+from dataclasses import dataclass, field
 import re
 import xml.etree.ElementTree as et
 
@@ -11,60 +12,12 @@ def get_api_list(s):
         apis.append(a)
     return apis
 
-class Extension:
-    def __init__(self, name, number, ext_version):
-        self.name = name
-        self.type = None
-        self.number = number
-        self.platform = None
-        self.provisional = False
-        self.ext_version = int(ext_version)
-        self.supported = []
-
-    def from_xml(ext_elem):
-        name = ext_elem.attrib['name']
-        number = int(ext_elem.attrib['number'])
-        supported = get_api_list(ext_elem.attrib['supported'])
-        if name == 'VK_ANDROID_native_buffer':
-            assert not supported
-            supported = ['vulkan']
-
-        if not supported:
-            return Extension(name, number, 0)
-
-        version = None
-        for enum_elem in ext_elem.findall('.require/enum'):
-            if enum_elem.attrib['name'].endswith('_SPEC_VERSION'):
-                # Skip alias SPEC_VERSIONs
-                if 'value' in enum_elem.attrib:
-                    assert version is None
-                    version = int(enum_elem.attrib['value'])
-
-        assert version is not None
-        ext = Extension(name, number, version)
-        ext.type = ext_elem.attrib['type']
-        ext.platform = ext_elem.attrib.get('platform', None)
-        ext.provisional = ext_elem.attrib.get('provisional', False)
-        ext.supported = supported
-
-        return ext
-
-    def c_android_condition(self):
-        # if it's an EXT or vendor extension, it's allowed
-        if not self.name.startswith(ANDROID_EXTENSION_WHITELIST_PREFIXES):
-            return 'true'
-
-        allowed_version = ALLOWED_ANDROID_VERSION.get(self.name, None)
-        if allowed_version is None:
-            return 'false'
-
-        return 'ANDROID_API_LEVEL >= %d' % (allowed_version)
-
-class ApiVersion:
-    def __init__(self, version):
-        self.version = version
-
+@dataclass
 class VkVersion:
+    major: int
+    minor: int
+    patch: int | None
+
     def __init__(self, string):
         split = string.split('.')
         self.major = int(split[0])
@@ -107,12 +60,66 @@ class VkVersion:
     def __le__(self, other):
         return not self.__gt__(other)
 
+@dataclass
+class Extension:
+    """Class representing a Vulkan extension."""
+    name: str
+    number: int
+    version: int
+    type: str | None = None
+    platform: str | None = None
+    provisional: bool = False
+    supported: list[str] = field(default_factory=list)
+
+    def from_xml(ext_elem):
+        name = ext_elem.attrib['name']
+        number = int(ext_elem.attrib['number'])
+        supported = get_api_list(ext_elem.attrib['supported'])
+        if name == 'VK_ANDROID_native_buffer':
+            assert not supported
+            supported = ['vulkan']
+
+        if not supported:
+            return Extension(name=name, number=number, version=0)
+
+        version = None
+        for enum_elem in ext_elem.findall('.require/enum'):
+            if enum_elem.attrib['name'].endswith('_SPEC_VERSION'):
+                # Skip alias SPEC_VERSIONs
+                if 'value' in enum_elem.attrib:
+                    assert version is None
+                    version = int(enum_elem.attrib['value'])
+        assert version is not None
+
+        ext = Extension(
+            name=name,
+            number=number,
+            version=version,
+            type=ext_elem.attrib['type'],
+            platform=ext_elem.attrib.get('platform', None),
+            provisional=ext_elem.attrib.get('provisional', False),
+            supported=supported
+        )
+
+        return ext
+
+    def c_android_condition(self):
+        # if it's an EXT or vendor extension, it's allowed
+        if not self.name.startswith(ANDROID_EXTENSION_WHITELIST_PREFIXES):
+            return 'true'
+
+        allowed_version = ALLOWED_ANDROID_VERSION.get(self.name, None)
+        if allowed_version is None:
+            return 'false'
+
+        return 'ANDROID_API_LEVEL >= %d' % (allowed_version)
+
 # Sort the extension list the way we expect: KHR, then EXT, then vendors
 # alphabetically. For digits, read them as a whole number sort that.
 # eg.: VK_KHR_8bit_storage < VK_KHR_16bit_storage < VK_EXT_acquire_xlib_display
-def extension_order(ext):
+def extension_order(ext_name):
     order = []
-    for substring in re.split('(KHR|EXT|[0-9]+)', ext.name):
+    for substring in re.split('(KHR|EXT|[0-9]+)', ext_name):
         if substring == 'KHR':
             order.append(1)
         if substring == 'EXT':
@@ -123,7 +130,7 @@ def extension_order(ext):
             order.append(substring)
     return order
 
-def get_all_exts_from_xml(xml, api='vulkan'):
+def get_all_exts_from_xml(xml, beta, api='vulkan'):
     """ Get a list of all Vulkan extensions. """
 
     xml = et.parse(xml)
@@ -131,38 +138,21 @@ def get_all_exts_from_xml(xml, api='vulkan'):
     extensions = []
     for ext_elem in xml.findall('.extensions/extension'):
         ext = Extension.from_xml(ext_elem)
-        if api in ext.supported:
-            extensions.append(ext)
-
-    return sorted(extensions, key=extension_order)
-
-def init_exts_from_xml(xml, extensions, platform_defines):
-    """ Walk the Vulkan XML and fill out extra extension information. """
-
-    xml = et.parse(xml)
-
-    ext_name_map = {}
-    for ext in extensions:
-        ext_name_map[ext.name] = ext
-
-    # KHR_display is missing from the list.
-    platform_defines.append('VK_USE_PLATFORM_DISPLAY_KHR')
-    for platform in xml.findall('./platforms/platform'):
-        platform_defines.append(platform.attrib['protect'])
-
-    for ext_elem in xml.findall('.extensions/extension'):
-        ext_name = ext_elem.attrib['name']
-        if ext_name not in ext_name_map:
+        if api not in ext.supported:
             continue
 
-        ext = ext_name_map[ext_name]
-        ext.type = ext_elem.attrib['type']
+        if not beta and ext.provisional:
+            continue
 
+        extensions.append(ext)
+
+    return sorted(extensions, key=lambda ext : extension_order(ext.name))
+
+@dataclass
 class Requirements:
-    def __init__(self, core_version=None):
-        self.core_version = core_version
-        self.extensions = []
-        self.guard = None
+    core_version: VkVersion | None = None
+    extensions: list[str] = field(default_factory=list)
+    guard: str | None = None
 
     def add_extension(self, ext):
         for e in self.extensions:
@@ -184,7 +174,7 @@ def get_alias(aliases, name):
         return get_alias(aliases, aliases[name])
     return name
 
-def get_all_required(xml, thing, api, beta):
+def get_all_required(xml, thing, api, beta: bool):
     things = {}
     aliases = {}
     for struct in xml.findall('./types/type[@category="struct"][@alias]'):
@@ -212,7 +202,7 @@ def get_all_required(xml, thing, api, beta):
         if api not in ext.supported:
             continue
 
-        if beta != 'true' and ext.provisional:
+        if not beta and ext.provisional:
             continue
 
         for require in extension.findall('./require'):

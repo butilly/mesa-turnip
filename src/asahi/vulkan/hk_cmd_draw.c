@@ -24,6 +24,7 @@
 #include "hk_entrypoints.h"
 #include "hk_image.h"
 #include "hk_image_view.h"
+#include "hk_instance.h"
 #include "hk_physical_device.h"
 #include "hk_private.h"
 #include "hk_shader.h"
@@ -1009,10 +1010,13 @@ hk_init_heap(const void *data)
 {
    struct hk_cmd_buffer *cmd = (struct hk_cmd_buffer *)data;
    struct hk_device *dev = hk_cmd_buffer_device(cmd);
+   struct hk_instance *instance =
+      hk_physical_device_instance(hk_device_physical(dev));
 
    perf_debug(cmd, "Allocating heap");
 
-   size_t size = 128 * 1024 * 1024;
+   size_t size =
+      (size_t)instance->drirc.misc.geometry_heap_size_mb * 1024 * 1024;
    dev->heap = agx_bo_create(&dev->dev, size, 0, 0, "Geometry heap");
 
    /* The geometry state buffer is initialized here and then is treated by
@@ -1050,16 +1054,6 @@ hk_heap(struct hk_cmd_buffer *cmd)
 }
 
 static uint64_t
-hk_index_buffer(uint64_t index_buffer, uint size_el, uint offset_el,
-                uint elsize_B)
-{
-   if (offset_el < size_el)
-      return index_buffer + (offset_el * elsize_B);
-   else
-      return AGX_ZERO_PAGE_ADDRESS;
-}
-
-static uint64_t
 hk_upload_vertex_params(struct hk_cmd_buffer *cmd, struct agx_draw draw)
 {
    struct hk_graphics_state *gfx = &cmd->state.gfx;
@@ -1080,8 +1074,9 @@ hk_upload_vertex_params(struct hk_cmd_buffer *cmd, struct agx_draw draw)
       unsigned index_size_B = agx_index_size_to_B(draw.index_size);
       unsigned range_el = agx_draw_index_range_el(draw);
 
-      params.index_buffer = hk_index_buffer(agx_draw_index_buffer(draw),
-                                            range_el, 0, index_size_B);
+      params.index_buffer = poly_index_buffer(agx_draw_index_buffer(draw),
+                                              range_el, 0, index_size_B,
+                                              AGX_ZERO_PAGE_ADDRESS);
 
       params.index_buffer_range_el = range_el;
    }
@@ -3406,10 +3401,6 @@ hk_CmdBindIndexBuffer2KHR(VkCommandBuffer commandBuffer, VkBuffer _buffer,
       .buffer = hk_buffer_addr_range(buffer, offset, size, true),
       .size = agx_translate_index_size(vk_index_type_to_bytes(indexType)),
    };
-
-   /* TODO: check if necessary, blob does this */
-   cmd->state.gfx.index.buffer.range =
-      align(cmd->state.gfx.index.buffer.range, 4);
 }
 
 void
@@ -3946,6 +3937,9 @@ hk_begin_end_xfb(VkCommandBuffer commandBuffer, uint32_t firstCounterBuffer,
          params.dest[copies] = gfx->xfb_offsets + copies * sizeof(uint32_t);
       }
    }
+
+   if (pCounterBuffers == NULL)
+      counterBufferCount = 0;
 
    for (unsigned i = 0; i < counterBufferCount; ++i) {
       if (pCounterBuffers[i] == VK_NULL_HANDLE)

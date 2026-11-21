@@ -35,7 +35,6 @@ enum radv_debug_flag {
    RADV_DEBUG_ALL_BOS,
    RADV_DEBUG_NO_IB_CHAINING,
    RADV_DEBUG_DUMP_SPIRV,
-   RADV_DEBUG_ZERO_VRAM,
    RADV_DEBUG_SYNC_SHADERS,
    RADV_DEBUG_DUMP_PREOPT_IR,
    RADV_DEBUG_INFO,
@@ -161,6 +160,9 @@ enum radv_trace_mode {
    RADV_TRACE_MODE_CTX_ROLLS = 1 << (VK_TRACE_MODE_COUNT + 3),
 
    RADV_TRACE_MODE_RANGES = 1 << (VK_TRACE_MODE_COUNT + 4),
+
+   /** Radeon Developer Panel connection */
+   RADV_TRACE_MODE_RDP = 1 << (VK_TRACE_MODE_COUNT + 5),
 };
 
 struct radv_instance {
@@ -179,6 +181,11 @@ struct radv_instance {
    enum radeon_ctx_pstate profile_pstate;
 
    FILE *pso_history_logfile;
+
+   /* DevDriver for RDP connection - opaque pointer to ac_devdriver_server */
+   void *devdriver;
+   /* Serializes DevDriver late device init when several devices are created concurrently. */
+   simple_mtx_t devdriver_mtx;
 };
 
 VK_DEFINE_HANDLE_CASTS(radv_instance, vk.base, VkInstance, VK_OBJECT_TYPE_INSTANCE)

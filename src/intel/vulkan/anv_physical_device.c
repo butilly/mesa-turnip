@@ -43,8 +43,8 @@ anv_drirc_shader_cb(const void *hash_data,
                     const driOptionValue *value,
                     void *shaderOptionCallbackData)
 {
-   /* Should always be 8 bytes or more. Our compiler prog_data only holds the
-    * first 64bits, so just use that for the hash table.
+   /* Should always be 8 bytes or more. The intel_shader_info source_hash only
+    * holds the first 64bits, so just use that for the hash table.
     */
    assert(hash_size >= 8);
    uint64_t shader_hash = ((uint64_t *)hash_data)[0];
@@ -338,7 +338,7 @@ get_device_descriptor_limits(const struct anv_physical_device *device,
       ANV_SURFACE_STATE_SIZE;
    const uint32_t sampler_descriptor_size =
       device->indirect_descriptors ?
-      sizeof(struct anv_sampled_image_descriptor) :
+      sizeof(struct anv_image_descriptor) :
       ANV_SAMPLER_STATE_SIZE;
 
    limits->max_ubos = descriptor_heap_size / buffer_descriptor_size;
@@ -393,6 +393,7 @@ get_device_extensions(const struct anv_physical_device *device,
       .KHR_driver_properties                 = true,
       .KHR_dynamic_rendering                 = true,
       .KHR_dynamic_rendering_local_read      = true,
+      .KHR_extended_flags                    = true,
       .KHR_external_fence                    = true,
       .KHR_external_fence_fd                 = true,
       .KHR_external_memory                   = true,
@@ -425,6 +426,7 @@ get_device_extensions(const struct anv_physical_device *device,
       .KHR_maintenance9                      = true,
       .KHR_maintenance10                     = true,
       .KHR_maintenance11                     = true,
+      .KHR_maintenance12                     = true,
       .KHR_map_memory2                       = true,
       .KHR_multiview                         = true,
       .KHR_performance_query =
@@ -500,6 +502,8 @@ get_device_extensions(const struct anv_physical_device *device,
       .KHR_video_encode_h264                 = VIDEO_CODEC_H264ENC && video_encode_enabled,
       .KHR_video_encode_h265                 = device->info.ver >= 12 && VIDEO_CODEC_H265ENC && video_encode_enabled,
       .KHR_video_encode_av1                  = device->info.verx10 == 125 && VIDEO_CODEC_AV1ENC && video_encode_enabled,
+      .KHR_video_encode_intra_refresh        = device->info.ver >= 12 && video_encode_enabled &&
+                                               (VIDEO_CODEC_H264ENC || VIDEO_CODEC_H265ENC),
       .KHR_video_maintenance1                = (video_decode_enabled &&
                                                (VIDEO_CODEC_H264DEC || VIDEO_CODEC_H265DEC)) ||
                                                (video_encode_enabled &&
@@ -634,6 +638,7 @@ get_device_extensions(const struct anv_physical_device *device,
       .EXT_texel_buffer_alignment            = true,
       .EXT_tooling_info                      = true,
       .EXT_transform_feedback                = true,
+      .EXT_vertex_address_binding_unrestricted = true,
       .EXT_vertex_attribute_divisor          = true,
       .EXT_vertex_input_dynamic_state        = true,
       .EXT_ycbcr_2plane_444_formats          = true,
@@ -764,7 +769,7 @@ get_features(const struct anv_physical_device *pdevice,
       .shaderBufferInt64Atomics            = true,
       .shaderSharedInt64Atomics            = false,
       .shaderFloat16                       = !pdevice->drirc.debug.no_16bit,
-      .shaderInt8                          = !pdevice->drirc.debug.no_16bit,
+      .shaderInt8                          = true,
 
       .descriptorIndexing                                 = true,
       .shaderInputAttachmentArrayDynamicIndexing          = true,
@@ -1192,6 +1197,9 @@ get_features(const struct anv_physical_device *pdevice,
       /* VK_KHR_video_encode_av1 */
       .videoEncodeAV1 = true,
 
+      /* VK_KHR_video_encode_intra_refresh */
+      .videoEncodeIntraRefresh = true,
+
       /* VK_EXT_image_compression_control */
       .imageCompressionControl = pdevice->expose_compression_control,
 
@@ -1299,6 +1307,9 @@ get_features(const struct anv_physical_device *pdevice,
       /* VK_KHR_maintenance11 */
       .maintenance11 = true,
 
+      /* VK_KHR_maintenance12 */
+      .maintenance12 = true,
+
       /* VK_KHR_device_address_commands */
       .deviceAddressCommands = true,
 
@@ -1317,6 +1328,12 @@ get_features(const struct anv_physical_device *pdevice,
       /* soft fp64 does not support fma */
       .shaderFmaFloat64 = pdevice->info.has_64bit_float &&
                           !INTEL_DEBUG(DEBUG_SOFT64),
+
+      /* VK_KHR_extended_flags */
+      .extendedFlags = true,
+
+      /* VK_EXT_vertex_address_binding_unrestricted */
+      .vertexAddressBindingUnrestricted = true,
    };
 
    /* The new DOOM and Wolfenstein games require depthBounds without
@@ -1873,6 +1890,11 @@ get_properties(const struct anv_physical_device *pdevice,
       props->rgba4OpaqueBlackSwizzled = true;
       props->resolveSrgbFormatAppliesTransferFunction = true;
       props->resolveSrgbFormatSupportsTransferFunctionControl = true;
+   }
+
+   /* VK_KHR_maintenance12 */
+   {
+      props->maxInputAttachmentIndex = MAX_DESCRIPTOR_SET_INPUT_ATTACHMENTS - 1;
    }
 
    /* VK_KHR_performance_query */
@@ -2439,7 +2461,7 @@ get_properties(const struct anv_physical_device *pdevice,
       props->transformFeedbackDraw = true;
    }
 
-#if DETECT_OS_ANDROID
+#ifdef VK_USE_PLATFORM_ANDROID_KHR
    /* VK_ANDROID_native_buffer */
    {
       props->sharedImage = !!vk_android_get_front_buffer_usage();
@@ -2451,7 +2473,7 @@ get_properties(const struct anv_physical_device *pdevice,
       props->externalFormatResolveChromaOffsetX = VK_CHROMA_LOCATION_MIDPOINT;
       props->externalFormatResolveChromaOffsetY = VK_CHROMA_LOCATION_MIDPOINT;
    }
-#endif /* DETECT_OS_ANDROID */
+#endif /* VK_USE_PLATFORM_ANDROID_KHR */
 
 
    /* VK_MESA_image_alignment_control */
@@ -2804,17 +2826,19 @@ anv_physical_device_free_disk_cache(struct anv_physical_device *device)
 }
 
 static void
-anv_override_engine_counts(int *gc_count, int *g_count, int *c_count, int *v_count, int *blit_count)
+anv_override_engine_counts(struct anv_physical_device *device,
+                           int *gc_count, int *g_count, int *c_count,
+                           int *v_count, int *blit_count)
 {
    int gc_override = -1;
    int g_override = -1;
    int c_override = -1;
    int v_override = -1;
    int blit_override = -1;
-   const char *env_ = os_get_option("ANV_QUEUE_OVERRIDE");
+   const char *env_ = device->drirc.perf.queue_override;
 
    /* Override queues for Android HWUI that expects min 2 queues. */
-#if DETECT_OS_ANDROID
+#ifdef VK_USE_PLATFORM_ANDROID_KHR
    *gc_count = 2;
 #endif
 
@@ -2836,7 +2860,7 @@ anv_override_engine_counts(int *gc_count, int *g_count, int *c_count, int *v_cou
       } else if (strncmp(next, "b=", 2) == 0) {
          blit_override = strtol(next + 2, NULL, 0);
       } else {
-         mesa_logw("Ignoring unsupported ANV_QUEUE_OVERRIDE token: %s", next);
+         mesa_logw("Ignoring unsupported anv_queue_override token: %s", next);
       }
       next = strtok_r(NULL, ",", &save);
    }
@@ -2846,7 +2870,7 @@ anv_override_engine_counts(int *gc_count, int *g_count, int *c_count, int *v_cou
    if (g_override >= 0)
       *g_count = g_override;
    if (*g_count > 0 && *gc_count <= 0 && (gc_override >= 0 || g_override >= 0))
-      mesa_logw("ANV_QUEUE_OVERRIDE: gc=0 with g > 0 violates the "
+      mesa_logw("anv_queue_override: gc=0 with g > 0 violates the "
                 "Vulkan specification");
    if (c_override >= 0)
       *c_count = c_override;
@@ -2897,7 +2921,7 @@ anv_physical_device_init_queue_families(struct anv_physical_device *pdevice)
          blit_count = pdevice->info.engine_class_supported_count[INTEL_ENGINE_CLASS_COPY];
       }
 
-      anv_override_engine_counts(&gc_count, &g_count, &c_count, &v_count, &blit_count);
+      anv_override_engine_counts(pdevice, &gc_count, &g_count, &c_count, &v_count, &blit_count);
 
       enum intel_engine_class compute_class =
          pdevice->info.engine_class_supported_count[INTEL_ENGINE_CLASS_COMPUTE] &&
@@ -3140,6 +3164,7 @@ anv_physical_device_try_create(struct vk_instance *vk_instance,
          device->has_astc_ldr && !device->emu_astc_ldr;
    }
    device->brw_disable_subgroup_size_control =
+      !intel_use_jay_for_stage(&devinfo, MESA_SHADER_COMPUTE) &&
       device->drirc.debug.disable_subgroup_size_control;
 
    result = anv_physical_device_init_heaps(device, fd);

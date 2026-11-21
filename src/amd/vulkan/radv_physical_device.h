@@ -156,6 +156,9 @@ struct radv_physical_device {
    /* Bitmask of memory types that are protected. */
    uint32_t memory_types_protected;
 
+   /* Bitmask of memory types that are device coherent. */
+   uint32_t memory_types_device_coherent;
+
 #ifndef _WIN32
    int available_nodes;
    drmPciBusInfo bus_info;
@@ -219,6 +222,8 @@ VK_DEFINE_HANDLE_CASTS(radv_physical_device, vk.base, VkPhysicalDevice, VK_OBJEC
 
 bool radv_sparse_enabled(const struct radv_physical_device *pdev);
 
+bool radv_msrtss_enabled(const struct radv_physical_device *pdev);
+
 static inline struct radv_instance *
 radv_physical_device_instance(const struct radv_physical_device *pdev)
 {
@@ -230,8 +235,7 @@ radv_dedicated_sparse_queue_enabled(const struct radv_physical_device *pdev)
 {
    /* Dedicated sparse queue requires VK_QUEUE_SUBMIT_MODE_THREADED, which is incompatible with
     * VK_DEVICE_TIMELINE_MODE_EMULATED. */
-   return pdev->info.has_timeline_syncobj &&
-          radv_sparse_enabled(pdev);
+   return pdev->info.has_timeline_syncobj && radv_sparse_enabled(pdev);
 }
 
 static inline bool
@@ -297,6 +301,12 @@ radv_get_sampled_image_desc_size(const struct radv_physical_device *pdev)
 {
    /* Main descriptor + FMASK desccriptor if needed. */
    return 32 + (pdev->use_fmask || pdev->force_64_byte_sampled_image ? 32 : 0);
+}
+
+static inline uint32_t
+radv_get_texel_buffer_desc_size(const struct radv_physical_device *pdev)
+{
+   return pdev->info.gfx_level >= GFX13 ? RADV_TEXEL_BUFFER_DESC_SIZE_GFX13 : RADV_BUFFER_DESC_SIZE;
 }
 
 static inline uint32_t

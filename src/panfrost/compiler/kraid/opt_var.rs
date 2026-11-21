@@ -3,7 +3,7 @@
 
 use compiler::dataflow::ForwardDataflow;
 
-use crate::ir::{BasicBlock, Instr, Op, Shader, SrcRef};
+use crate::ir::{BasicBlock, Function, Instr, Op, Shader, SrcRef};
 use crate::ops::{SamplePosition, VaryingUpdateMode};
 
 #[derive(PartialEq, Clone)]
@@ -21,6 +21,24 @@ impl HiddenRegister {
             Op::LdVar(op) => (op.update, op.sample_position, &op.src),
             Op::LdVarBuf(op) => (op.update, op.sample_position, &op.src),
             Op::LdVarSpecial(op) => (op.update, op.sample_position, &op.src),
+            Op::VarTexBufDual(op) => {
+                (op.update, op.sample_position, &op.sample)
+            }
+            Op::VarTexBufGather(op) => {
+                (op.update, op.sample_position, &op.sample)
+            }
+            Op::VarTexBufGradient(op) => {
+                (op.update, op.sample_position, &op.sample)
+            }
+            Op::VarTexBufSingle(op) => {
+                (op.update, op.sample_position, &op.sample)
+            }
+            Op::VarTexDual(op) => (op.update, op.sample_position, &op.sample),
+            Op::VarTexGather(op) => (op.update, op.sample_position, &op.sample),
+            Op::VarTexGradient(op) => {
+                (op.update, op.sample_position, &op.sample)
+            }
+            Op::VarTexSingle(op) => (op.update, op.sample_position, &op.sample),
             _ => return None,
         };
 
@@ -57,6 +75,30 @@ fn clear_update_mode(i: &mut Instr) {
         Op::LdVarSpecial(op) => {
             (&mut op.update, &mut op.sample_position, &mut op.src)
         }
+        Op::VarTexBufDual(op) => {
+            (&mut op.update, &mut op.sample_position, &mut op.sample)
+        }
+        Op::VarTexBufGather(op) => {
+            (&mut op.update, &mut op.sample_position, &mut op.sample)
+        }
+        Op::VarTexBufGradient(op) => {
+            (&mut op.update, &mut op.sample_position, &mut op.sample)
+        }
+        Op::VarTexBufSingle(op) => {
+            (&mut op.update, &mut op.sample_position, &mut op.sample)
+        }
+        Op::VarTexDual(op) => {
+            (&mut op.update, &mut op.sample_position, &mut op.sample)
+        }
+        Op::VarTexGather(op) => {
+            (&mut op.update, &mut op.sample_position, &mut op.sample)
+        }
+        Op::VarTexGradient(op) => {
+            (&mut op.update, &mut op.sample_position, &mut op.sample)
+        }
+        Op::VarTexSingle(op) => {
+            (&mut op.update, &mut op.sample_position, &mut op.sample)
+        }
         _ => panic!("Instr doesn't use any hidden register"),
     };
     *update = VaryingUpdateMode::Retrieve;
@@ -71,7 +113,7 @@ fn last_reg_set(b: &BasicBlock) -> Option<HiddenRegister> {
         .next_back()
 }
 
-impl Shader<'_> {
+impl Function {
     pub fn opt_var(&mut self) {
         let cfg = &self.blocks;
         // First pass: gather the last register set by each block
@@ -119,6 +161,14 @@ impl Shader<'_> {
                 }
                 current_reg = reg_usage;
             }
+        }
+    }
+}
+
+impl Shader<'_> {
+    pub fn opt_var(&mut self) {
+        for f in self.functions.iter_mut() {
+            f.opt_var();
         }
     }
 }

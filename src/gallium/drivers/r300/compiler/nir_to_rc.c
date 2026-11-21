@@ -780,13 +780,7 @@ ntr_swizzle_for_write_mask(struct rc_src_register src, uint32_t write_mask)
 static struct rc_dst_register
 ntr_get_ssa_def_decl(struct ntr_compile *c, nir_def *ssa)
 {
-   uint32_t writemask;
-   /* Fix writemask for nir_intrinsic_load_ubo_vec4 according to uses. */
-   if (nir_def_is_intrinsic(ssa) &&
-       nir_def_as_intrinsic(ssa)->intrinsic == nir_intrinsic_load_ubo_vec4)
-      writemask = nir_def_components_read(ssa);
-   else
-      writemask = BITSET_MASK(ssa->num_components);
+   uint32_t writemask = nir_def_components_read(ssa);
 
    struct rc_dst_register dst;
    if (!ntr_try_store_ssa_in_tgsi_output(c, &dst, ssa))
@@ -904,6 +898,16 @@ ntr_emit_scalar(struct ntr_compile *c, rc_opcode op, struct ntr_alu_dst dst,
    }
 }
 
+/* NIR terminate_if is scalar, so expand to R300/R400 KIL's vec4 input here. */
+static bool
+ntr_should_expand_kil_compare(struct ntr_compile *c, nir_def *def)
+{
+   nir_alu_instr *alu = nir_def_as_alu_or_null(def);
+   return !c->compiler->is_r500 && alu && alu->op == nir_op_fcsel_ge &&
+          is_only_used_by_terminate_if(alu) &&
+          nir_src_is_const(alu->src[1].src) && nir_src_is_const(alu->src[2].src);
+}
+
 static void
 ntr_emit_alu(struct ntr_compile *c, nir_alu_instr *instr)
 {
@@ -925,7 +929,6 @@ ntr_emit_alu(struct ntr_compile *c, nir_alu_instr *instr)
    static const rc_opcode op_map[] = {
       [nir_op_mov] = RC_OPCODE_MOV,
 
-      [nir_op_fdot2_replicated] = RC_OPCODE_DP2,
       [nir_op_fdot3_replicated] = RC_OPCODE_DP3,
       [nir_op_fdot4_replicated] = RC_OPCODE_DP4,
       [nir_op_ffract] = RC_OPCODE_FRC,
@@ -959,6 +962,15 @@ ntr_emit_alu(struct ntr_compile *c, nir_alu_instr *instr)
        */
 
       switch (instr->op) {
+      case nir_op_fdot2_replicated:
+         if (c->s->info.stage == MESA_SHADER_FRAGMENT) {
+            struct rc_src_register zero = {.Swizzle = RC_SWIZZLE_0000};
+            ntr_emit_alu_op3(c, RC_OPCODE_DP2A, dst, src[0], src[1], zero);
+         } else {
+            ntr_emit_alu_op2(c, RC_OPCODE_DP2, dst, src[0], src[1]);
+         }
+         break;
+
       case nir_op_fabs:
          /* Try to eliminate */
          if (!c->lower_fabs && nir_legacy_float_mod_folds(instr))
@@ -1030,6 +1042,16 @@ ntr_emit_alu(struct ntr_compile *c, nir_alu_instr *instr)
          break;
 
       case nir_op_fcsel_ge:
+         /* R300/R400 KIL needs a full vec4 and treats -0 as negative. */
+         if (ntr_should_expand_kil_compare(c, &instr->def)) {
+            dst.reg.WriteMask = RC_MASK_XYZW;
+            src[0] = ntr_scalar(src[0], 0);
+            for (unsigned i = 1; i < 3; i++) {
+               src[i] = nir_src_comp_as_float(instr->src[i].src, instr->src[i].swizzle[0]) == 0.0 ?
+                        (struct rc_src_register) {.Swizzle = RC_SWIZZLE_0000} :
+                        ntr_negate(ntr_scalar(src[i], 0));
+            }
+         }
          /* Implement this as if !(src0 < 0.0) was identical to src0 >= 0.0. */
          ntr_emit_alu_op3(c, RC_OPCODE_CMP, dst, src[0], src[2], src[1]);
          break;
@@ -1236,7 +1258,11 @@ ntr_emit_intrinsic(struct ntr_compile *c, nir_intrinsic_instr *instr)
    case nir_intrinsic_terminate_if: {
       struct rc_src_register cond = ntr_scalar(ntr_get_src(c, instr->src[0]), 0);
       /* For !native_integers, the bool got lowered to 1.0 or 0.0. */
-      ntr_KILL_IF(c, ntr_negate(cond));
+      if (ntr_should_expand_kil_compare(c, instr->src[0].ssa))
+         cond.Swizzle = RC_SWIZZLE_XYZW;
+      else
+         cond = ntr_negate(cond);
+      ntr_KILL_IF(c, cond);
       break;
    }
       /* In TGSI we don't actually generate the barycentric coords, and
@@ -1299,7 +1325,8 @@ ntr_push_tex_arg(struct ntr_compile *c, nir_tex_instr *instr, nir_tex_src_type t
 static void
 ntr_emit_texture(struct ntr_compile *c, nir_tex_instr *instr)
 {
-   struct rc_dst_register dst = ntr_get_dest(c, &instr->def);
+   nir_legacy_dest dest = nir_legacy_chase_dest(&instr->def);
+   struct rc_dst_register dst = ntr_get_chased_dest(c, &dest);
    struct rc_dst_register tex_dst = dst;
    assert(!instr->is_shadow);
    rc_texture_target target =
@@ -1367,11 +1394,13 @@ ntr_emit_texture(struct ntr_compile *c, nir_tex_instr *instr)
 
    assert(s.i == rc_get_opcode_info(tex_opcode)->NumSrcRegs);
 
+   /* R300/R400 texture instructions always write a full vec4 so partial register
+    * writes need a temporary to preserve other components. */
    bool needs_mov =
       dst.File != RC_FILE_TEMPORARY ||
-      (!c->compiler->is_r500 && dst.WriteMask != RC_MASK_XYZW);
+      (!c->compiler->is_r500 && !dest.is_ssa && dst.WriteMask != RC_MASK_XYZW);
    if (needs_mov)
-      tex_dst = ntr_temp(c);
+      tex_dst = ntr_writemask(ntr_temp(c), dst.WriteMask);
 
    struct rc_sub_instruction *inst =
       rc_sub_instruction(c, tex_opcode, &tex_dst, RC_SATURATE_NONE, &s.srcs[0],
@@ -2005,14 +2034,11 @@ nir_to_rc_lower_tex_instr(nir_builder *b, nir_tex_instr *tex, void *data)
    while (!s.channels[s.i - 1].def)
       s.i--;
 
-   /* Instead of putting undefs in the unused slots of the vecs, just put in
-    * another used channel.  Otherwise, we'll get unnecessary moves into
-    * registers.
-    */
+   /* Let nir_lower_vec_to_regs skip writes to unused coordinate channels. */
    assert(s.channels[0].def != NULL);
    for (int i = 1; i < s.i; i++) {
       if (!s.channels[i].def)
-         s.channels[i] = s.channels[0];
+         s.channels[i] = nir_get_scalar(nir_undef(b, 1, 32), 0);
    }
 
    nir_tex_instr_add_src(tex, nir_tex_src_backend1, nir_vec_scalars(b, s.channels, MIN2(s.i, 4)));
@@ -2221,6 +2247,9 @@ nir_to_rc(struct nir_shader *s, struct pipe_screen *screen,
       NIR_PASS(progress, s, nir_opt_constant_folding);
    } while (progress);
 
+   if (s->info.stage == MESA_SHADER_FRAGMENT)
+      NIR_PASS(_, s, nir_opt_reassociate_for_fma);
+
    do {
       progress = false;
       NIR_PASS(progress, s, nir_opt_algebraic_late);
@@ -2242,8 +2271,11 @@ nir_to_rc(struct nir_shader *s, struct pipe_screen *screen,
             is_r500 || s->info.stage == MESA_SHADER_FRAGMENT);
    /* bool_to_float generates MOVs for b2f32 that we want to clean up. */
    NIR_PASS(_, s, nir_opt_copy_prop);
-   /* CSE cleanup after late ftrunc lowering. */
-   NIR_PASS(_, s, nir_opt_cse);
+   /* CSE cleanup after late ftrunc lowering. Keep this before R500 VS fcsel
+    * lowering, which checks how many distinct sources it reads.
+    */
+   if (s->info.stage == MESA_SHADER_VERTEX)
+      NIR_PASS(_, s, nir_opt_cse);
    /* At this point we need to clean up:
     *  a) R300/R400 VS fcsel_ge from ftrunc and seq/sne from bool/int lowering,
     *  b) all flavours of fcsels that read three different temp sources on R500.
@@ -2258,6 +2290,8 @@ nir_to_rc(struct nir_shader *s, struct pipe_screen *screen,
       NIR_PASS(_, s, r300_nir_lower_comparison_fs);
    }
    NIR_PASS(_, s, r300_nir_opt_algebraic_late);
+   if (s->info.stage == MESA_SHADER_FRAGMENT)
+      NIR_PASS(_, s, nir_opt_cse);
    NIR_PASS(_, s, nir_opt_dce);
    NIR_PASS(_, s, nir_opt_shrink_vectors, false);
    NIR_PASS(_, s, nir_opt_dce);

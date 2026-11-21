@@ -38,6 +38,7 @@
 #include "drm-uapi/drm_fourcc.h"
 #include "drm-uapi/drm.h"
 #include <xf86drm.h>
+#include "c11/time.h"
 
 #include "anv_private.h"
 #include "anv_measure.h"
@@ -71,11 +72,6 @@
 
 /* Render engine timestamp register */
 #define TIMESTAMP 0x2358
-
-/* The "RAW" clocks on Linux are called "FAST" on FreeBSD */
-#if !defined(CLOCK_MONOTONIC_RAW) && defined(CLOCK_MONOTONIC_FAST)
-#define CLOCK_MONOTONIC_RAW CLOCK_MONOTONIC_FAST
-#endif
 
 static void
 compiler_debug_log(void *data, UNUSED unsigned *id, const char *fmt, ...)
@@ -317,7 +313,7 @@ get_device_extensions(const struct anv_physical_device *device,
       .EXT_transform_feedback                = true,
       .EXT_vertex_attribute_divisor          = true,
       .EXT_ycbcr_image_arrays                = true,
-#if DETECT_OS_ANDROID
+#ifdef VK_USE_PLATFORM_ANDROID_KHR
       .ANDROID_external_memory_android_hardware_buffer = true,
       .ANDROID_native_buffer                 = true,
 #endif
@@ -417,7 +413,7 @@ get_features(const struct anv_physical_device *pdevice,
       .shaderBufferInt64Atomics            = false,
       .shaderSharedInt64Atomics            = false,
       .shaderFloat16                       = pdevice->info.ver >= 8 && !pdevice->instance->drirc.performance.no_16bit,
-      .shaderInt8                          = pdevice->info.ver >= 8 && !pdevice->instance->drirc.performance.no_16bit,
+      .shaderInt8                          = pdevice->info.ver >= 8,
 
       .descriptorIndexing                                 = false,
       .shaderInputAttachmentArrayDynamicIndexing          = false,
@@ -973,12 +969,12 @@ get_properties(const struct anv_physical_device *pdevice,
       isl_device_get_sample_counts(&pdevice->isl_dev);
 
    *props = (struct vk_properties) {
-#if DETECT_OS_ANDROID
+#ifdef VK_USE_PLATFORM_ANDROID_KHR
       .apiVersion = ANV_API_VERSION,
 #else
       .apiVersion = (pdevice->use_softpin || pdevice->instance->drirc.performance.report_vk_1_3_version) ?
          ANV_API_VERSION_1_3 : ANV_API_VERSION_1_2,
-#endif /* DETECT_OS_ANDROID */
+#endif /* VK_USE_PLATFORM_ANDROID_KHR */
       .driverVersion = vk_get_driver_version(),
       .vendorID = 0x8086,
       .deviceID = pdevice->info.pci_device_id,
@@ -1259,11 +1255,11 @@ get_properties(const struct anv_physical_device *pdevice,
    }
 
    /* VK_ANDROID_native_buffer */
-#if DETECT_OS_ANDROID
+#ifdef VK_USE_PLATFORM_ANDROID_KHR
    {
       props->sharedImage = VK_FALSE;
    }
-#endif /* DETECT_OS_ANDROID */
+#endif /* VK_USE_PLATFORM_ANDROID_KHR */
 
    /* VK_KHR_maintenance5 */
    {
@@ -1500,7 +1496,7 @@ anv_override_engine_counts(int *gc_count, int *g_count, int *c_count)
       } else if (strncmp(next, "c=", 2) == 0) {
          c_override = strtol(next + 2, NULL, 0);
       } else {
-         mesa_logw("Ignoring unsupported ANV_QUEUE_OVERRIDE token: %s", next);
+         mesa_logw("Ignoring unsupported HASVK_QUEUE_OVERRIDE token: %s", next);
       }
       next = strtok_r(NULL, ",", &save);
    }
@@ -1510,7 +1506,7 @@ anv_override_engine_counts(int *gc_count, int *g_count, int *c_count)
    if (g_override >= 0)
       *g_count = g_override;
    if (*g_count > 0 && *gc_count <= 0 && (gc_override >= 0 || g_override >= 0))
-      mesa_logw("ANV_QUEUE_OVERRIDE: gc=0 with g > 0 violates the "
+      mesa_logw("HASVK_QUEUE_OVERRIDE: gc=0 with g > 0 violates the "
                 "Vulkan specification");
    if (c_override >= 0)
       *c_count = c_override;
@@ -3279,7 +3275,7 @@ void anv_FreeMemory(
 
    anv_device_release_bo(device, mem->bo);
 
-#if DETECT_OS_ANDROID && ANDROID_API_LEVEL >= 26
+#if defined(VK_USE_PLATFORM_ANDROID_KHR) && ANDROID_API_LEVEL >= 26
    if (mem->ahw)
       AHardwareBuffer_release(mem->ahw);
 #endif
@@ -3492,7 +3488,7 @@ anv_bind_buffer_memory(const VkBindBufferMemoryInfo *pBindInfo)
    } else {
       buffer->address = ANV_NULL_ADDRESS;
    }
-   
+
    if (bind_status)
       *bind_status->pResult = VK_SUCCESS;
 }

@@ -72,7 +72,7 @@
  * Map build-system platform names to platform types.
  */
 static const struct {
-   _EGLPlatformType platform;
+   enum _egl_platform_type platform;
    const char *name;
 } egl_platforms[] = {
    {_EGL_PLATFORM_X11, "x11"},
@@ -89,10 +89,10 @@ static const struct {
 /**
  * Return the native platform by parsing EGL_PLATFORM.
  */
-static _EGLPlatformType
+static enum _egl_platform_type
 _eglGetNativePlatformFromEnv(void)
 {
-   _EGLPlatformType plat = _EGL_INVALID_PLATFORM;
+   enum _egl_platform_type plat = _EGL_INVALID_PLATFORM;
    const char *plat_name;
    EGLint i;
 
@@ -122,7 +122,7 @@ _eglGetNativePlatformFromEnv(void)
 /**
  * Try detecting native platform with the help of native display characteristics.
  */
-static _EGLPlatformType
+static enum _egl_platform_type
 _eglNativePlatformDetectNativeDisplay(void *nativeDisplay)
 {
    if (nativeDisplay == EGL_DEFAULT_DISPLAY)
@@ -158,10 +158,10 @@ _eglNativePlatformDetectNativeDisplay(void *nativeDisplay)
 /**
  * Return the native platform.  It is the platform of the EGL native types.
  */
-_EGLPlatformType
+enum _egl_platform_type
 _eglGetNativePlatform(void *nativeDisplay)
 {
-   _EGLPlatformType detected_platform = _eglGetNativePlatformFromEnv();
+   enum _egl_platform_type detected_platform = _eglGetNativePlatformFromEnv();
    const char *detection_method = "environment";
 
    if (detected_platform == _EGL_INVALID_PLATFORM) {
@@ -188,7 +188,7 @@ _eglGetNativePlatform(void *nativeDisplay)
 void
 _eglFiniDisplay(void)
 {
-   _EGLDisplay *dispList, *disp;
+   struct _egl_display *dispList, *disp;
 
    /* atexit function is called with global mutex locked */
    dispList = _eglGlobal.DisplayList;
@@ -249,11 +249,11 @@ _eglSameAttribs(const EGLAttrib *a, const EGLAttrib *b)
  * identical, different attribute orders will be considered different
  * parameters.
  */
-_EGLDisplay *
-_eglFindDisplay(_EGLPlatformType plat, void *plat_dpy,
+struct _egl_display *
+_eglFindDisplay(enum _egl_platform_type plat, void *plat_dpy,
                 const EGLAttrib *attrib_list)
 {
-   _EGLDisplay *disp;
+   struct _egl_display *disp;
    size_t num_attribs;
 
    if (plat == _EGL_INVALID_PLATFORM)
@@ -270,7 +270,7 @@ _eglFindDisplay(_EGLPlatformType plat, void *plat_dpy,
 
    /* create a new display */
    assert(!disp);
-   disp = calloc(1, sizeof(_EGLDisplay));
+   disp = calloc(1, sizeof(struct _egl_display));
    if (!disp)
       goto out;
 
@@ -313,7 +313,7 @@ out:
  * rest of the display's lifetime.
  */
 static void
-_eglSetExplicitDevice(_EGLDisplay *dpy, _EGLDevice *dev)
+_eglSetExplicitDevice(struct _egl_display *dpy, struct _egl_device *dev)
 {
    if (dpy && !dpy->Initialized)
       dpy->Device = dev;
@@ -323,60 +323,59 @@ _eglSetExplicitDevice(_EGLDisplay *dpy, _EGLDevice *dev)
  * Destroy the contexts and surfaces that are linked to the display.
  */
 void
-_eglReleaseDisplayResources(_EGLDisplay *display)
+_eglReleaseDisplayResources(struct _egl_display *display)
 {
-   _EGLResource *list;
-   const _EGLDriver *drv = display->Driver;
+   struct _egl_resource *list;
 
    simple_mtx_assert_locked(&display->Mutex);
 
    list = display->ResourceLists[_EGL_RESOURCE_CONTEXT];
    while (list) {
-      _EGLContext *ctx = (_EGLContext *)list;
+      struct _egl_context *ctx = (struct _egl_context *)list;
       list = list->Next;
 
       _eglUnlinkContext(ctx);
-      drv->DestroyContext(display, ctx);
+      Driver.DestroyContext(display, ctx);
    }
    assert(!display->ResourceLists[_EGL_RESOURCE_CONTEXT]);
 
    list = display->ResourceLists[_EGL_RESOURCE_SURFACE];
    while (list) {
-      _EGLSurface *surf = (_EGLSurface *)list;
+      struct _egl_surface *surf = (struct _egl_surface *)list;
       list = list->Next;
 
       _eglUnlinkSurface(surf);
-      drv->DestroySurface(display, surf);
+      Driver.DestroySurface(display, surf);
    }
    assert(!display->ResourceLists[_EGL_RESOURCE_SURFACE]);
 
    list = display->ResourceLists[_EGL_RESOURCE_IMAGE];
    while (list) {
-      _EGLImage *image = (_EGLImage *)list;
+      struct _egl_image *image = (struct _egl_image *)list;
       list = list->Next;
 
       _eglUnlinkImage(image);
-      drv->DestroyImageKHR(display, image);
+      Driver.DestroyImageKHR(display, image);
    }
    assert(!display->ResourceLists[_EGL_RESOURCE_IMAGE]);
 
    list = display->ResourceLists[_EGL_RESOURCE_SYNC];
    while (list) {
-      _EGLSync *sync = (_EGLSync *)list;
+      struct _egl_sync *sync = (struct _egl_sync *)list;
       list = list->Next;
 
       _eglUnlinkSync(sync);
-      drv->DestroySyncKHR(display, sync);
+      Driver.DestroySyncKHR(display, sync);
    }
    assert(!display->ResourceLists[_EGL_RESOURCE_SYNC]);
 }
 
 /**
- * Free all the data hanging of an _EGLDisplay object, but not
+ * Free all the data hanging of an struct _egl_display object, but not
  * the object itself.
  */
 void
-_eglCleanupDisplay(_EGLDisplay *disp)
+_eglCleanupDisplay(struct _egl_display *disp)
 {
    if (disp->Configs) {
       _eglDestroyArray(disp->Configs, free);
@@ -391,9 +390,9 @@ _eglCleanupDisplay(_EGLDisplay *disp)
  * own the resource.
  */
 EGLBoolean
-_eglCheckResource(void *res, _EGLResourceType type, _EGLDisplay *disp)
+_eglCheckResource(void *res, enum _egl_resource_type type, struct _egl_display *disp)
 {
-   _EGLResource *list = disp->ResourceLists[type];
+   struct _egl_resource *list = disp->ResourceLists[type];
 
    simple_mtx_assert_locked(&disp->Mutex);
 
@@ -419,7 +418,7 @@ _eglCheckResource(void *res, _EGLResourceType type, _EGLDisplay *disp)
  * _eglInitContext or _eglInitSurface.
  */
 void
-_eglInitResource(_EGLResource *res, EGLint size, _EGLDisplay *disp)
+_eglInitResource(struct _egl_resource *res, EGLint size, struct _egl_display *disp)
 {
    memset(res, 0, size);
    res->Display = disp;
@@ -430,7 +429,7 @@ _eglInitResource(_EGLResource *res, EGLint size, _EGLDisplay *disp)
  * Increment reference count for the resource.
  */
 void
-_eglGetResource(_EGLResource *res)
+_eglGetResource(struct _egl_resource *res)
 {
    assert(res && res->RefCount > 0);
    p_atomic_inc(&res->RefCount);
@@ -440,7 +439,7 @@ _eglGetResource(_EGLResource *res)
  * Decrement reference count for the resource.
  */
 EGLBoolean
-_eglPutResource(_EGLResource *res)
+_eglPutResource(struct _egl_resource *res)
 {
    assert(res && res->RefCount > 0);
    return p_atomic_dec_zero(&res->RefCount);
@@ -450,7 +449,7 @@ _eglPutResource(_EGLResource *res)
  * Link a resource to its display.
  */
 void
-_eglLinkResource(_EGLResource *res, _EGLResourceType type)
+_eglLinkResource(struct _egl_resource *res, enum _egl_resource_type type)
 {
    assert(res->Display);
    simple_mtx_assert_locked(&res->Display->Mutex);
@@ -465,9 +464,9 @@ _eglLinkResource(_EGLResource *res, _EGLResourceType type)
  * Unlink a linked resource from its display.
  */
 void
-_eglUnlinkResource(_EGLResource *res, _EGLResourceType type)
+_eglUnlinkResource(struct _egl_resource *res, enum _egl_resource_type type)
 {
-   _EGLResource *prev;
+   struct _egl_resource *prev;
 
    simple_mtx_assert_locked(&res->Display->Mutex);
 
@@ -493,11 +492,11 @@ _eglUnlinkResource(_EGLResource *res, _EGLResourceType type)
 }
 
 #ifdef HAVE_X11_PLATFORM
-_EGLDisplay *
+struct _egl_display *
 _eglGetX11Display(Display *native_display, const EGLAttrib *attrib_list)
 {
-   _EGLDisplay *dpy;
-   _EGLDevice *dev = NULL;
+   struct _egl_display *dpy;
+   struct _egl_device *dev = NULL;
 
    /* EGL_EXT_platform_x11 adds EGL_PLATFORM_X11_SCREEN_EXT,
     * which is optional.
@@ -537,12 +536,12 @@ _eglGetX11Display(Display *native_display, const EGLAttrib *attrib_list)
 #endif /* HAVE_X11_PLATFORM */
 
 #ifdef HAVE_XCB_PLATFORM
-_EGLDisplay *
+struct _egl_display *
 _eglGetXcbDisplay(xcb_connection_t *native_display,
                   const EGLAttrib *attrib_list)
 {
-   _EGLDisplay *dpy;
-   _EGLDevice *dev = NULL;
+   struct _egl_display *dpy;
+   struct _egl_device *dev = NULL;
 
    /* EGL_EXT_platform_xcb recognizes exactly one attribute,
     * EGL_PLATFORM_XCB_SCREEN_EXT, which is optional.
@@ -579,12 +578,12 @@ _eglGetXcbDisplay(xcb_connection_t *native_display,
 #endif /* HAVE_XCB_PLATFORM */
 
 #ifdef HAVE_DRM_PLATFORM
-_EGLDisplay *
+struct _egl_display *
 _eglGetGbmDisplay(struct gbm_device *native_display,
                   const EGLAttrib *attrib_list)
 {
-   _EGLDisplay *dpy;
-   _EGLDevice *dev = NULL;
+   struct _egl_display *dpy;
+   struct _egl_device *dev = NULL;
 
    /* This platform recognizes only EXT_explicit_device */
    if (attrib_list) {
@@ -616,12 +615,12 @@ _eglGetGbmDisplay(struct gbm_device *native_display,
 #endif /* HAVE_DRM_PLATFORM */
 
 #ifdef HAVE_WAYLAND_PLATFORM
-_EGLDisplay *
+struct _egl_display *
 _eglGetWaylandDisplay(struct wl_display *native_display,
                       const EGLAttrib *attrib_list)
 {
-   _EGLDisplay *dpy;
-   _EGLDevice *dev = NULL;
+   struct _egl_display *dpy;
+   struct _egl_device *dev = NULL;
 
    /* This platform recognizes only EXT_explicit_device */
    if (attrib_list) {
@@ -652,11 +651,11 @@ _eglGetWaylandDisplay(struct wl_display *native_display,
 }
 #endif /* HAVE_WAYLAND_PLATFORM */
 
-_EGLDisplay *
+struct _egl_display *
 _eglGetSurfacelessDisplay(void *native_display, const EGLAttrib *attrib_list)
 {
-   _EGLDisplay *dpy;
-   _EGLDevice *dev = NULL;
+   struct _egl_display *dpy;
+   struct _egl_device *dev = NULL;
 
    /* Any native display must be an EGLDeviceEXT we know about */
    if (native_display != NULL) {
@@ -693,7 +692,7 @@ _eglGetSurfacelessDisplay(void *native_display, const EGLAttrib *attrib_list)
 }
 
 #ifdef HAVE_ANDROID_PLATFORM
-_EGLDisplay *
+struct _egl_display *
 _eglGetAndroidDisplay(void *native_display, const EGLAttrib *attrib_list)
 {
 
@@ -707,11 +706,11 @@ _eglGetAndroidDisplay(void *native_display, const EGLAttrib *attrib_list)
 }
 #endif /* HAVE_ANDROID_PLATFORM */
 
-_EGLDisplay *
+struct _egl_display *
 _eglGetDeviceDisplay(void *native_display, const EGLAttrib *attrib_list)
 {
-   _EGLDevice *dev;
-   _EGLDisplay *display;
+   struct _egl_device *dev;
+   struct _egl_display *display;
    int fd = -1;
 
    dev = _eglLookupDevice(native_display);

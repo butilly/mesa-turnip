@@ -34,7 +34,6 @@
 #include "eglconfigdebug.h"
 #include "egldisplay.h"
 #include "egllog.h"
-#include "egltypedefs.h"
 
 /* Max debug message length */
 #define CONFIG_DEBUG_MSG_MAX 1000
@@ -104,7 +103,7 @@ _strnAppend(char *const buf, const int bufSize, const char *fmt, ...)
 }
 
 static void
-_eglPrintConfig(_EGLConfig *const conf, const int chosenIndex)
+_eglPrintConfig(struct _egl_config *const conf, const int chosenIndex)
 {
    const char padding[] = "   ";
    char printMsg[CONFIG_DEBUG_MSG_MAX] = "";
@@ -162,13 +161,13 @@ _eglPrintConfig(_EGLConfig *const conf, const int chosenIndex)
 }
 
 void
-eglPrintConfigDebug(const _EGLDisplay *const disp,
+eglPrintConfigDebug(const struct _egl_display *const disp,
                     const EGLConfig *const configs, const EGLint numConfigs,
                     const EGLBoolean printChosen)
 {
    EGLint numConfigsToPrint;
-   _EGLConfig **configsToPrint;
-   _EGLConfig **chosenConfigs;
+   struct _egl_config **configsToPrint;
+   struct _egl_config **chosenConfigs;
 
    if (!numConfigs || !configs) {
       _eglLog(_EGL_DEBUG, "%s: nothing to print", __func__);
@@ -180,18 +179,18 @@ eglPrintConfigDebug(const _EGLDisplay *const disp,
     * configs are printed, and the "chosen" configs are marked.
     */
    if (printChosen) {
-      configsToPrint = (_EGLConfig **)disp->Configs->Elements;
+      configsToPrint = (struct _egl_config **)disp->Configs->Elements;
       numConfigsToPrint = disp->Configs->Size;
-      chosenConfigs = (_EGLConfig **)configs;
+      chosenConfigs = (struct _egl_config **)configs;
    } else {
-      configsToPrint = (_EGLConfig **)configs;
+      configsToPrint = (struct _egl_config **)configs;
       numConfigsToPrint = numConfigs;
       chosenConfigs = NULL;
    }
 
    _printHeaderFormat();
    for (EGLint i = 0; i < numConfigsToPrint; i++) {
-      _EGLConfig *configToPrint = configsToPrint[i];
+      struct _egl_config *configToPrint = configsToPrint[i];
       EGLint chosenIndex = -1;
 
       /* See if the current config to print is one of the chosen configs */

@@ -76,13 +76,48 @@ Environment variables
 KosmicKrisp specific environment variables:
 
 - ``MESA_KK_DEBUG``: ``msl`` to log all generated Metal Shading Language (MSL) shaders. ``force_robustness`` to force robustness on all shaders.
-- ``MESA_KK_GPU_CAPTURE``: Starts Metal capture at device create and ends it at device destroy. Set to ``1`` to activate.
+- ``MESA_KK_GPU_CAPTURE``: Enables Metal capture, can be controlled using debug utils labels or using ``MESA_KK_GPU_CAPTURE_IMMEDIATELY``. Set to ``1`` to activate.
+- ``MESA_KK_GPU_CAPTURE_IMMEDIATELY``: Starts Metal capture at device creation and ends it at device destruction. Set to ``1`` to activate.
 - ``MESA_KK_GPU_CAPTURE_DIRECTORY``: Metal capture will be saved to the specified directory. Defaults to Xcode if no path is provided.
 - ``MESA_KK_DISABLE_WORKAROUNDS``: Provide ``all`` to disable all workarounds. Otherwise, provide a comma separated list to disable wanted workarounds e.g. ``1,3,4`` to disable workaround 1, 3 and 4.
 - ``MESA_KK_EXPERIMENTAL``: Enables advertising experimental features which may not provide full correctness or may negatively impact performance when enabled. Provide ``all`` to advertise all listed features.
   - ``custom_border`` to advertise ``VK_EXT_custom_border_color`` and ``VK_EXT_border_color_swizzle``.
-  - ``image_view_min_lod`` to advertise ``VK_EXT_image_view_min_lod``.
-  - ``m5_optimize_e5r9g9b9`` to use allowGPUOptimizedContents on M5 with this format, which causes some CTS tests for vkCmdCopyImage() to fail
+  - ``image_view_min_lod`` to advertise ``VK_EXT_image_view_min_lod`` for M1-M5 GPUs.
+  - ``optimize_e5r9g9b9`` to use allowGPUOptimizedContents with this format, which causes some CTS tests for vkCmdCopyImage() to fail
+
+Contributions
+*************
+
+A key motivator for creating the KosmicKrisp driver within the Mesa project was
+to have a broader community that could contribute to the project. The
+KosmicKrisp project is very thankful for your interest and contributions to the
+project.
+
+Due to limited resources and sponsor priorities, LunarG engineers will do their
+best to review contributions as soon as reasonably possible. Regression fixes,
+bug fixes and sponsor priorities lie at the top of the list for LunarG. This
+means that contributions that do not align with those may fall into a lower
+priority category and be delayed. If your MR review will be delayed, a comment
+to that effect will be made on the MR.
+
+KosmicKrisp supports a wide range of chip families and OS versions. To
+facilitate reviews, contributions should be tested against Vulkan CTS 1.4.6.2
+on macOS 26 and macOS 27 with the following chip families:
+
+- M1 or M2 (highest priority)
+- M3 or M4
+- M5 or M6
+- A18 Pro
+
+M1 and M2 chips on macOS 26 are known to run into a considerably higher amount
+of issues when exposing new extensions and features, so testing with that
+configuration with zero regressions is highly encouraged.
+
+It is understood that contributors may not have access to all of the chip
+families for testing. LunarG can do the additional testing, but the engineering
+resource to do this testing and triage failures will result in a delay of the
+MR review. Typically the LunarG engineer needs to spend considerable time
+resolving regressions in the M1/M2/OS26 category.
 
 Metal workarounds
 *****************

@@ -142,8 +142,8 @@ is called. The driver should clean up after itself.
 Subclassing
 ~~~~~~~~~~~
 
-The internal libEGL data structures such as ``_EGLDisplay``,
-``_EGLContext``, ``_EGLSurface``, etc. should be considered base classes
+The internal libEGL data structures such as ``_egl_display``,
+``_egl_context``, ``_egl_surface``, etc. should be considered base classes
 from which drivers will derive subclasses.
 
 EGL Drivers

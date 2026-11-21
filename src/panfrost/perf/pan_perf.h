@@ -29,11 +29,7 @@ struct pan_perf {
 };
 
 int64_t pan_perf_counter_read(const struct pan_perf *perf,
-                              const struct mali_perf_counter *counter,
-                              uint8_t blk_idx);
-
-int64_t pan_perf_counter_read_sum(const struct pan_perf *perf,
-                                  const struct mali_perf_counter *counter);
+                              const struct mali_perf_counter *counter);
 
 struct pan_perf *pan_perf_create(int fd);
 
@@ -44,12 +40,6 @@ int pan_perf_enable(struct pan_perf *perf, uint64_t sampling_period_ns);
 int pan_perf_disable(struct pan_perf *perf);
 
 int pan_perf_dump(struct pan_perf *perf);
-
-static inline clockid_t
-pan_perf_gpu_clock_id(const struct pan_perf *perf)
-{
-   return CLOCK_MONOTONIC_RAW;
-}
 
 static inline uint64_t
 pan_perf_get_gpu_timestamp(const struct pan_perf *perf)

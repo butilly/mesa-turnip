@@ -16,6 +16,7 @@
 #include "common/pvr_limits.h"
 #include "compiler/shader_enums.h"
 #include "nir/nir_lower_blend.h"
+#include "nir/nir_xfb_info.h"
 #include "util/format/u_format.h"
 
 #include <stdbool.h>
@@ -48,6 +49,8 @@ typedef struct _pco_vs_data {
 
    unsigned clip_count;
    unsigned cull_count;
+
+   nir_xfb_info *xfb_info;
 
    unsigned f32_smooth; /** Number of F32 linear varyings. */
    unsigned f32_flat; /** Number of F32 flat varyings. */
@@ -203,6 +206,7 @@ typedef struct _pco_common_data {
    unsigned temps; /** Number of allocated temp registers. */
    unsigned vtxins; /** Number of allocated vertex input registers. */
    unsigned interns; /** Number of allocated internal registers. */
+   unsigned preamble_temps; /** Number of allocated temps for preamble func. */
 
    unsigned spilled_temps;
    pco_range spill_info; /* addr_lo, addr_hi, block_size */
@@ -214,6 +218,9 @@ typedef struct _pco_common_data {
    unsigned shareds; /** Number of allocated shared registers. */
 
    unsigned entry_offset; /** Offset of the shader entrypoint. */
+   unsigned preamble_offset; /** Offset of the shader preamble. */
+
+   pco_range preamble; /** Preamble shared register info. */
 
    struct {
       bool atomics; /** Whether the shader uses atomics. */
@@ -223,6 +230,7 @@ typedef struct _pco_common_data {
       bool point_sampler; /** Whether the shader uses a point sampler. */
       bool ia_sampler; /** Does the shader use an input attachment sampler? */
       bool usclib; /** Does the shader use usclib functions? */
+      bool preamble; /** Does the shader have a preamble shader? */
    } uses;
 
    bool robust_buffer_access;

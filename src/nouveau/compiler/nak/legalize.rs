@@ -1,7 +1,7 @@
 // Copyright © 2022 Collabora, Ltd.
 // SPDX-License-Identifier: MIT
 
-use crate::api::{GetDebugFlags, DEBUG};
+use crate::api::{DEBUG, GetDebugFlags};
 use crate::const_tracker::ConstTracker;
 use crate::ir::*;
 use crate::liveness::{BlockLiveness, Liveness, SimpleLiveness};
@@ -57,10 +57,6 @@ pub fn swap_srcs_if_both_reg(
     } else {
         false
     }
-}
-
-fn src_is_imm(src: &Src) -> bool {
-    matches!(src.src_ref, SrcRef::Imm32(_))
 }
 
 pub enum PadValue {
@@ -250,7 +246,7 @@ pub trait LegalizeBuildHelpers: SSABuilder {
         reg_file: RegFile,
         src_type: SrcType,
     ) {
-        if src_is_imm(src) {
+        if src.is_immediate() {
             self.copy_alu_src(src, reg_file, src_type);
         }
     }
@@ -262,7 +258,7 @@ pub trait LegalizeBuildHelpers: SSABuilder {
         src_type: SrcType,
     ) {
         assert!(src_type == SrcType::I32);
-        if src_is_imm(src) && src.src_mod.is_ineg() {
+        if src.is_immediate() && src.src_mod.is_ineg() {
             self.copy_alu_src(src, reg_file, src_type);
         }
     }

@@ -41,19 +41,17 @@ run_vs(brw_shader &s)
    return !s.failed;
 }
 
-extern "C" const unsigned *
+extern "C" intel_shader_bin *
 brw_compile_vs(const struct brw_compiler *compiler,
-               struct brw_compile_vs_params *params)
+               struct brw_compile_params *params)
 {
-   struct nir_shader *nir = params->base.nir;
+   struct nir_shader *nir = params->nir;
    const struct brw_vs_prog_key *key =
-      (const struct brw_vs_prog_key *)params->base.key;
-   struct brw_vs_prog_data *prog_data =
-      (struct brw_vs_prog_data *)params->base.prog_data;
+      (const struct brw_vs_prog_key *)params->key;
    const bool debug_enabled =
-      brw_should_print_shader(nir, params->base.debug_flag ?
-                                   params->base.debug_flag : DEBUG_VS,
-                                   prog_data->base.base.source_hash);
+      brw_should_print_shader(nir, params->debug_flag ?
+                                   params->debug_flag : DEBUG_VS,
+                                   params->source_hash);
    const unsigned dispatch_width = brw_geometry_stage_dispatch_width(compiler->devinfo);
 
    /* We only expect slot compaction to be disabled when using device
@@ -68,12 +66,12 @@ brw_compile_vs(const struct brw_compiler *compiler,
       .dispatch_width = dispatch_width,
       .compiler = compiler,
       .key = &key->base,
-      .archiver = params->base.archiver,
+      .archiver = params->archiver,
    }, *pt = &pt_;
 
    BRW_NIR_SNAPSHOT("first");
 
-   brw_prog_data_init(&prog_data->base.base, &params->base);
+   const unsigned ray_queries = nir->info.ray_queries;
 
    /* When using Primitive Replication for multiview, each view gets its own
     * position slot.
@@ -85,45 +83,30 @@ brw_compile_vs(const struct brw_compiler *compiler,
    /* Only position is allowed to be per-view */
    assert(!(nir->info.per_view_outputs & ~VARYING_BIT_POS));
 
+   struct intel_vue_map vue_map;
    brw_compute_vue_map(compiler->devinfo,
-                       &prog_data->base.vue_map, nir->info.outputs_written,
+                       &vue_map, nir->info.outputs_written,
                        key->base.vue_layout, pos_slots);
 
    brw_nir_apply_key(pt, &key->base, dispatch_width);
 
-   prog_data->inputs_read = nir->info.inputs_read;
-   prog_data->double_inputs_read = nir->info.vs.double_inputs;
-   prog_data->no_vf_slot_compaction = key->no_vf_slot_compaction;
+   const uint64_t inputs_read = nir->info.inputs_read;
+   const uint64_t double_inputs_read = nir->info.vs.double_inputs;
 
    unsigned nr_input_components = 0;
-   brw_nir_lower_vs_inputs(nir, compiler->devinfo, key, prog_data,
+   unsigned urb_read_length = 0;
+   uint32_t vf_component_packing[4] = {};
+   brw_nir_lower_vs_inputs(nir, compiler->devinfo, key,
+                           &params->push_layout, vf_component_packing,
                            &nr_input_components,
-                           &prog_data->base.urb_read_length);
+                           &urb_read_length);
    brw_nir_lower_vue_outputs(nir);
    BRW_NIR_SNAPSHOT("after_lower_io");
 
    brw_postprocess_nir(pt, debug_enabled);
 
    BRW_NIR_PASS(brw_nir_lower_deferred_urb_writes, compiler->devinfo,
-                &prog_data->base.vue_map, 0, 0);
-
-   if (BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_IS_INDEXED_DRAW))
-      prog_data->uses_is_indexed_draw = true;
-
-   if (BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_FIRST_VERTEX))
-      prog_data->uses_firstvertex = true;
-
-   if (BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_BASE_INSTANCE))
-      prog_data->uses_baseinstance = true;
-
-   if (BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_VERTEX_ID_ZERO_BASE))
-      prog_data->uses_vertexid = true;
-
-   if (BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_INSTANCE_ID))
-      prog_data->uses_instanceid = true;
-
-   if (BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_DRAW_ID))
-      prog_data->uses_drawid = true;
+                &vue_map, 0, 0);
 
    /* Since vertex shaders reuse the same VUE entry for inputs and outputs
     * (overwriting the original contents), we need to make sure the size is
@@ -131,45 +114,59 @@ brw_compile_vs(const struct brw_compiler *compiler,
     */
    const unsigned vue_entries =
       MAX2(DIV_ROUND_UP(nr_input_components, 4),
-           (unsigned)prog_data->base.vue_map.num_slots);
+           (unsigned)vue_map.num_slots);
 
-   prog_data->base.urb_entry_size = DIV_ROUND_UP(vue_entries, 4);
+   const unsigned urb_entry_size = DIV_ROUND_UP(vue_entries, 4);
 
    if (unlikely(debug_enabled)) {
       fprintf(stderr, "VS Output ");
-      brw_print_vue_map(stderr, &prog_data->base.vue_map, MESA_SHADER_VERTEX);
+      brw_print_vue_map(stderr, &vue_map, MESA_SHADER_VERTEX);
    }
 
-   prog_data->base.dispatch_mode = INTEL_DISPATCH_MODE_SIMD8;
-
-   const brw_shader_params shader_params = {
+   brw_shader_params shader_params = {
       .compiler                = compiler,
-      .mem_ctx                 = params->base.mem_ctx,
+      .compile_params          = params,
       .nir                     = nir,
-      .key                     = &key->base,
-      .prog_data               = &prog_data->base.base,
+      .info = {
+         .source_hash = params->source_hash,
+         .ray_queries = ray_queries,
+         .vue = {
+            .vue_map = vue_map,
+            .urb_read_length = urb_read_length,
+            .urb_entry_size = urb_entry_size,
+            .dispatch_mode = INTEL_DISPATCH_MODE_SIMD8,
+         },
+         .vs = {
+            .inputs_read = inputs_read,
+            .double_inputs_read = double_inputs_read,
+            .uses_vertexid = BITSET_TEST(nir->info.system_values_read,
+                                         SYSTEM_VALUE_VERTEX_ID_ZERO_BASE),
+            .uses_instanceid = BITSET_TEST(nir->info.system_values_read,
+                                           SYSTEM_VALUE_INSTANCE_ID),
+            .uses_firstvertex = BITSET_TEST(nir->info.system_values_read,
+                                            SYSTEM_VALUE_FIRST_VERTEX),
+            .uses_baseinstance = BITSET_TEST(nir->info.system_values_read,
+                                             SYSTEM_VALUE_BASE_INSTANCE),
+            .uses_drawid = BITSET_TEST(nir->info.system_values_read,
+                                       SYSTEM_VALUE_DRAW_ID),
+         },
+      },
       .dispatch_width          = dispatch_width,
-      .needs_register_pressure = params->base.stats != NULL,
-      .log_data                = params->base.log_data,
+      .needs_register_pressure = params->collect_register_pressure,
       .debug_enabled           = debug_enabled,
-      .archiver                = params->base.archiver,
    };
+   memcpy(shader_params.info.vs.vf_component_packing, vf_component_packing,
+          sizeof(vf_component_packing));
    brw_shader v(&shader_params);
    if (!run_vs(v)) {
-      params->base.error_str =
-         ralloc_strdup(params->base.mem_ctx, v.fail_msg);
+      params->error_str =
+         ralloc_strdup(params->mem_ctx, v.fail_msg);
       return NULL;
    }
 
-   assert(v.payload().num_regs % reg_unit(compiler->devinfo) == 0);
-   prog_data->base.base.dispatch_grf_start_reg =
-      v.payload().num_regs / reg_unit(compiler->devinfo);
-   prog_data->base.base.grf_used = v.grf_used;
-
    const brw_to_binary_params to_binary_params = {
       .compiler = compiler,
-      .params = &params->base,
-      .prog_data = &prog_data->base.base,
+      .params = params,
       .shaders = { &v },
    };
    return brw_to_binary(&to_binary_params);

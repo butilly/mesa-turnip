@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+#include <atomic>
 #include <errno.h>
 #include <string.h>
 
@@ -10,7 +11,6 @@
 #include "GfxStreamRenderControl.h"
 #include "GfxStreamVulkanConnection.h"
 #include "ResourceTracker.h"
-#include "Resources.h"
 #include "VkEncoder.h"
 #include "gfxstream_vk_entrypoints.h"
 #include "gfxstream_vk_private.h"
@@ -22,6 +22,7 @@
 
 uint32_t gSeqno = 0;
 uint32_t gNoRenderControlEnc = 0;
+static std::atomic<uint32_t> gAliveInstanceCount{0};
 
 static gfxstream::vk::VkEncoder* getVulkanEncoder(GfxStreamConnectionManager* mgr) {
     if (!gNoRenderControlEnc) {
@@ -69,6 +70,15 @@ static const char* const kGuestEmulatedInstanceExtensions[] = {
 #if defined(GFXSTREAM_VK_X11)
     VK_KHR_XCB_SURFACE_EXTENSION_NAME,
     VK_KHR_XLIB_SURFACE_EXTENSION_NAME,
+#endif
+#if defined(GFXSTREAM_VK_DISPLAY)
+    VK_KHR_DISPLAY_EXTENSION_NAME,
+    VK_KHR_GET_DISPLAY_PROPERTIES_2_EXTENSION_NAME,
+    VK_EXT_DIRECT_MODE_DISPLAY_EXTENSION_NAME,
+    VK_EXT_DISPLAY_SURFACE_COUNTER_EXTENSION_NAME,
+#if defined(LINUX_GUEST_BUILD)
+    VK_EXT_ACQUIRE_DRM_DISPLAY_EXTENSION_NAME,
+#endif
 #endif
 #if defined(GFXSTREAM_VK_METAL)
     VK_EXT_METAL_SURFACE_EXTENSION_NAME,
@@ -134,6 +144,9 @@ static std::vector<const char*> filteredInstanceExtensionNames(uint32_t count,
 // Always provided by guest driver only; never encoded/decoded to/from host
 static const char* const kGuestEmulatedDeviceExtensions[] = {
     VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+#if !DETECT_OS_ANDROID
+    VK_KHR_SWAPCHAIN_MUTABLE_FORMAT_EXTENSION_NAME,
+#endif
     VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
     VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME,
 };
@@ -201,19 +214,6 @@ static void get_device_extensions(VkPhysicalDevice physDevInternal,
 
 static VkResult gfxstream_vk_physical_device_init(
     struct gfxstream_vk_physical_device* physical_device, struct gfxstream_vk_instance* instance) {
-    struct vk_device_extension_table supported_extensions = {};
-    get_device_extensions(gfxstream_vk_physical_device_to_handle(physical_device),
-                          &supported_extensions);
-
-    // VK_EXT_image_drm_format_modifier support is either emulated, or passthrough using
-    // host functionality
-    if (!supported_extensions.EXT_image_drm_format_modifier) {
-        physical_device->doImageDrmFormatModifierEmulation = true;
-        supported_extensions.EXT_image_drm_format_modifier = true;
-    } else {
-        physical_device->doImageDrmFormatModifierEmulation = false;
-    }
-
     struct vk_physical_device_dispatch_table dispatch_table;
     memset(&dispatch_table, 0, sizeof(struct vk_physical_device_dispatch_table));
     vk_physical_device_dispatch_table_from_entrypoints(
@@ -224,18 +224,30 @@ static VkResult gfxstream_vk_physical_device_init(
 #endif
 
     // Initialize the mesa object
-    VkResult result = vk_physical_device_init(&physical_device->base, &instance->base,
-                                              &supported_extensions, NULL, NULL, &dispatch_table);
-
-    if (result == VK_SUCCESS) {
-        physical_device->instance = instance;
-        // Note: Must use dummy_sync for correct sync object path in WSI operations
-        physical_device->sync_types[0] = &vk_sync_dummy_type;
-        physical_device->sync_types[1] = NULL;
-        physical_device->base.supported_sync_types = physical_device->sync_types;
-
-        result = gfxstream_vk_wsi_init(physical_device);
+    VkResult result = vk_physical_device_init(&physical_device->base, &instance->base, NULL, NULL,
+                                              NULL, &dispatch_table);
+    if (result != VK_SUCCESS) {
+        return result;
     }
+
+    get_device_extensions(gfxstream_vk_physical_device_to_handle(physical_device),
+                          &physical_device->base.supported_extensions);
+
+    // VK_EXT_image_drm_format_modifier support is either emulated, or passthrough using
+    // host functionality
+    if (!physical_device->base.supported_extensions.EXT_image_drm_format_modifier) {
+        physical_device->doImageDrmFormatModifierEmulation = true;
+        physical_device->base.supported_extensions.EXT_image_drm_format_modifier = true;
+    } else {
+        physical_device->doImageDrmFormatModifierEmulation = false;
+    }
+
+    // Note: Must use dummy_sync for correct sync object path in WSI operations
+    physical_device->sync_types[0] = &vk_sync_dummy_type;
+    physical_device->sync_types[1] = NULL;
+    physical_device->base.supported_sync_types = physical_device->sync_types;
+
+    result = gfxstream_vk_wsi_init(physical_device);
 
     return result;
 }
@@ -243,9 +255,12 @@ static VkResult gfxstream_vk_physical_device_init(
 static void gfxstream_vk_destroy_physical_device(struct vk_physical_device* physical_device) {
     auto* gfxstream_physical_device = (struct gfxstream_vk_physical_device*)physical_device;
     VkPhysicalDevice handle = gfxstream_vk_physical_device_to_handle(gfxstream_physical_device);
+    VkInstance instance =
+        gfxstream_physical_device->instance
+            ? gfxstream_vk_instance_to_handle(gfxstream_physical_device->instance)
+            : VK_NULL_HANDLE;
     gfxstream_vk_wsi_finish(gfxstream_physical_device);
-    gfxstream::vk::ResourceTracker::get()->unregister_VkPhysicalDevice(handle);
-    delete_gfxstream_vk_physical_device(handle);
+    delete_gfxstream_vk_physical_device(instance, handle, nullptr);
 }
 
 static VkResult gfxstream_vk_enumerate_devices(struct vk_instance* vk_instance) {
@@ -347,13 +362,31 @@ VkResult gfxstream_vk_CreateInstance(const VkInstanceCreateInfo* pCreateInfo,
         localCreateInfo.enabledExtensionCount = static_cast<uint32_t>(filteredExts.size());
         localCreateInfo.ppEnabledExtensionNames = filteredExts.data();
 
+        // Inform the host about what capabilities this guest supports.
+        VkGuestCapabilitiesGOOGLE guestCapabilities = {
+            .sType = VK_STRUCTURE_TYPE_GUEST_CAPABILITIES_GOOGLE,
+            .pNext = localCreateInfo.pNext,
+            .capabilities =
+                // The guest can support inline uniform block descriptors after
+                // https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/45069.
+                VK_GUEST_CAPABILITY_BATCHED_INLINE_UNIFORM_BLOCK_BIT_GOOGLE |
+                // The guest can support host image copies after
+                // https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/46092
+                // where `VkHostPointerResolveGOOGLE` contains the memory contents
+                // instead of just a guest pointer.
+                VK_GUEST_CAPABILITY_HOST_POINTER_RESOLVE_BIT_GOOGLE,
+        };
+        if (gfxstream::vk::ResourceTracker::get()->supportsGuestCapabilities()) {
+            localCreateInfo.pNext = &guestCapabilities;
+        }
+
         auto vkEnc = gfxstream::vk::ResourceTracker::getThreadLocalEncoder();
-        result = vkEnc->vkCreateInstance(&localCreateInfo, nullptr, pInstance, true /* do lock */);
+        result = vkEnc->vkCreateInstance(&localCreateInfo, pAllocator, pInstance, true /* do lock */);
         if (result != VK_SUCCESS) {
             return vk_error(NULL, result);
         }
     } else {
-        *pInstance = create_gfxstream_vk_instance(0);
+        *pInstance = create_gfxstream_vk_instance(pAllocator, 0);
         if (!*pInstance) {
             return vk_error(NULL, VK_ERROR_OUT_OF_HOST_MEMORY);
         }
@@ -374,24 +407,23 @@ VkResult gfxstream_vk_CreateInstance(const VkInstanceCreateInfo* pCreateInfo,
     result =
         vk_instance_init(&instance->base, extensions, &dispatch_table, pCreateInfo, pAllocator);
     if (result != VK_SUCCESS) {
-        list_inithead(&instance->base.physical_devices.list);
-        list_inithead(&instance->base.debug_utils.callbacks);
-        list_inithead(&instance->base.debug_utils.instance_callbacks);
         if (!instance->init_failed) {
             auto vkEnc = gfxstream::vk::ResourceTracker::getThreadLocalEncoder();
             vkEnc->vkDestroyInstance(*pInstance, pAllocator, true /* do lock */);
         } else {
-            delete_gfxstream_vk_instance(*pInstance);
+            delete_gfxstream_vk_instance(*pInstance, pAllocator);
         }
         *pInstance = VK_NULL_HANDLE;
         return vk_error(NULL, result);
     }
+    instance->runtime_initialized = true;
 
     // Note: Do not support try_create_for_drm. virtio_gpu DRM device opened in
     // init_renderer above, which can still enumerate multiple physical devices on the host.
     instance->base.physical_devices.enumerate = gfxstream_vk_enumerate_devices;
     instance->base.physical_devices.destroy = gfxstream_vk_destroy_physical_device;
 
+    gAliveInstanceCount.fetch_add(1, std::memory_order_relaxed);
     return VK_SUCCESS;
 }
 
@@ -405,15 +437,17 @@ void gfxstream_vk_DestroyInstance(VkInstance _instance, const VkAllocationCallba
         auto vkEnc = gfxstream::vk::ResourceTracker::getThreadLocalEncoder();
         vkEnc->vkDestroyInstance(_instance, pAllocator, true /* do lock */);
     } else {
-        delete_gfxstream_vk_instance(_instance);
+        delete_gfxstream_vk_instance(_instance, pAllocator);
     }
 
     // To make End2EndTests happy, since now the host connection is statically linked to
     // libvulkan_ranchu.so [separate HostConnections now].
 #if defined(END2END_TESTS)
-    GfxStreamConnectionManager::resetThreadLocalInstance();
-    VirtGpuDevice::resetInstance();
-    gSeqno = 0;
+    if (gAliveInstanceCount.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+        GfxStreamConnectionManager::resetThreadLocalInstance();
+        VirtGpuDevice::resetInstance();
+        gSeqno = 0;
+    }
 #endif
 }
 
@@ -450,8 +484,11 @@ VkResult gfxstream_vk_EnumerateDeviceExtensionProperties(VkPhysicalDevice physic
 
 static void gfxstream_vk_queue_fini(struct gfxstream_vk_queue* gfxstream_queue) {
     VkQueue queue = gfxstream_vk_queue_to_handle(gfxstream_queue);
+    VkDevice device = gfxstream_queue->device
+                          ? gfxstream_vk_device_to_handle(gfxstream_queue->device)
+                          : VK_NULL_HANDLE;
     gfxstream::vk::ResourceTracker::get()->unregister_VkQueue(queue);
-    delete_gfxstream_vk_queue(queue);
+    delete_gfxstream_vk_queue(device, queue, nullptr);
 }
 
 static VkResult gfxstream_vk_queue_init(struct gfxstream_vk_device* dev,
@@ -470,16 +507,14 @@ static VkResult gfxstream_vk_queue_init(struct gfxstream_vk_device* dev,
     vkEnc->vkGetDeviceQueue2(gfxstream_vk_device_to_handle(dev), &device_queue_info, &queue,
                              true /* do lock */);
     if (queue == VK_NULL_HANDLE) {
-        return VK_ERROR_INITIALIZATION_FAILED;
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
     }
 
     VK_FROM_HANDLE(gfxstream_vk_queue, gfxstream_queue, queue);
     VkResult result = vk_queue_init(&gfxstream_queue->base, &dev->base, queue_info, queue_index);
     if (result != VK_SUCCESS) {
         gfxstream::vk::ResourceTracker::get()->unregister_VkQueue(queue);
-        list_del(&gfxstream_queue->base.link);
-        vk_object_base_finish(&gfxstream_queue->base.base);
-        free(gfxstream_queue);
+        delete_gfxstream_vk_queue(gfxstream_vk_device_to_handle(dev), queue, nullptr);
         return result;
     }
 
@@ -540,6 +575,80 @@ static inline void gfxstream_vk_device_queue_family_fini(struct gfxstream_vk_dev
     vk_free(&dev->base.alloc, dev->queue_families);
 }
 
+// Mesa's device table has a single slot for core and non-core versions of
+// functions with the core versions having precedence (e.g.
+// vkCmdBindIndexBuffer2 and vkCmdBindIndexBuffer2KHR). When the host instance
+// or physical device API version is below 1.4, adjust the dispatch table to
+// route to the extension entrypoints so the guest does not send 1.4 core
+// opcodes to a 1.3 host.
+static void adjust_entrypoints_by_api_version(struct gfxstream_vk_device* gfxstream_device) {
+    auto* gfxstream_instance = reinterpret_cast<gfxstream_vk_instance*>(
+        gfxstream_device->physical_device->base.instance);
+    const uint32_t instance_api_version = gfxstream_instance->api_version;
+    const uint32_t device_api_version = gfxstream_device->api_version;
+
+    if (instance_api_version < VK_API_VERSION_1_4 || device_api_version < VK_API_VERSION_1_4) {
+        if (gfxstream_device->base.enabled_extensions.KHR_maintenance5) {
+            gfxstream_device->base.dispatch_table.CmdBindIndexBuffer2KHR =
+                gfxstream_vk_device_entrypoints.CmdBindIndexBuffer2KHR;
+            gfxstream_device->base.dispatch_table.GetRenderingAreaGranularityKHR =
+                gfxstream_vk_device_entrypoints.GetRenderingAreaGranularityKHR;
+            gfxstream_device->base.dispatch_table.GetDeviceImageSubresourceLayoutKHR =
+                gfxstream_vk_device_entrypoints.GetDeviceImageSubresourceLayoutKHR;
+            gfxstream_device->base.dispatch_table.GetImageSubresourceLayout2KHR =
+                gfxstream_vk_device_entrypoints.GetImageSubresourceLayout2KHR;
+        }
+
+        if (gfxstream_device->base.enabled_extensions.KHR_maintenance6) {
+            gfxstream_device->base.dispatch_table.CmdBindDescriptorSets2KHR =
+                gfxstream_vk_device_entrypoints.CmdBindDescriptorSets2KHR;
+            gfxstream_device->base.dispatch_table.CmdPushConstants2KHR =
+                gfxstream_vk_device_entrypoints.CmdPushConstants2KHR;
+            gfxstream_device->base.dispatch_table.CmdPushDescriptorSet2KHR =
+                gfxstream_vk_device_entrypoints.CmdPushDescriptorSet2KHR;
+            gfxstream_device->base.dispatch_table.CmdPushDescriptorSetWithTemplate2KHR =
+                gfxstream_vk_device_entrypoints.CmdPushDescriptorSetWithTemplate2KHR;
+        }
+
+        if (gfxstream_device->base.enabled_extensions.KHR_push_descriptor) {
+            gfxstream_device->base.dispatch_table.CmdPushDescriptorSetKHR =
+                gfxstream_vk_device_entrypoints.CmdPushDescriptorSetKHR;
+            gfxstream_device->base.dispatch_table.CmdPushDescriptorSetWithTemplateKHR =
+                gfxstream_vk_device_entrypoints.CmdPushDescriptorSetWithTemplateKHR;
+        }
+
+        if (gfxstream_device->base.enabled_extensions.KHR_dynamic_rendering_local_read) {
+            gfxstream_device->base.dispatch_table.CmdSetRenderingAttachmentLocationsKHR =
+                gfxstream_vk_device_entrypoints.CmdSetRenderingAttachmentLocationsKHR;
+            gfxstream_device->base.dispatch_table.CmdSetRenderingInputAttachmentIndicesKHR =
+                gfxstream_vk_device_entrypoints.CmdSetRenderingInputAttachmentIndicesKHR;
+        }
+
+        if (gfxstream_device->base.enabled_extensions.KHR_line_rasterization) {
+            gfxstream_device->base.dispatch_table.CmdSetLineStippleKHR =
+                gfxstream_vk_device_entrypoints.CmdSetLineStippleKHR;
+        } else if (gfxstream_device->base.enabled_extensions.EXT_line_rasterization) {
+            gfxstream_device->base.dispatch_table.CmdSetLineStippleEXT =
+                gfxstream_vk_device_entrypoints.CmdSetLineStippleEXT;
+        }
+
+        if (gfxstream_device->base.enabled_extensions.EXT_host_image_copy) {
+            gfxstream_device->base.dispatch_table.CopyMemoryToImageEXT =
+                gfxstream_vk_device_entrypoints.CopyMemoryToImageEXT;
+            gfxstream_device->base.dispatch_table.CopyImageToMemoryEXT =
+                gfxstream_vk_device_entrypoints.CopyImageToMemoryEXT;
+            gfxstream_device->base.dispatch_table.CopyImageToImageEXT =
+                gfxstream_vk_device_entrypoints.CopyImageToImageEXT;
+            gfxstream_device->base.dispatch_table.TransitionImageLayoutEXT =
+                gfxstream_vk_device_entrypoints.TransitionImageLayoutEXT;
+            if (!gfxstream_device->base.enabled_extensions.KHR_maintenance5) {
+                gfxstream_device->base.dispatch_table.GetImageSubresourceLayout2EXT =
+                    gfxstream_vk_device_entrypoints.GetImageSubresourceLayout2EXT;
+            }
+        }
+    }
+}
+
 VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
                                    const VkDeviceCreateInfo* pCreateInfo,
                                    const VkAllocationCallbacks* pAllocator, VkDevice* pDevice) {
@@ -563,8 +672,19 @@ VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
         mutableSwapchainMaintenance1Features->swapchainMaintenance1 = VK_FALSE;
     }
 
+    if (!gfxstream::vk::ResourceTracker::get()->supportsGuestCapabilities()) {
+        const VkPhysicalDeviceHostImageCopyFeatures* hostImageCopyFeatures =
+            vk_find_struct_const(pCreateInfo, PHYSICAL_DEVICE_HOST_IMAGE_COPY_FEATURES);
+        const VkPhysicalDeviceVulkan14Features* vulkan14Features =
+            vk_find_struct_const(pCreateInfo, PHYSICAL_DEVICE_VULKAN_1_4_FEATURES);
+        if ((hostImageCopyFeatures && hostImageCopyFeatures->hostImageCopy) ||
+            (vulkan14Features && vulkan14Features->hostImageCopy)) {
+            return vk_error(gfxstream_physicalDevice, VK_ERROR_FEATURE_NOT_PRESENT);
+        }
+    }
+
     const VkAllocationCallbacks* pMesaAllocator =
-        pAllocator ?: &gfxstream_physicalDevice->instance->base.alloc;
+        pAllocator ?: &gfxstream_physicalDevice->base.instance->alloc;
 
 
     // Full local copy of pCreateInfo
@@ -596,14 +716,16 @@ VkResult gfxstream_vk_CreateDevice(VkPhysicalDevice physicalDevice,
     result = vk_device_init(&gfxstream_device->base, &gfxstream_physicalDevice->base,
                             &dispatch_table, pCreateInfo, pMesaAllocator);
     if (result != VK_SUCCESS) {
-        list_inithead(&gfxstream_device->base.queues);
         vkEnc->vkDestroyDevice(*pDevice, pAllocator, true /* do lock */);
         *pDevice = VK_NULL_HANDLE;
         return result;
     }
+    gfxstream_device->runtime_initialized = true;
 
     gfxstream_device->physical_device = gfxstream_physicalDevice;
     gfxstream_device->base.command_dispatch_table = &gfxstream_device->cmd_dispatch;
+
+    adjust_entrypoints_by_api_version(gfxstream_device);
 
     result = gfxstream_vk_device_queue_family_init(gfxstream_device, pCreateInfo);
     if (result != VK_SUCCESS) {
@@ -720,34 +842,26 @@ static bool vk_descriptor_type_has_descriptor_buffer(VkDescriptorType type) {
     }
 }
 
-static std::vector<VkWriteDescriptorSet> transformDescriptorSetList(
-    const VkWriteDescriptorSet* pDescriptorSets, uint32_t descriptorSetCount,
-    std::vector<std::vector<VkDescriptorBufferInfo>>& bufferInfos) {
-    std::vector<VkWriteDescriptorSet> outDescriptorSets(descriptorSetCount);
-    bufferInfos.resize(descriptorSetCount);
+static bool needsBufferInfoSanitize(const VkWriteDescriptorSet* pDescriptorSets,
+                                    uint32_t descriptorSetCount) {
+    if (!pDescriptorSets) return false;
     for (uint32_t i = 0; i < descriptorSetCount; ++i) {
-        const auto& srcDescriptorSet = pDescriptorSets[i];
-        const uint32_t descriptorCount = srcDescriptorSet.descriptorCount;
-
-        VkWriteDescriptorSet& outDescriptorSet = outDescriptorSets[i];
-        outDescriptorSet = srcDescriptorSet;
-
-        std::vector<VkDescriptorBufferInfo>& bufferInfo = bufferInfos[i];
-        bufferInfo.resize(descriptorCount);
-        for (uint32_t j = 0; j < descriptorCount; ++j) {
-            const auto* srcBufferInfo = srcDescriptorSet.pBufferInfo;
-            if (srcBufferInfo) {
-                bufferInfo[j] = srcBufferInfo[j];
-                bufferInfo[j].buffer = VK_NULL_HANDLE;
-                if (vk_descriptor_type_has_descriptor_buffer(srcDescriptorSet.descriptorType) &&
-                    srcBufferInfo[j].buffer) {
-                    bufferInfo[j].buffer = srcBufferInfo[j].buffer;
-                }
-            } else {
-                memset(&bufferInfo[j], 0, sizeof(VkDescriptorBufferInfo));
-            }
+        if (pDescriptorSets[i].pBufferInfo &&
+            !vk_descriptor_type_has_descriptor_buffer(pDescriptorSets[i].descriptorType)) {
+            return true;
         }
-        outDescriptorSet.pBufferInfo = bufferInfos[i].data();
+    }
+    return false;
+}
+
+static std::vector<VkWriteDescriptorSet> transformDescriptorSetList(
+    const VkWriteDescriptorSet* pDescriptorSets, uint32_t descriptorSetCount) {
+    std::vector<VkWriteDescriptorSet> outDescriptorSets(descriptorSetCount);
+    for (uint32_t i = 0; i < descriptorSetCount; ++i) {
+        outDescriptorSets[i] = pDescriptorSets[i];
+        if (!vk_descriptor_type_has_descriptor_buffer(outDescriptorSets[i].descriptorType)) {
+            outDescriptorSets[i].pBufferInfo = nullptr;
+        }
     }
     return outDescriptorSets;
 }
@@ -757,51 +871,16 @@ void gfxstream_vk_UpdateDescriptorSets(VkDevice device, uint32_t descriptorWrite
                                        uint32_t descriptorCopyCount,
                                        const VkCopyDescriptorSet* pDescriptorCopies) {
     MESA_TRACE_SCOPE("vkUpdateDescriptorSets");
-    {
-        auto vkEnc = gfxstream::vk::ResourceTracker::getThreadLocalEncoder();
-        std::vector<std::vector<VkDescriptorBufferInfo>> descriptorBufferInfoStorage;
-        std::vector<VkWriteDescriptorSet> internal_pDescriptorWrites = transformDescriptorSetList(
-            pDescriptorWrites, descriptorWriteCount, descriptorBufferInfoStorage);
-        auto resources = gfxstream::vk::ResourceTracker::get();
+    auto vkEnc = gfxstream::vk::ResourceTracker::getThreadLocalEncoder();
+    auto resources = gfxstream::vk::ResourceTracker::get();
+    if (needsBufferInfoSanitize(pDescriptorWrites, descriptorWriteCount)) {
+        std::vector<VkWriteDescriptorSet> sanitizedWrites =
+            transformDescriptorSetList(pDescriptorWrites, descriptorWriteCount);
         resources->on_vkUpdateDescriptorSets(vkEnc, device, descriptorWriteCount,
-                                             internal_pDescriptorWrites.data(), descriptorCopyCount,
+                                             sanitizedWrites.data(), descriptorCopyCount,
                                              pDescriptorCopies);
-    }
-}
-
-/*
- * Override vk_common_SetDebugUtilsObjectNameEXT.
- *
- * Mesa's common implementation assumes every Vulkan object handle is a pointer
- * to a vk_object_base. In gfxstream, only a subset of objects carry a Mesa
- * wrapper; all other non-dispatchable handles are opaque host handles. Passing
- * such a handle to the common path causes a null-pointer dereference.
- *
- * For wrapped objects we delegate to the common implementation. For unwrapped
- * objects we return VK_SUCCESS as a no-op; the names would only become useful
- * once guest-to-host forwarding is implemented.
- */
-VkResult gfxstream_vk_SetDebugUtilsObjectNameEXT(VkDevice device,
-                                                 const VkDebugUtilsObjectNameInfoEXT* pNameInfo) {
-    MESA_TRACE_SCOPE("vkSetDebugUtilsObjectNameEXT");
-    /*
-     * These object types have a gfxstream Mesa wrapper containing a
-     * vk_object_base, so the common implementation can safely dereference
-     * the handle. This list corresponds to the gfxstream_vk_* structs
-     * defined in gfxstream_vk_private.h.
-     */
-    switch (pNameInfo->objectType) {
-        case VK_OBJECT_TYPE_INSTANCE:
-        case VK_OBJECT_TYPE_PHYSICAL_DEVICE:
-        case VK_OBJECT_TYPE_DEVICE:
-        case VK_OBJECT_TYPE_QUEUE:
-        case VK_OBJECT_TYPE_COMMAND_BUFFER:
-        case VK_OBJECT_TYPE_COMMAND_POOL:
-        case VK_OBJECT_TYPE_BUFFER:
-        case VK_OBJECT_TYPE_FENCE:
-        case VK_OBJECT_TYPE_SEMAPHORE:
-            return vk_common_SetDebugUtilsObjectNameEXT(device, pNameInfo);
-        default:
-            return VK_SUCCESS;
+    } else {
+        resources->on_vkUpdateDescriptorSets(vkEnc, device, descriptorWriteCount, pDescriptorWrites,
+                                             descriptorCopyCount, pDescriptorCopies);
     }
 }

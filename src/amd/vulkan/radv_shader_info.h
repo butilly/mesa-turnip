@@ -23,7 +23,6 @@ struct nir_shader;
 typedef struct nir_shader nir_shader;
 struct radv_shader_layout;
 struct radv_shader_stage_key;
-enum radv_pipeline_type;
 struct radv_shader_stage;
 
 enum radv_shader_type {
@@ -86,7 +85,7 @@ struct radv_shader_info {
    uint32_t num_tess_patches;
    uint32_t esgs_itemsize;       /* Only for VS or TES as ES */
    uint32_t ngg_lds_vertex_size; /* VS,TES: Cull+XFB, GS: GSVS size */
-   uint64_t gs_inputs_read;  /* Mask of GS inputs read (only used by linked ES) */
+   uint64_t gs_inputs_read;      /* Mask of GS inputs read (only used by linked ES) */
 
    struct radv_userdata_locations user_sgprs_locs;
    struct radv_vs_output_info outinfo;
@@ -104,6 +103,7 @@ struct radv_shader_info {
    bool uses_view_index : 1;
    bool uses_invocation_id : 1;
    bool uses_prim_id : 1;
+   bool needs_draw_id : 1;
    bool is_ngg : 1;
    bool is_ngg_passthrough : 1;
    bool has_ngg_culling : 1;
@@ -126,7 +126,6 @@ struct radv_shader_info {
       uint32_t input_slot_usage_mask;
       uint8_t num_linked_outputs;
       uint8_t num_attributes;
-      bool needs_draw_id : 1;
       bool needs_instance_id : 1;
       bool as_es : 1;
       bool as_ls : 1;
@@ -153,8 +152,8 @@ struct radv_shader_info {
       uint8_t num_linked_inputs;       /* Number of reserved per-vertex input slots in VRAM. */
       uint8_t num_linked_patch_inputs; /* Number of reserved per-patch input slots in VRAM. */
       uint8_t num_linked_outputs;
-      enum tess_primitive_mode _primitive_mode : 2;
-      enum gl_tess_spacing spacing : 2;
+      enum tess_primitive_mode _primitive_mode;
+      enum gl_tess_spacing spacing;
       bool as_es : 1;
       bool ccw : 1;
       bool point_mode : 1;
@@ -173,6 +172,7 @@ struct radv_shader_info {
       bool uses_sample_shading : 1;
       bool needs_sample_positions : 1;
       bool needs_poly_line_smooth : 1;
+      bool needs_poly_line_smooth_coverage : 1;
       bool writes_memory : 1;
       bool writes_z : 1;
       bool writes_stencil : 1;
@@ -186,6 +186,7 @@ struct radv_shader_info {
       bool early_fragment_test : 1;
       bool post_depth_coverage : 1;
       bool uses_fbfetch_output : 1;
+      bool reads_msrtss_inputs : 1;
       uint8_t reads_frag_coord_mask;
       uint8_t depth_layout;
       bool reads_sample_mask_in : 1;
@@ -209,6 +210,7 @@ struct radv_shader_info {
       uint32_t colors_written; /* Mask of outputs written */
       uint32_t spi_shader_col_format;
       uint32_t cb_shader_mask;
+      float min_sample_shading;
       uint8_t color0_written;
       bool load_provoking_vtx : 1;
       bool load_rasterization_prim : 1;
@@ -268,6 +270,28 @@ radv_ps_writes_mrtz(const struct radv_shader_info *info)
    return info->ps.writes_z || info->ps.writes_stencil || info->ps.writes_sample_mask;
 }
 
+#define RADV_PS_INPUT_NONE 0xff
+
+/* SPI_PS_INPUT_CNTL_n without the offset, which depends on the last pre-rasterization shader. */
+struct radv_ps_inputs_regs {
+   uint8_t num;
+   uint8_t num_per_primitive;
+   uint8_t viewport_index; /* RADV_PS_INPUT_NONE if not read */
+   uint8_t prim_id_index;  /* RADV_PS_INPUT_NONE if not read */
+   uint8_t slot[32];       /* VARYING_SLOT_* */
+   uint32_t cntl[32];      /* SPI_PS_INPUT_CNTL_* */
+};
+
+/* SPI_PS_INPUT_CNTL_n offset part, precomputed by the last pre-rasterization shader. */
+struct radv_vgt_ps_inputs_regs {
+   uint32_t offset[VARYING_SLOT_MAX];
+   uint64_t exported_mask;
+   uint32_t viewport_cntl; /* only valid if viewport_per_primitive */
+   uint32_t prim_id_cntl;  /* only valid if prim_id_per_primitive */
+   bool viewport_per_primitive;
+   bool prim_id_per_primitive;
+};
+
 /* Precomputed register values. */
 struct radv_shader_regs {
    uint32_t pgm_lo;
@@ -315,6 +339,8 @@ struct radv_shader_regs {
          uint32_t spi_gs_out_config_ps;
          uint32_t spi_shader_pgm_rsrc4_ps;
          uint32_t pa_sc_hisz_control;
+
+         struct radv_ps_inputs_regs inputs;
       } ps;
 
       struct {
@@ -335,15 +361,20 @@ struct radv_shader_regs {
    uint32_t spi_vs_out_config;
    uint32_t spi_shader_pos_format;
    uint32_t vgt_gs_instance_cnt;
+
+   /* Only for the last pre-rasterization shader. */
+   struct radv_vgt_ps_inputs_regs ps_inputs;
 };
 
 void radv_nir_shader_info_init(mesa_shader_stage stage, mesa_shader_stage next_stage, struct radv_shader_info *info);
 
 void radv_nir_shader_info_pass(const struct radv_compiler_info *compiler_info, const struct nir_shader *nir,
                                const struct radv_shader_layout *layout, const struct radv_shader_stage_key *stage_key,
-                               const struct radv_graphics_state_key *gfx_state,
-                               const enum radv_pipeline_type pipeline_type, bool consider_force_vrs,
+                               const struct radv_graphics_state_key *gfx_state, bool consider_force_vrs,
                                struct radv_shader_info *info);
+
+bool radv_force_disable_vrs(enum amd_gfx_level gfx_level, const struct nir_shader *nir,
+                            const struct radv_graphics_state_key *gfx_state);
 
 void radv_get_esgs_gsvs_ring_size(const struct radv_device *device, struct radv_shader_regs *regs,
                                   const struct radv_shader_info *es_info, const struct radv_shader_info *gs_info);

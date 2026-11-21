@@ -26,6 +26,7 @@ typedef struct {
    bool has_desc_resource_level;
    bool enable_custom_border_on_compute_queue;
    bool gfx10_descriptor_alias_robust;
+   bool use_llvm;
 
    const struct radv_shader_args *args;
    const struct radv_shader_info *info;
@@ -236,6 +237,56 @@ visit_ssbo_descriptor_amd(nir_builder *b, lower_descriptors_state *state, nir_in
 }
 
 static nir_def *
+radv_fixup_sampler_desc(nir_builder *b, lower_descriptors_state *state, nir_tex_instr *tex, nir_def *sampler_desc)
+{
+   if (tex->op == nir_texop_tg4 && state->disable_tg4_trunc_coord) {
+      nir_def *rsrc0 = nir_channel(b, sampler_desc, 0);
+
+      /* We want to always use the linear filtering truncation behaviour for
+       * nir_texop_tg4, even if the sampler uses nearest/point filtering.
+       */
+      rsrc0 = nir_iand_imm(b, rsrc0, C_008F30_TRUNC_COORD);
+
+      sampler_desc = nir_vector_insert_imm(b, sampler_desc, rsrc0, 0);
+   }
+
+   if (!state->enable_custom_border_on_compute_queue &&
+       (b->shader->info.stage == MESA_SHADER_COMPUTE || b->shader->info.stage == MESA_SHADER_TASK ||
+        mesa_shader_stage_is_rt(b->shader->info.stage))) {
+      nir_def *rsrc3 = nir_channel(b, sampler_desc, 3);
+
+      /* Replace custom border color by transparent black to prevent GPU hangs when task/compute/RT
+       * shaders are executed on the compute queue because the hw is fundamentally broken and it
+       * can't support multiple color palettes.
+       */
+      nir_def *border_color_type = nir_iand_imm(b, rsrc3, ~C_008F3C_BORDER_COLOR_TYPE);
+      nir_def *is_custom_border_color =
+         nir_ieq_imm(b, border_color_type, S_008F3C_BORDER_COLOR_TYPE(V_008F3C_SQ_TEX_BORDER_COLOR_REGISTER));
+
+      if (b->shader->info.stage == MESA_SHADER_COMPUTE || mesa_shader_stage_is_rt(b->shader->info.stage)) {
+         nir_def *is_compute_queue;
+         if (b->shader->info.stage == MESA_SHADER_COMPUTE) {
+            is_compute_queue =
+               ac_nir_unpack_arg(b, &state->args->ac, state->args->cs_state, CS_STATE_IS_COMPUTE_QUEUE__SHIFT,
+                                 util_bitcount(CS_STATE_IS_COMPUTE_QUEUE__MASK));
+         } else {
+            is_compute_queue = nir_load_param(b, RT_ARG_IS_COMPUTE_QUEUE);
+         }
+
+         rsrc3 = nir_bcsel(b, nir_iand(b, nir_ieq_imm(b, is_compute_queue, 1), is_custom_border_color),
+                           nir_iand_imm(b, rsrc3, C_008F3C_BORDER_COLOR_TYPE), rsrc3);
+      } else {
+         assert(b->shader->info.stage == MESA_SHADER_TASK);
+         rsrc3 = nir_bcsel(b, is_custom_border_color, nir_iand_imm(b, rsrc3, C_008F3C_BORDER_COLOR_TYPE), rsrc3);
+      }
+
+      sampler_desc = nir_vector_insert_imm(b, sampler_desc, rsrc3, 3);
+   }
+
+   return sampler_desc;
+}
+
+static nir_def *
 get_sampler_desc(nir_builder *b, lower_descriptors_state *state, nir_deref_instr *deref, nir_def *index,
                  enum ac_descriptor_type desc_type, bool non_uniform, nir_tex_instr *tex, bool write)
 {
@@ -294,7 +345,7 @@ get_sampler_desc(nir_builder *b, lower_descriptors_state *state, nir_deref_instr
       size = RADV_SAMPLER_DESC_SIZE / 4;
       break;
    case AC_DESC_BUFFER:
-      size = RADV_BUFFER_DESC_SIZE / 4;
+      size = (state->gfx_level >= GFX13 ? RADV_TEXEL_BUFFER_DESC_SIZE_GFX13 : RADV_BUFFER_DESC_SIZE) / 4;
       break;
    case AC_DESC_PLANE_2:
       offset += 2 * plane_offset;
@@ -330,57 +381,22 @@ get_sampler_desc(nir_builder *b, lower_descriptors_state *state, nir_deref_instr
        * To workaround this, zero OOB_SELECT when needed.
        */
       nir_def *is_image = nir_test_mask(b, rsrc3, (uint32_t)~C_008F0C_TYPE);
-      nir_def *as_buffer = nir_iand_imm(b, rsrc3, C_008F0C_OOB_SELECT);
+      nir_def *as_buffer = nir_iand_imm(b, rsrc3, C_008F0C_OOB_SELECT_GFX10);
       rsrc3 = nir_bcsel(b, is_image, rsrc3, as_buffer);
 
       desc = nir_vector_insert_imm(b, desc, rsrc3, 3);
    }
 
-   if (desc_type == AC_DESC_SAMPLER && tex->op == nir_texop_tg4 && state->disable_tg4_trunc_coord) {
-      nir_def *rsrc0 = nir_channel(b, desc, 0);
-
-      /* We want to always use the linear filtering truncation behaviour for
-       * nir_texop_tg4, even if the sampler uses nearest/point filtering.
-       */
-      rsrc0 = nir_iand_imm(b, rsrc0, C_008F30_TRUNC_COORD);
-
-      desc = nir_vector_insert_imm(b, desc, rsrc0, 0);
-   }
-
-   if (!state->enable_custom_border_on_compute_queue && desc_type == AC_DESC_SAMPLER &&
-       (b->shader->info.stage == MESA_SHADER_COMPUTE || b->shader->info.stage == MESA_SHADER_TASK ||
-        mesa_shader_stage_is_rt(b->shader->info.stage))) {
-      nir_def *rsrc3 = nir_channel(b, desc, 3);
-
-      /* Replace custom border color by transparent black to prevent GPU hangs when task/compute/RT
-       * shaders are executed on the compute queue because the hw is fundamentally broken and it
-       * can't support multiple color palettes.
-       */
-      nir_def *border_color_type = nir_iand_imm(b, rsrc3, ~C_008F3C_BORDER_COLOR_TYPE);
-      nir_def *is_custom_border_color =
-         nir_ieq_imm(b, border_color_type, S_008F3C_BORDER_COLOR_TYPE(V_008F3C_SQ_TEX_BORDER_COLOR_REGISTER));
-
-      if (b->shader->info.stage == MESA_SHADER_COMPUTE || mesa_shader_stage_is_rt(b->shader->info.stage)) {
-         nir_def *is_compute_queue;
-         if (b->shader->info.stage == MESA_SHADER_COMPUTE) {
-            is_compute_queue =
-               ac_nir_unpack_arg(b, &state->args->ac, state->args->cs_state, CS_STATE_IS_COMPUTE_QUEUE__SHIFT,
-                                 util_bitcount(CS_STATE_IS_COMPUTE_QUEUE__MASK));
-         } else {
-            is_compute_queue = nir_load_param(b, RT_ARG_IS_COMPUTE_QUEUE);
-         }
-
-         rsrc3 = nir_bcsel(b, nir_iand(b, nir_ieq_imm(b, is_compute_queue, 1), is_custom_border_color),
-                           nir_iand_imm(b, rsrc3, C_008F3C_BORDER_COLOR_TYPE), rsrc3);
-      } else {
-         assert(b->shader->info.stage == MESA_SHADER_TASK);
-         rsrc3 = nir_bcsel(b, is_custom_border_color, nir_iand_imm(b, rsrc3, C_008F3C_BORDER_COLOR_TYPE), rsrc3);
-      }
-
-      desc = nir_vector_insert_imm(b, desc, rsrc3, 3);
-   }
-
    return desc;
+}
+
+/* descriptor_amd needs the descriptor itself rather than its address, which may be non-uniform. */
+static nir_def *
+load_non_uniform_desc(nir_builder *b, lower_descriptors_state *state, nir_def *ptr, unsigned num_components)
+{
+   assert(state->use_llvm);
+   return nir_load_global(b, num_components, 32, convert_pointer_to_64_bit(b, state, ptr),
+                          .access = ACCESS_NON_WRITEABLE | ACCESS_CAN_REORDER, .align_mul = num_components * 4u);
 }
 
 static void
@@ -395,6 +411,8 @@ update_image_intrinsic(nir_builder *b, lower_descriptors_state *state, nir_intri
                                     nir_intrinsic_access(intrin) & ACCESS_NON_UNIFORM, NULL, !is_load);
 
    if (intrin->intrinsic == nir_intrinsic_image_deref_descriptor_amd) {
+      if (nir_intrinsic_access(intrin) & ACCESS_NON_UNIFORM)
+         desc = load_non_uniform_desc(b, state, desc, intrin->def.num_components);
       nir_def_replace(&intrin->def, desc);
    } else {
       nir_rewrite_image_intrinsic(intrin, desc, nir_image_intrinsic_type_bindless);
@@ -445,6 +463,8 @@ lower_image_heap_intrinsic(nir_builder *b, lower_descriptors_state *state, nir_i
                        nir_intrinsic_access(intrin) & ACCESS_NON_UNIFORM, NULL, !is_load);
 
    if (intrin->intrinsic == nir_intrinsic_image_heap_descriptor_amd) {
+      if (nir_intrinsic_access(intrin) & ACCESS_NON_UNIFORM)
+         desc = load_non_uniform_desc(b, state, desc, intrin->def.num_components);
       nir_def_replace(&intrin->def, desc);
    } else {
       nir_rewrite_image_intrinsic(intrin, desc, nir_image_intrinsic_type_bindless);
@@ -698,6 +718,9 @@ lower_descriptors_tex(nir_builder *b, lower_descriptors_state *state, nir_tex_in
                                  tex->sampler_non_uniform, tex, false);
    }
 
+   if (sampler && !tex->sampler_non_uniform)
+      sampler = radv_fixup_sampler_desc(b, state, tex, sampler);
+
    if (sampler && state->disable_aniso_single_level && tex->sampler_dim < GLSL_SAMPLER_DIM_RECT) {
       /* Disable anisotropic filtering if BASE_LEVEL == LAST_LEVEL.
        *
@@ -721,6 +744,8 @@ lower_descriptors_tex(nir_builder *b, lower_descriptors_state *state, nir_tex_in
    }
 
    if (tex->op == nir_texop_descriptor_amd) {
+      if (tex->texture_non_uniform)
+         image = load_non_uniform_desc(b, state, image, tex->def.num_components);
       nir_def_replace(&tex->def, image);
       return true;
    }
@@ -767,6 +792,81 @@ lower_descriptors_instr(nir_builder *b, nir_instr *instr, void *_state)
    return false;
 }
 
+/* Uniform multisampled input attachment read, which may target an MSRTSS attachment. */
+bool
+radv_nir_tex_is_msaa_fbfetch(const nir_tex_instr *tex)
+{
+   return (tex->input_attachment_index || tex->input_attachment_depth || tex->input_attachment_stencil) &&
+          tex->sampler_dim == GLSL_SAMPLER_DIM_SUBPASS_MS && !tex->texture_non_uniform;
+}
+
+/* Replace the single-sampled image descriptor with the descriptor of the MSRTSS transient image if needed. */
+static bool
+lower_msrtss_input_attachment(nir_builder *b, nir_tex_instr *tex, void *_state)
+{
+   lower_descriptors_state *state = _state;
+
+   if (!radv_nir_tex_is_msaa_fbfetch(tex))
+      return false;
+
+   const int handle_idx = nir_tex_instr_src_index(tex, nir_tex_src_texture_handle);
+   nir_def *desc = tex->src[handle_idx].src.ssa;
+
+   b->cursor = nir_before_instr(&tex->instr);
+
+   nir_def *index, *in_range;
+   if (tex->input_attachment_index) {
+      index = nir_imm_int(b, tex->texture_index);
+      const int offset_idx = nir_tex_instr_src_index(tex, nir_tex_src_texture_offset);
+      if (offset_idx >= 0)
+         index = nir_iadd(b, index, tex->src[offset_idx].src.ssa);
+      in_range = nir_ult_imm(b, index, RADV_MSRTSS_MAX_INPUTS);
+   } else {
+      index = nir_imm_int(b, tex->input_attachment_depth ? RADV_MSRTSS_DEPTH_INPUT : RADV_MSRTSS_STENCIL_INPUT);
+      in_range = nir_imm_true(b);
+   }
+
+   nir_def *table = get_scalar_arg(b, 1, state->args->ps_msrtss_inputs);
+   nir_def *msrtss_desc;
+
+   nir_push_if(b, nir_ine_imm(b, table, 0));
+   {
+      table = convert_pointer_to_64_bit(b, state, table);
+
+      nir_def *header = ac_nir_load_smem(b, 2, table, nir_imm_int(b, 0), 4, 0);
+      nir_def *mask = nir_channel(b, header, 0);
+      nir_def *ds_shared_mask = nir_channel(b, header, 1);
+      nir_def *bit = nir_ishl(b, nir_imm_int(b, 1), index);
+      nir_def *enabled = nir_iand(b, in_range, nir_ine_imm(b, nir_iand(b, mask, bit), 0));
+
+      /* Descriptors are packed in index order, depth before stencil on a shared index.
+       * Keep in sync with radv_emit_msrtss_input_attachments().
+       */
+      nir_def *below = nir_iadd_imm(b, bit, -1);
+      nir_def *slot =
+         nir_iadd(b, nir_bit_count(b, nir_iand(b, mask, below)), nir_bit_count(b, nir_iand(b, ds_shared_mask, below)));
+
+      /* Stencil is the only non-float input attachment that can share an index with depth. */
+      if (tex->op != nir_texop_fragment_mask_fetch_amd && nir_alu_type_get_base_type(tex->dest_type) != nir_type_float)
+         slot = nir_iadd(b, slot, nir_bit_count(b, nir_iand(b, ds_shared_mask, bit)));
+
+      /* The descriptor is loaded unconditionally, so clamp the slot to stay within the table. */
+      nir_def *count = nir_iadd(b, nir_bit_count(b, mask), nir_bit_count(b, ds_shared_mask));
+      slot = nir_umin(b, slot, nir_iadd_imm(b, count, -1));
+
+      const unsigned fmask_offset = tex->op == nir_texop_fragment_mask_fetch_amd ? 32 : 0;
+      nir_def *offset = nir_imul_imm(b, slot, state->sampled_image_desc_size);
+      offset = nir_iadd_imm(b, offset, RADV_MSRTSS_INPUTS_DESC_OFFSET + fmask_offset);
+
+      msrtss_desc = nir_bcsel(b, enabled, ac_nir_load_smem(b, 8, table, offset, 4, 0), desc);
+   }
+   nir_pop_if(b, NULL);
+
+   /* Fall back to the application's descriptor if there is no table or the attachment isn't MSRTSS. */
+   nir_src_rewrite(&tex->src[handle_idx].src, nir_if_phi(b, msrtss_desc, desc));
+   return true;
+}
+
 bool
 radv_nir_lower_descriptors(nir_shader *shader, const struct radv_compiler_info *compiler_info,
                            const struct radv_shader_stage *stage)
@@ -786,6 +886,7 @@ radv_nir_lower_descriptors(nir_shader *shader, const struct radv_compiler_info *
       .has_desc_resource_level = compiler_info->ac->has_desc_resource_level,
       .enable_custom_border_on_compute_queue = compiler_info->key.enable_custom_border_on_compute_queue,
       .gfx10_descriptor_alias_robust = compiler_info->key.gfx10_descriptor_alias_robust,
+      .use_llvm = compiler_info->key.use_llvm,
       .args = &stage->args,
       .info = &stage->info,
       .layout = &stage->layout,
@@ -797,6 +898,9 @@ radv_nir_lower_descriptors(nir_shader *shader, const struct radv_compiler_info *
     */
    progress |= nir_shader_intrinsics_pass(shader, lower_descriptors_early_intrin, nir_metadata_control_flow, &state);
    progress |= nir_shader_instructions_pass(shader, lower_descriptors_instr, nir_metadata_control_flow, &state);
+
+   if (stage->info.ps.reads_msrtss_inputs)
+      progress |= nir_shader_tex_pass(shader, lower_msrtss_input_attachment, nir_metadata_none, &state);
 
    return progress;
 }

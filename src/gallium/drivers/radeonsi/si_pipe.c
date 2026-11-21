@@ -47,6 +47,10 @@ static const struct debug_named_value radeonsi_debug_options[] = {
    {"nofastdlist", DBG(NO_FAST_DISPLAY_LIST), "Disable fast display lists"},
    {"nodmashaders", DBG(NO_DMA_SHADERS), "Disable uploading shaders via CP DMA and map them directly."},
    {"ibcachesflush", DBG(IB_CACHES_FLUSH), "Flush all caches at the beginning of IBs."},
+   {"bo_history", DBG(BO_HISTORY), "Logs BO VA operations and CS flushes."},
+   {"bo_all", DBG(BO_LIST_ALL), "Always add all BOs to CS."},
+   {"nocompute", DBG(NO_COMPUTE), "Disable compute queues use."},
+   {"nodma", DBG(NO_DMA), "Disable SDMA-copy for DRI_PRIME"},
 
    /* 3D engine options: */
    {"nongg", DBG(NO_NGG), "Disable NGG and use the legacy pipeline."},
@@ -68,7 +72,6 @@ static const struct debug_named_value radeonsi_debug_options[] = {
    {"dccstore", DBG(DCC_STORE), "Enable DCC stores"},
    {"nodccmsaa", DBG(NO_DCC_MSAA), "Disable DCC for MSAA"},
    {"nofmask", DBG(NO_FMASK), "Disable MSAA compression"},
-   {"nodma", DBG(NO_DMA), "Disable SDMA-copy for DRI_PRIME"},
 
    {"forcegfxblit", DBG(FORCE_GFX_BLIT), "Force the use of fragment shaders for image clears, copies, blits, and resolve."},
    {"forcecomputeblit", DBG(FORCE_COMPUTE_BLIT), "Force the use of compute shaders for image clears, copies, blits, and resolve."},
@@ -218,6 +221,12 @@ static struct pipe_screen *radeonsi_screen_create_impl(struct radeon_winsys *ws,
    sscreen->ws = ws;
    ws->query_info(ws, &sscreen->info);
 
+   if (sscreen->info.gfx_level >= GFX13) {
+      fprintf(stderr, "radeonsi: GFX13 isn't supported yet\n");
+      FREE(sscreen);
+      return NULL;
+   }
+
    sscreen->debug_flags = debug_flags;
 
    if ((sscreen->debug_flags & DBG(TMZ)) &&
@@ -313,9 +322,9 @@ struct pipe_screen *radeonsi_screen_create(int fd, const struct pipe_screen_conf
       .reserve_vmid = debug_flags & (DBG(RESERVE_VMID) | DBG(SQTT)),
       .userq_job_log = debug_flags & DBG(USERQ_JOB_LOG),
       .noop_cs = debug_get_bool_option("RADEON_NOOP", false),
-      .zero_vram = driQueryOptionb(config->options, "radeonsi_zerovram") ||
-                   (debug_flags & DBG(SAFE)),
       .ib_caches_flush = debug_flags & DBG(IB_CACHES_FLUSH),
+      .dump_bo_history = debug_flags & DBG(BO_HISTORY),
+      .list_all_bo = debug_flags & DBG(BO_LIST_ALL),
    };
 
 #ifdef HAVE_AMDGPU_VIRTIO

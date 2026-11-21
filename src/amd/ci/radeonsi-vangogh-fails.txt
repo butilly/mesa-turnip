@@ -1,10 +1,5 @@
-spec@!opengl 1.0@rasterpos,Fail
-spec@!opengl 1.0@rasterpos@glsl_vs_gs_linked,Fail
-spec@!opengl 1.0@rasterpos@glsl_vs_tes_linked,Fail
 spec@!opengl 1.1@line-smooth-stipple,Fail
 spec@arb_fragment_layer_viewport@layer-gs-writes-out-of-range,Fail
-spec@arb_program_interface_query@arb_program_interface_query-getprogramresourceindex,Fail
-spec@arb_program_interface_query@arb_program_interface_query-getprogramresourceindex@'vs_input2[1][0]' on GL_PROGRAM_INPUT,Fail
 spec@arb_shader_texture_lod@execution@arb_shader_texture_lod-texgradcube,Fail
 spec@arb_tessellation_shader@arb_tessellation_shader-tes-gs-max-output -small -scan 1 50,Fail
 spec@ext_external_objects@vk-image-display,Crash
@@ -407,3 +402,8 @@ KHR-GL46.sparse_texture2_tests.UncommittedRegionsAccess_texture_2d_array_rg16f,F
 
 spec@arb_texture_view@tex-view,Fail
 spec@ext_transform_feedback2@draw-auto offset,Fail
+
+# uprev Piglit in Mesa
+spec@!opengl 1.0@gl-1.0-front-back-interleave,Fail
+spec@!opengl 1.5@gl-1.5-gen-buffers-unique,Crash
+

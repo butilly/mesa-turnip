@@ -81,6 +81,11 @@ RELAXED_APIS = [
     "vkQueueFlushCommandsGOOGLE",
 ]
 
+SNAPSHOT_SERIALIZED_RELAXED_APIS = [
+    "vkCreateGraphicsPipelines",
+    "vkCreateComputePipelines",
+]
+
 STYPE_OVERRIDE = {
     "VkPhysicalDeviceFragmentDensityMapFeaturesEXT": "VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_FEATURES_EXT",
     "VkPhysicalDeviceFragmentDensityMapPropertiesEXT": "VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_PROPERTIES_EXT",

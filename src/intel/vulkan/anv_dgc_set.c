@@ -87,12 +87,14 @@ anv_write_gfx_indirect_descriptor(struct anv_device *device,
    assert(descriptor->final_commands_size <= sizeof(descriptor->final_commands));
 
    if (device->info->ver == 9) {
-      const struct brw_vs_prog_data *vs_prog_data = get_gfx_vs_prog_data(gfx);
+      assert(gfx->shaders[MESA_SHADER_VERTEX] != NULL);
+      const struct intel_shader_info *info =
+         &gfx->shaders[MESA_SHADER_VERTEX]->bin->info;
 
       descriptor->draw_params =
-         ((vs_prog_data->uses_firstvertex || vs_prog_data->uses_baseinstance) ?
+         ((info->vs.uses_firstvertex || info->vs.uses_baseinstance) ?
           ANV_DGC_DRAW_PARAM_BASE_INSTANCE_VERTEX : 0) |
-         (vs_prog_data->uses_drawid ? ANV_DGC_DRAW_PARAM_DRAW_ID : 0);
+         (info->vs.uses_drawid ? ANV_DGC_DRAW_PARAM_DRAW_ID : 0);
    }
 
    anv_foreach_vk_stage(vk_stage, ANV_GRAPHICS_STAGE_BITS) {
@@ -113,10 +115,9 @@ anv_write_gfx_indirect_descriptor(struct anv_device *device,
          &gfx->shaders[stage]->bind_map;
       if (stage == MESA_SHADER_MESH &&
           intel_needs_workaround(device->info, 18019110168)) {
-         const struct brw_mesh_prog_data *mesh_prog_data = get_gfx_mesh_prog_data(gfx);
          descriptor->wa_18019110168_remapping_table_offset =
             gfx->shaders[MESA_SHADER_MESH]->kernel.offset +
-            mesh_prog_data->wa_18019110168_mapping_offset;
+            gfx->shaders[MESA_SHADER_MESH]->bin->info.mesh.wa_18019110168_mapping_offset;
       }
 
       if (stage == MESA_SHADER_MESH || stage == MESA_SHADER_TASK) {
@@ -164,20 +165,18 @@ write_cs_set_entry(struct anv_device *device,
    struct anv_dgc_cs_descriptor descriptor;
    anv_genX(device->info, write_cs_descriptor)(&descriptor, device, shader);
 
-   const struct brw_cs_prog_data *prog_data =
-      brw_cs_prog_data_const(shader->prog_data);
-
    if (device->info->verx10 < 125)
       anv_reloc_list_append(&indirect_set->relocs, &shader->relocs);
 
    memcpy(indirect_set->bo->map + entry * indirect_set->stride,
           &descriptor, sizeof(descriptor));
 
-   indirect_set->uses_systolic |= prog_data->uses_systolic;
+   indirect_set->uses_systolic |=
+      shader->bin->info.wg.uses_systolic;
    indirect_set->max_scratch = MAX2(indirect_set->max_scratch,
-                                    prog_data->base.total_scratch);
+                                    shader->bin->info.total_scratch);
    indirect_set->max_ray_queries = MAX2(indirect_set->max_ray_queries,
-                                        shader->prog_data->ray_queries);
+                                        shader->bin->info.ray_queries);
 }
 
 static void

@@ -7,6 +7,7 @@
 vulkan_lite_runtime_files = files(
   'rmv/vk_rmv_common.c',
   'rmv/vk_rmv_exporter.c',
+  'vk_app_workarounds.c',
   'vk_blend.c',
   'vk_buffer.c',
   'vk_buffer_view.c',
@@ -25,6 +26,7 @@ vulkan_lite_runtime_files = files(
   'vk_device_memory.c',
   'vk_fence.c',
   'vk_framebuffer.c',
+  'vk_frame_pacer.c',
   'vk_graphics_state.c',
   'vk_image.c',
   'vk_log.c',
@@ -71,7 +73,7 @@ vk_common_entrypoints = custom_target(
   command : [
     prog_python, '@INPUT0@', '--xml', '@INPUT1@', '--proto', '--weak',
     '--out-h', '@OUTPUT0@', '--out-c', '@OUTPUT1@', '--prefix', 'vk_common',
-    '--beta', with_vulkan_beta.to_string()
+    vulkan_gen_beta_arg,
   ],
   depend_files : vk_entrypoints_gen_depend_files,
 )
@@ -83,7 +85,7 @@ vk_cmd_queue = custom_target(
   command : [
     prog_python, '@INPUT0@', '--xml', '@INPUT1@',
     '--out-c', '@OUTPUT0@', '--out-h', '@OUTPUT1@',
-    '--beta', with_vulkan_beta.to_string()
+    vulkan_gen_beta_arg,
   ],
   depend_files : vk_cmd_queue_gen_depend_files,
 )
@@ -96,7 +98,7 @@ vk_cmd_enqueue_entrypoints = custom_target(
     prog_python, '@INPUT0@', '--xml', '@INPUT1@', '--proto', '--weak',
     '--out-h', '@OUTPUT0@', '--out-c', '@OUTPUT1@',
     '--prefix', 'vk_cmd_enqueue', '--prefix', 'vk_cmd_enqueue_unless_primary',
-    '--beta', with_vulkan_beta.to_string()
+    vulkan_gen_beta_arg,
   ],
   depend_files : vk_entrypoints_gen_depend_files,
 )
@@ -108,7 +110,7 @@ vk_dispatch_trampolines = custom_target(
   command : [
     prog_python, '@INPUT0@', '--xml', '@INPUT1@',
     '--out-c', '@OUTPUT0@', '--out-h', '@OUTPUT1@',
-    '--beta', with_vulkan_beta.to_string()
+    vulkan_gen_beta_arg,
   ],
   depend_files : vk_dispatch_trampolines_gen_depend_files,
 )
@@ -120,7 +122,7 @@ vk_physical_device_features = custom_target(
   command : [
     prog_python, '@INPUT0@', '--xml', '@INPUT1@',
     '--out-c', '@OUTPUT0@', '--out-h', '@OUTPUT1@',
-    '--beta', with_vulkan_beta.to_string()
+    vulkan_gen_beta_arg,
   ],
   depend_files : vk_physical_device_features_gen_depend_files,
 )
@@ -132,7 +134,7 @@ vk_physical_device_properties = custom_target(
   command : [
     prog_python, '@INPUT0@', '--xml', '@INPUT1@',
     '--out-c', '@OUTPUT0@', '--out-h', '@OUTPUT1@',
-    '--beta', with_vulkan_beta.to_string()
+    vulkan_gen_beta_arg,
   ],
   depend_files : vk_physical_device_properties_gen_depend_files,
 )
@@ -143,7 +145,7 @@ vk_physical_device_spirv_caps = custom_target(
   output : 'vk_physical_device_spirv_caps.c',
   command : [
     prog_python, '@INPUT0@', '--xml', '@INPUT1@',
-    '--out-c', '@OUTPUT0@', '--beta', with_vulkan_beta.to_string()
+    '--out-c', '@OUTPUT0@', vulkan_gen_beta_arg,
   ],
   depend_files : vk_physical_device_spirv_caps_gen_depend_files,
 )
@@ -155,7 +157,7 @@ vk_synchronization_helpers = custom_target(
   command : [
     prog_python, '@INPUT0@', '--xml', '@INPUT1@',
     '--out-c', '@OUTPUT0@',
-    '--beta', with_vulkan_beta.to_string()
+    vulkan_gen_beta_arg,
   ],
   depend_files : vk_synchronization_helpers_gen_depend_files,
 )
@@ -226,15 +228,8 @@ libvulkan_lite_instance = static_library(
 # - idep_vulkan_runtime_headers
 # - idep_vulkan_runtime
 idep_vulkan_lite_runtime_headers = declare_dependency(
-  sources : [
-    spirv_info_h,
-    vk_cmd_enqueue_entrypoints[0],
-    vk_cmd_queue[1],
-    vk_common_entrypoints[0],
-    vk_physical_device_features[1],
-    vk_physical_device_properties[1],
-  ],
   include_directories : include_directories('.'),
+  dependencies : [vulkan_lite_runtime_header_gen_deps]
 )
 
 # This is likely a bug in the Meson VS backend, as MSVC with ninja works fine.

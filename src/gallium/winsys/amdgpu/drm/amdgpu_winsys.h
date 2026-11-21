@@ -126,6 +126,22 @@ enum amdgpu_queue_index {
    AMDGPU_QUEUE_USES_ALT_FENCE = INT_MAX,
 };
 
+static inline enum amdgpu_queue_index amdgpu_ip_to_queue_index(enum amd_ip_type type, unsigned ctx_flags)
+{
+   switch (type) {
+   case AMD_IP_GFX:
+      return  (ctx_flags & (PIPE_CONTEXT_HIGH_PRIORITY | PIPE_CONTEXT_REALTIME_PRIORITY)) ?
+         AMDGPU_QUEUE_GFX_HIGH_PRIO : AMDGPU_QUEUE_GFX;
+   case AMD_IP_COMPUTE:
+      return AMDGPU_QUEUE_COMPUTE;
+   case AMD_IP_SDMA:
+      return AMDGPU_QUEUE_SDMA;
+   default:
+      UNREACHABLE("invalid IP type");
+      return AMDGPU_MAX_QUEUES;
+   }
+}
+
 extern char amdgpu_userq_str[AMDGPU_MAX_QUEUES][8];
 
 /* This can use any integer type because the logic handles integer wraparounds robustly, but
@@ -217,6 +233,8 @@ struct amdgpu_winsys {
 
    ac_drm_device *dev;
 
+   FILE *bo_history_logfile;
+
    simple_mtx_t bo_fence_lock;
    simple_mtx_t stats_lock;
 
@@ -246,16 +264,13 @@ struct amdgpu_winsys {
    bool check_vm;
    bool noop_cs;
    bool reserve_vmid;
-   bool zero_all_vram_allocs;
    bool ib_caches_flush;
-#if MESA_DEBUG
    bool debug_all_bos;
 
    /* List of all allocated buffers */
    simple_mtx_t global_bo_list_lock;
    struct list_head global_bo_list;
    unsigned num_buffers;
-#endif
 
    /* Single-linked list of all structs amdgpu_screen_winsys referencing this
     * struct amdgpu_winsys
@@ -282,6 +297,9 @@ struct amdgpu_winsys {
    uint32_t vm_timeline_syncobj;
    uint64_t vm_timeline_seq_num;
    simple_mtx_t vm_ioctl_lock;
+
+   /* The ctx that was used to set pstate. */
+   struct amdgpu_ctx *pstate_ctx;
 };
 
 static inline struct amdgpu_screen_winsys *

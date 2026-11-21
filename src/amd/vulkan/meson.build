@@ -23,8 +23,7 @@ idep_radv_tracepoints = declare_dependency(
 
 radv_entrypoints_gen_command = [
   prog_python, '@INPUT0@', '--xml', '@INPUT1@', '--proto', '--weak',
-  '--out-h', '@OUTPUT0@', '--out-c', '@OUTPUT1@',
-  '--beta', with_vulkan_beta.to_string()
+  '--out-h', '@OUTPUT0@', '--out-c', '@OUTPUT1@', vulkan_gen_beta_arg,
 ]
 
 radv_entrypoints_gen_command += [
@@ -112,7 +111,6 @@ libradv_files = files(
   'nir/radv_nir_lower_printf.c',
   'nir/radv_nir_lower_ray_queries.c',
   'nir/radv_nir_lower_vs_inputs.c',
-  'nir/radv_nir_opt_fs_builtins.c',
   'nir/radv_nir_opt_tid_function.c',
   'nir/radv_nir_remap_color_attachment.c',
   'nir/radv_nir_rt_common.c',
@@ -121,7 +119,6 @@ libradv_files = files(
   'nir/radv_nir_rt_stage_functions.c',
   'nir/radv_nir_rt_stage_monolithic.c',
   'nir/radv_nir_rt_traversal_shader.c',
-  'nir/radv_nir_trim_fs_exports.c',
   'tools/radv_debug_hang.c',
   'tools/radv_debug_hang.h',
   'tools/radv_debug_nir.c',
@@ -141,6 +138,7 @@ libradv_files = files(
   'radv_acceleration_structure.c',
   'radv_android.c',
   'radv_android.h',
+  'radv_anti_lag.c',
   'radv_buffer.c',
   'radv_buffer.h',
   'radv_buffer_view.c',
@@ -171,6 +169,8 @@ libradv_files = files(
   'radv_event.h',
   'radv_formats.c',
   'radv_formats.h',
+  'radv_graphics_state.c',
+  'radv_graphics_state.h',
   'radv_host_image_copy.c',
   'radv_image.c',
   'radv_image.h',
@@ -204,6 +204,10 @@ libradv_files = files(
   'radv_shader.h',
   'radv_shader_args.c',
   'radv_shader_args.h',
+  'radv_shader_compute.c',
+  'radv_shader_compute.h',
+  'radv_shader_graphics.c',
+  'radv_shader_graphics.h',
   'radv_shader_info.c',
   'radv_shader_info.h',
   'radv_shader_object.c',
@@ -229,7 +233,9 @@ if not with_platform_windows
   )
 endif
 
-if amd_with_llvm
+radv_with_llvm_backend = amd_with_llvm and not with_mesa_ndebug
+
+if radv_with_llvm_backend
   libradv_files += files(
     'radv_llvm_helper.cpp',
     'radv_llvm_helper.h',
@@ -244,9 +250,14 @@ subdir('layers')
 
 radv_deps = []
 radv_flags = cc.get_supported_arguments(['-Wimplicit-fallthrough', '-Wshadow'])
+radv_flags += '-DRADV_LLVM_BACKEND=@0@'.format(radv_with_llvm_backend.to_int())
 
 if with_amdgpu_virtio
   radv_flags += '-DHAVE_AMDGPU_VIRTIO'
+endif
+
+if with_amd_rdp
+  radv_flags += '-DRADV_SUPPORT_RDP'
 endif
 
 if with_platform_x11
@@ -284,7 +295,7 @@ libvulkan_radeon = shared_library(
     inc_util, inc_virtio_gpu
   ],
   link_with : [
-    libamd_common, libamd_common_llvm, libamdgpu_addrlib,
+    libamd_common, libamd_common_llvm, libamd_common_rdp, libamdgpu_addrlib,
   ],
   dependencies : [
     dep_llvm, dep_libdrm_amdgpu, dep_thread, dep_elf, dep_dl, dep_m,
@@ -368,7 +379,9 @@ if with_radv_tests
       'radv_tests',
       files(
         'nir/radv_nir_lower_hit_attrib_derefs.c',
+        'nir/radv_nir_lower_opt_fs_frag_pos.c',
         'tests/radv_nir_lower_hit_attrib_derefs_tests.cpp',
+        'tests/radv_nir_lower_opt_fs_frag_pos_tests.cpp',
         'tests/helpers.cpp',
         'tests/helpers.h',
         'tests/drirc.cpp',

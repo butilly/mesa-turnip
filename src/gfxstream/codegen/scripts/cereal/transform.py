@@ -1,6 +1,8 @@
 # Copyright 2018 Google LLC
 # SPDX-License-Identifier: MIT
 
+import re
+
 from .common.codegen import CodeGen
 from .common.vulkantypes import \
         VulkanCompoundType, VulkanAPI, makeVulkanTypeSimple, vulkanTypeNeedsTransform, vulkanTypeGetNeededTransformTypes, VulkanTypeIterator, iterateVulkanType, vulkanTypeforEachSubType, TRIVIAL_TRANSFORMED_TYPES, NON_TRIVIAL_TRANSFORMED_TYPES, TRANSFORMED_TYPES
@@ -89,6 +91,80 @@ def genTransformsForVulkanType(resourceTrackerVarName, structOrApiInfo, getExpr,
                 structOrApiInfo,
                 getExpr, getLen, cgen, variant=variant)
 
+# Structs whose pNext chain can contain a struct that needs a transform, either
+# directly or through its members. For all other structs, pNext alone does not
+# make them need a transform (or an encoder deep copy). VkImageCreateInfo and
+# VkMemoryAllocateInfo also need direct transforms; listing them here only
+# covers their pNext chains. Types are generated one feature at a time, so this
+# set cannot be computed before it is needed; VulkanTransform.onEnd() recomputes
+# it from the structextends of all dispatched extension structs and fails
+# generation if an entry is missing.
+PNEXT_TRANSFORM_ROOTS = frozenset([
+    "VkBufferCreateInfo",
+    "VkImageCreateInfo",
+    "VkImageFormatProperties2",
+    "VkMemoryAllocateInfo",
+    "VkPhysicalDeviceImageFormatInfo2",
+])
+
+def resolveStructInfo(typeInfo, typeName):
+    structInfo = typeInfo.structs.get(typeName)
+    if structInfo is None:
+        for suffix in ["KHR", "EXT", "NV", "AMD", "GOOGLE", "ANDROID"]:
+            if typeName.endswith(suffix) and typeName[:-len(suffix)] in typeInfo.structs:
+                return typeInfo.structs[typeName[:-len(suffix)]]
+    return structInfo
+
+def structNeedsTransform(typeInfo, typeName, pNextNeedsTransform, visited):
+    """Returns whether |typeName| needs a transform, directly or through its
+    members. |pNextNeedsTransform(structInfo, visited)| decides whether the
+    pNext chain of |structInfo| does. The generator and the
+    PNEXT_TRANSFORM_ROOTS check only differ in that rule, so the check stays
+    sound when other transform triggers are added here."""
+    if typeInfo is None or not typeInfo.isCompoundType(typeName):
+        return False
+    if typeName in TRANSFORMED_TYPES:
+        return True
+    if typeName in visited:
+        return False
+    visited.add(typeName)
+    structInfo = resolveStructInfo(typeInfo, typeName)
+    if structInfo is None:
+        return True
+    if structInfo.name in TRANSFORMED_TYPES or vulkanTypeNeedsTransform(structInfo):
+        return True
+    for member in structInfo.members:
+        if member.isTransformed:
+            return True
+        if member.isNextPointer():
+            if pNextNeedsTransform(structInfo, visited):
+                return True
+        elif structNeedsTransform(typeInfo, member.typeName, pNextNeedsTransform, visited):
+            return True
+    return False
+
+def compoundTypeNeedsTransform(typeInfo, typeName, visited=None):
+    return structNeedsTransform(
+        typeInfo, typeName,
+        lambda structInfo, _: structInfo.name in PNEXT_TRANSFORM_ROOTS,
+        set() if visited is None else visited)
+
+def computePNextTransformRoots(typeInfo, extensionStructs):
+    """Returns the structs whose pNext chain can contain one of
+    |extensionStructs| that needs a transform."""
+    extenders = {}
+    for name, info in extensionStructs.items():
+        for root in info.structExtendsExpr.split(","):
+            extenders.setdefault(root.strip(), []).append(name)
+
+    def pNextNeedsTransform(structInfo, visited):
+        return any(structNeedsTransform(typeInfo, ext, pNextNeedsTransform, visited)
+                   for ext in extenders.get(structInfo.name, []))
+
+    return set(root for root, exts in extenders.items()
+               if any(structNeedsTransform(typeInfo, ext, pNextNeedsTransform, set())
+                      for ext in exts))
+
 class TransformCodegen(VulkanTypeIterator):
     def __init__(self, cgen, inputVar, resourceTrackerVarName, prefix, variant):
         self.cgen = cgen
@@ -134,6 +210,8 @@ class TransformCodegen(VulkanTypeIterator):
         pass
 
     def onCompoundType(self, vulkanType):
+        if not vulkanType.isTransformed and not compoundTypeNeedsTransform(self.typeInfo, vulkanType.typeName):
+            return
 
         access = self.exprAccessor(vulkanType)
         lenAccess = self.lenAccessor(vulkanType)
@@ -147,6 +225,9 @@ class TransformCodegen(VulkanTypeIterator):
         if isPtr:
             self.cgen.beginIf(access)
 
+        if vulkanType.isTransformed:
+            directTransform(self.resourceTrackerVarName, vulkanType, self.exprAccessor, self.lenAccessor, self.cgen, variant=self.variant)
+
         if lenAccess is not None:
 
             loopVar = "i"
@@ -158,9 +239,6 @@ class TransformCodegen(VulkanTypeIterator):
             self.cgen.beginFor(forInit, forCond, forIncr)
 
         accessCasted = self.asNonConstCast(access, vulkanType)
-
-        if vulkanType.isTransformed:
-            directTransform(self.resourceTrackerVarName, vulkanType, self.exprAccessor, self.lenAccessor, self.cgen, variant=self.variant)
 
         self.cgen.funcCall(None, self.prefix + vulkanType.typeName,
                            [self.resourceTrackerVarName, accessCasted])
@@ -291,8 +369,6 @@ class VulkanTransform(VulkanWrapperGenerator):
 
                 def funcDefGenerator(cgen):
                     transformer.cgen = cgen
-                    for p in api.parameters:
-                        cgen.stmt("(void)%s" % p.paramName)
 
                     genTransformsForVulkanType(
                         self.resourceTrackerVarName,
@@ -307,6 +383,13 @@ class VulkanTransform(VulkanWrapperGenerator):
                             self.typeInfo, member,
                             transformer)
 
+                    bodyCode = cgen.swapCode()
+                    for p in api.parameters:
+                        if not re.search(r'(?<![.>])\b' + re.escape(p.paramName) + r'\b', bodyCode):
+                            cgen.stmt("(void)%s" % p.paramName)
+                    if bodyCode:
+                        cgen.line(bodyCode.rstrip("\n"))
+
                 self.module.appendHeader(
                     self.codegen.makeFuncDecl(api))
                 self.module.appendImpl(
@@ -318,6 +401,13 @@ class VulkanTransform(VulkanWrapperGenerator):
 
     def onEnd(self,):
         VulkanWrapperGenerator.onEnd(self)
+
+        missingRoots = computePNextTransformRoots(
+            self.typeInfo, self.extensionStructTypes) - PNEXT_TRANSFORM_ROOTS
+        if missingRoots:
+            raise RuntimeError(
+                "Add %s to PNEXT_TRANSFORM_ROOTS in transform.py: their pNext chains can "
+                "contain structs that need a transform." % ", ".join(sorted(missingRoots)))
 
         for (variant, prototype) in zip(self.variants, self.extensionTransformPrototypes):
             def forEachExtensionTransform(ext, castedAccess, cgen):

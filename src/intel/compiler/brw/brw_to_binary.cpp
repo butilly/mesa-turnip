@@ -26,9 +26,17 @@ namespace {
 class brw_generator
 {
 public:
+   unsigned get_output_size() const { return output_size; }
+   const intel_shader_reloc *get_relocs(unsigned *count) const {
+      *count = num_relocs;
+      return relocs;
+   }
+   unsigned const_data_offset = 0;
+   unsigned const_data_size = 0;
+   unsigned resume_sbt_offset = 0;
+
    brw_generator(const struct brw_compiler *compiler,
                 const struct brw_compile_params *params,
-                struct brw_stage_prog_data *prog_data,
                 mesa_shader_stage stage);
    ~brw_generator();
 
@@ -78,8 +86,6 @@ private:
    const struct brw_compile_params *params;
 
    const struct intel_device_info *devinfo;
-
-   struct brw_stage_prog_data * const prog_data;
 
    unsigned dispatch_width; /**< 8, 16 or 32 */
 
@@ -225,6 +231,7 @@ brw_opcode_to_gen(enum opcode op)
    case BRW_OPCODE_SEND:     return GEN_OP_SEND;
    case BRW_OPCODE_SENDC:    return GEN_OP_SENDC;
    case BRW_OPCODE_SENDG:    return GEN_OP_SENDG;
+   case BRW_OPCODE_SENDGC:   return GEN_OP_SENDGC;
    case BRW_OPCODE_SENDS:    return GEN_OP_SENDS;
    case BRW_OPCODE_SENDSC:   return GEN_OP_SENDSC;
    case BRW_OPCODE_SHL:      return GEN_OP_SHL;
@@ -356,12 +363,11 @@ normalize_brw_reg_for_encoding(brw_reg *reg)
 
 brw_generator::brw_generator(const struct brw_compiler *compiler,
                              const struct brw_compile_params *params,
-                             struct brw_stage_prog_data *prog_data,
                              mesa_shader_stage stage)
 
    : compiler(compiler), params(params),
      devinfo(compiler->devinfo),
-     prog_data(prog_data), dispatch_width(0),
+     dispatch_width(0),
      debug_flag(false),
      shader_name(NULL), stage(stage), mem_ctx(params->mem_ctx),
      next_annotation(NULL)
@@ -448,6 +454,7 @@ brw_generator::generate_send(brw_send_inst *inst,
    if (send->check_tdr) {
       if      (gen->opcode == GEN_OP_SEND)  gen->opcode = GEN_OP_SENDC;
       else if (gen->opcode == GEN_OP_SENDS) gen->opcode = GEN_OP_SENDSC;
+      else if (gen->opcode == GEN_OP_SENDG) gen->opcode = GEN_OP_SENDGC;
    }
 
    /* Serialize messages if needed */
@@ -2084,8 +2091,8 @@ brw_generator::generate_code(const brw_shader &s,
    }
 
    if (INTEL_DEBUG(DEBUG_SHADER_HASH)) {
-      append_MOV(retype(brw_null_reg(), BRW_TYPE_UD), brw_imm_ud(prog_data->source_hash & 0xffffffff));
-      append_MOV(retype(brw_null_reg(), BRW_TYPE_UD), brw_imm_ud(prog_data->source_hash >> 32));
+      append_MOV(retype(brw_null_reg(), BRW_TYPE_UD), brw_imm_ud(s.info.source_hash & 0xffffffff));
+      append_MOV(retype(brw_null_reg(), BRW_TYPE_UD), brw_imm_ud(s.info.source_hash >> 32));
    }
 
 #ifndef NDEBUG
@@ -2102,10 +2109,8 @@ brw_generator::generate_code(const brw_shader &s,
             gen.src[1].region = { 0, 1, 0 };
 
       }
-      if ((gen.dst.file == GEN_GRF || gen.dst.file == GEN_ARF) &&
-           gen.dst.region.hstride == 0) {
+      if (gen.dst.region.hstride == 0)
          gen.dst.region.hstride = 1;
-      }
    }
 
    /* Translate any pre-filled IMM branch sources from absolute indices
@@ -2128,7 +2133,14 @@ brw_generator::generate_code(const brw_shader &s,
     * shared function use.  Otherwise, subtle changes to scheduling or
     * register allocation could cause it to fluctuate wildly - and that
     * effect is already counted in spill/fill counts.
+    *
+    * If brw_opt_fill_and_spill forgets to update the spill count or fill
+    * count, send_count may count fewer total SENDs than the total spills and
+    * fills. This will cause some wild results in the SEND count shader stats.
     */
+   assert((unsigned)send_count >= (shader_stats.spill_count +
+                                   shader_stats.fill_count));
+
    send_count -= shader_stats.spill_count;
    send_count -= shader_stats.fill_count;
 
@@ -2263,7 +2275,7 @@ brw_generator::generate_code(const brw_shader &s,
       FILE *files[2] = { NULL, NULL };
 
       if (debug_flag && (!intel_shader_dump_filter ||
-                         (intel_shader_dump_filter && intel_shader_dump_filter == prog_data->source_hash)))
+                         (intel_shader_dump_filter && intel_shader_dump_filter == params->source_hash)))
          files[0] = stderr;
 
       if (params->archiver) {
@@ -2281,7 +2293,7 @@ brw_generator::generate_code(const brw_shader &s,
                  "Promoted %u constants. "
                  "GRF registers: %u. "
                  "Compacted %d to %d bytes (%.0f%%)\n",
-                 shader_name, prog_data->source_hash, blake3buf,
+                 shader_name, params->source_hash, blake3buf,
                  dispatch_width,
                  before_size / 16 - nop_count - sync_nop_count,
                  loop_count, perf.latency,
@@ -2290,7 +2302,7 @@ brw_generator::generate_code(const brw_shader &s,
                  send_count,
                  shader_stats.scheduler_mode,
                  shader_stats.promoted_constants,
-                 s.grf_used,
+                 s.info.grf_used,
                  before_size, after_size,
                  100.0f * (before_size - after_size) / before_size);
 
@@ -2315,7 +2327,7 @@ brw_generator::generate_code(const brw_shader &s,
          FILE *bin_dump =
             debug_archiver_start_file(
                params->archiver,
-               ralloc_asprintf(mem_ctx, "GEN%d/0.bin", dispatch_width));
+               ralloc_asprintf(mem_ctx, "BIN%d/0", dispatch_width));
          fwrite(output, 1, output_size, bin_dump);
          debug_archiver_finish_file(params->archiver);
       }
@@ -2348,10 +2360,10 @@ brw_generator::generate_code(const brw_shader &s,
       stats->cycles = perf.latency;
       stats->spills = shader_stats.spill_count;
       stats->fills = shader_stats.fill_count;
-      stats->scratch_memory_size = prog_data->total_scratch;
+      stats->scratch_memory_size = s.info.total_scratch;
       stats->max_live_registers = shader_stats.max_register_pressure;
-      stats->source_hash = prog_data->source_hash;
-      stats->grf_registers = devinfo->ver >= 30 ? s.grf_used : 0;
+      stats->source_hash = params->source_hash;
+      stats->grf_registers = devinfo->ver >= 30 ? s.info.grf_used : 0;
       stats->vrt_size =
          intel_vrt_register_file_size(devinfo, stats->source_hash, stats->grf_registers);
       stats->vrt_threads =
@@ -2366,9 +2378,10 @@ brw_generator::generate_code(const brw_shader &s,
          stats->push_constant_ranges = 0;
          stats->push_constant_registers = 0;
          for (uint32_t i = 0; i < 4; i++) {
-            stats->push_constant_ranges += prog_data->push_sizes[i] != 0;
+            stats->push_constant_ranges += params->push_layout.push_sizes[i] != 0;
             stats->push_constant_registers +=
-               DIV_ROUND_UP(prog_data->push_sizes[i], reg_unit(devinfo) * REG_SIZE);
+               DIV_ROUND_UP(params->push_layout.push_sizes[i],
+                            reg_unit(devinfo) * REG_SIZE);
          }
          break;
 
@@ -2378,10 +2391,11 @@ brw_generator::generate_code(const brw_shader &s,
           * shaders, post Gfx12.5 the shader has to pull the constant data.
           */
          stats->push_constant_ranges =
-            devinfo->verx10 < 125 ? (prog_data->push_sizes[0] != 0) : 0;
+            devinfo->verx10 < 125 ? (params->push_layout.push_sizes[0] != 0) : 0;
          stats->push_constant_registers =
             devinfo->verx10 < 125 ?
-            DIV_ROUND_UP(prog_data->push_sizes[0], reg_unit(devinfo) * REG_SIZE) : 0;
+            DIV_ROUND_UP(params->push_layout.push_sizes[0],
+                         reg_unit(devinfo) * REG_SIZE) : 0;
          break;
 
       case MESA_SHADER_MESH:
@@ -2410,7 +2424,7 @@ brw_generator::generate_code(const brw_shader &s,
          stats->max_dispatch_width = 0;
 
       if (mesa_shader_stage_uses_workgroup(stage))
-         stats->workgroup_memory_size = prog_data->total_shared;
+         stats->workgroup_memory_size = params->nir->info.shared_size;
       else
          stats->workgroup_memory_size = 0;
    }
@@ -2426,11 +2440,11 @@ brw_generator::generate_code(const brw_shader &s,
 void
 brw_generator::add_const_data(void *data, unsigned size)
 {
-   assert(prog_data->const_data_size == 0);
+   assert(const_data_size == 0);
 
    if (size > 0) {
-      prog_data->const_data_size = size;
-      prog_data->const_data_offset = append_output(data, size, 32);
+      const_data_size = size;
+      const_data_offset = append_output(data, size, 32);
    }
 }
 
@@ -2438,12 +2452,11 @@ void
 brw_generator::add_resume_sbt(unsigned num_resume_shaders, uint64_t *sbt)
 {
    assert(brw_shader_stage_is_bindless(stage));
-   struct brw_bs_prog_data *bs_prog_data = brw_bs_prog_data(prog_data);
    if (num_resume_shaders > 0) {
-      bs_prog_data->resume_sbt_offset =
+      resume_sbt_offset =
          append_output(sbt, num_resume_shaders * sizeof(uint64_t), 32);
       for (unsigned i = 0; i < num_resume_shaders; i++) {
-         size_t offset = bs_prog_data->resume_sbt_offset + i * sizeof(*sbt);
+         size_t offset = resume_sbt_offset + i * sizeof(*sbt);
          assert(offset <= UINT32_MAX);
          append_reloc({
             .id = INTEL_SHADER_RELOC_SHADER_START_OFFSET,
@@ -2458,16 +2471,11 @@ brw_generator::add_resume_sbt(unsigned num_resume_shaders, uint64_t *sbt)
 const unsigned *
 brw_generator::get_assembly()
 {
-   prog_data->relocs = relocs;
-   prog_data->num_relocs = num_relocs;
-
    /* TODO: Check if we really need this padding at the end. */
 
    /* Align final size with instruction size. */
    allocate_output(0, 16);
    assert(output_size % 16 == 0);
-
-   prog_data->program_size = output_size;
 
    return (unsigned *)output;
 }
@@ -2612,7 +2620,7 @@ brw_generator::append_reloc(const intel_shader_reloc &r)
 static uint64_t
 brw_bsr(const struct intel_device_info *devinfo,
         uint32_t offset, uint8_t simd_size, uint8_t local_arg_offset,
-        uint8_t grf_used)
+        unsigned grf_used)
 {
    assert(offset % 64 == 0);
    assert(simd_size == 8 || simd_size == 16);
@@ -2622,6 +2630,36 @@ brw_bsr(const struct intel_device_info *devinfo,
           offset |
           SET_BITS(simd_size == 8, 4, 4) |
           SET_BITS(local_arg_offset / 8, 2, 0);
+}
+
+static void
+brw_to_binary_merge_fs_info(struct intel_shader_info *dst,
+                            const struct intel_shader_info *src,
+                            unsigned prog_offset)
+{
+   dst->fs.dispatch_8 |= src->fs.dispatch_8;
+   dst->fs.dispatch_16 |= src->fs.dispatch_16;
+   dst->fs.dispatch_32 |= src->fs.dispatch_32;
+   dst->fs.uses_fs_config |= src->fs.uses_fs_config;
+   dst->fs.uses_nonperspective_interp_modes |=
+      src->fs.uses_nonperspective_interp_modes;
+   dst->fs.pulls_bary |= src->fs.pulls_bary;
+   dst->fs.has_side_effects |= src->fs.has_side_effects;
+
+   if (src->fs.dispatch_multi) {
+      dst->fs.dispatch_multi = src->fs.dispatch_multi;
+      dst->fs.max_polygons = src->fs.max_polygons;
+   }
+
+   if (src->fs.dispatch_16) {
+      dst->fs.prog_offset_16 = prog_offset;
+      dst->fs.dispatch_grf_start_reg_16 = src->fs.dispatch_grf_start_reg_16;
+   }
+
+   if (src->fs.dispatch_32) {
+      dst->fs.prog_offset_32 = prog_offset;
+      dst->fs.dispatch_grf_start_reg_32 = src->fs.dispatch_grf_start_reg_32;
+   }
 }
 
 static void
@@ -2636,7 +2674,7 @@ brw_to_binary_emit_shader(brw_generator &g,
       const char *debug_name =
          ralloc_asprintf(p->params->mem_ctx, "%s %s%s shader %s",
                          info->label ? info->label : "unnamed",
-                         _mesa_shader_stage_to_string(shader->prog_data->stage),
+                         _mesa_shader_stage_to_string(shader->stage),
                          resume_suffix ? resume_suffix : "",
                          info->name);
       g.enable_debug(debug_name);
@@ -2645,28 +2683,36 @@ brw_to_binary_emit_shader(brw_generator &g,
    shader->start_offset = g.generate_code(*shader, stats);
 }
 
-const unsigned *
+intel_shader_bin *
 brw_to_binary(const brw_to_binary_params *p)
 {
-   struct brw_stage_prog_data *prog_data = p->prog_data;
-   assert(prog_data);
+   const mesa_shader_stage stage = p->params->nir->info.stage;
 
-   brw_generator g(p->compiler, p->params, prog_data, prog_data->stage);
+   brw_generator g(p->compiler, p->params, stage);
 
-   struct genisa_stats *stats = p->params->stats;
+   struct genisa_stats stats[BRW_TO_BINARY_MAX_SHADERS] = {};
+   unsigned num_stats = 0;
+   const brw_shader *first_shader = NULL;
    for (unsigned i = 0; i < BRW_TO_BINARY_MAX_SHADERS; i++) {
       brw_shader *shader = p->shaders[i];
       if (shader == NULL)
          continue;
 
-      brw_to_binary_emit_shader(g, p, shader, stats, NULL);
+      assert(shader->payload().num_regs %
+             reg_unit(p->compiler->devinfo) == 0);
+      shader->info.dispatch_grf_start_reg =
+         shader->payload().num_regs / reg_unit(p->compiler->devinfo);
 
-      if (stats)
-         stats++;
+      if (first_shader == NULL)
+         first_shader = shader;
+      else
+         assert(shader->info.stage == first_shader->info.stage);
+
+      brw_to_binary_emit_shader(g, p, shader, &stats[num_stats++], NULL);
    }
 
    if (p->num_resume_shaders > 0) {
-      assert(brw_shader_stage_is_bindless(prog_data->stage));
+      assert(brw_shader_stage_is_bindless(stage));
       assert(p->resume_shaders != NULL);
 
       uint64_t *resume_sbt = ralloc_array(p->params->mem_ctx,
@@ -2682,7 +2728,7 @@ brw_to_binary(const brw_to_binary_params *p)
 
          resume_sbt[i] = brw_bsr(p->compiler->devinfo, shader->start_offset,
                                  shader->dispatch_width, 0,
-                                 shader->grf_used);
+                                 shader->info.grf_used);
       }
 
       g.add_resume_sbt(p->num_resume_shaders, resume_sbt);
@@ -2705,5 +2751,74 @@ brw_to_binary(const brw_to_binary_params *p)
       }
    }
 
-   return g.get_assembly();
+   const unsigned *code = g.get_assembly();
+
+   intel_shader_bin *bin =
+      rzalloc(p->params->mem_ctx, intel_shader_bin);
+   assert(first_shader != NULL);
+   assert(first_shader->info.stage == stage);
+   bin->info = first_shader->info;
+   for (unsigned i = 0; i < BRW_TO_BINARY_MAX_SHADERS; i++) {
+      brw_shader *shader = p->shaders[i];
+      if (shader == NULL)
+         continue;
+      bin->info.has_ubo_pull |= shader->info.has_ubo_pull;
+      bin->info.total_scratch =
+         MAX2(bin->info.total_scratch, shader->info.total_scratch);
+      bin->info.total_shared =
+         MAX2(bin->info.total_shared, shader->info.total_shared);
+      bin->info.grf_used = MAX2(bin->info.grf_used,
+                                shader->info.grf_used);
+
+      if (bin->info.stage == MESA_SHADER_FRAGMENT) {
+         brw_to_binary_merge_fs_info(&bin->info, &shader->info,
+                                     shader->start_offset);
+      }
+
+      if (mesa_shader_stage_uses_workgroup(bin->info.stage)) {
+         auto *dst = &bin->info.wg;
+         const auto *src = &shader->info.wg;
+         assert(memcmp(dst->local_size, src->local_size,
+                       sizeof(dst->local_size)) == 0);
+         dst->prog_mask |= src->prog_mask;
+         dst->prog_spilled |= src->prog_spilled;
+         dst->uses_barrier |= src->uses_barrier;
+         dst->uses_systolic |= src->uses_systolic;
+         u_foreach_bit(simd, src->prog_mask)
+            dst->prog_offset[simd] = shader->start_offset;
+      }
+
+      if (mesa_shader_stage_is_compute(bin->info.stage)) {
+         auto *dst = &bin->info.cs;
+         const auto *src = &shader->info.cs;
+         assert(dst->uses_btd_stack_ids == src->uses_btd_stack_ids);
+         assert(dst->force_simd32 == src->force_simd32);
+         assert(dst->generate_local_id == src->generate_local_id);
+         assert(dst->walk_order == src->walk_order);
+         assert(memcmp(&dst->push, &src->push, sizeof(dst->push)) == 0);
+         dst->uses_fence |= src->uses_fence;
+         dst->uses_sampler |= src->uses_sampler;
+      }
+   }
+   for (unsigned i = 0; i < p->num_resume_shaders; i++) {
+      bin->info.has_ubo_pull |= p->resume_shaders[i]->info.has_ubo_pull;
+      bin->info.total_scratch =
+         MAX2(bin->info.total_scratch,
+              p->resume_shaders[i]->info.total_scratch);
+   }
+   ralloc_steal(bin, (void *)code);
+   bin->code = code;
+   bin->code_size = g.get_output_size();
+   bin->info.const_data_offset = g.const_data_offset;
+   bin->info.const_data_size = g.const_data_size;
+   bin->relocs = g.get_relocs(&bin->num_relocs);
+   ralloc_steal(bin, (void *)bin->relocs);
+   if (brw_shader_stage_is_bindless(bin->info.stage))
+      bin->info.bs.resume_sbt_offset = g.resume_sbt_offset;
+
+   assert(num_stats <= ARRAY_SIZE(bin->stats));
+   memcpy(bin->stats, stats, num_stats * sizeof(stats[0]));
+   bin->num_stats = num_stats;
+
+   return bin;
 }

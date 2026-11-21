@@ -610,8 +610,7 @@ void vk_${type}_dispatch_table_from_entrypoints(
         memset(dispatch_table, 0, sizeof(*dispatch_table));
         for (unsigned i = 0; i < ARRAY_SIZE(${type}_compaction_table); i++) {
 #ifdef _MSC_VER
-            assert(entry[i] != NULL);
-            if (vk_function_is_stub(entry[i]))
+            if (entry[i] == NULL || vk_function_is_stub(entry[i]))
 #else
             if (entry[i] == NULL)
 #endif
@@ -624,8 +623,8 @@ void vk_${type}_dispatch_table_from_entrypoints(
         for (unsigned i = 0; i < ARRAY_SIZE(${type}_compaction_table); i++) {
             unsigned disp_index = ${type}_compaction_table[i];
 #ifdef _MSC_VER
-            assert(entry[i] != NULL);
-            if (disp[disp_index] == NULL && !vk_function_is_stub(entry[i]))
+            if (entry[i] != NULL &&
+                (disp[disp_index] == NULL || vk_function_is_stub(disp[disp_index])))
 #else
             if (disp[disp_index] == NULL)
 #endif
@@ -782,7 +781,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--out-c', help='Output C file.')
     parser.add_argument('--out-h', help='Output H file.')
-    parser.add_argument('--beta', required=True, help='Enable beta extensions.')
+    parser.add_argument('--beta', action='store_true',
+                        help='Enable beta extensions.')
     parser.add_argument('--xml',
                         help='Vulkan API XML file.',
                         required=True,

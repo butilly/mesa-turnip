@@ -126,8 +126,7 @@ void si_init_resource_fields(struct si_screen *sscreen, struct si_resource *res,
        res->b.b.flags & SI_RESOURCE_FLAG_GL2_BYPASS)
       res->flags |= RADEON_FLAG_GL2_BYPASS;
 
-   if (res->b.b.flags & SI_RESOURCE_FLAG_DISCARDABLE &&
-       sscreen->info.drm_major == 3 && sscreen->info.drm_minor >= 47) {
+   if (res->b.b.flags & SI_RESOURCE_FLAG_DISCARDABLE) {
       /* Assume VRAM, so that we can use BIG_PAGE. */
       assert(res->domains == RADEON_DOMAIN_VRAM);
       res->flags |= RADEON_FLAG_DISCARDABLE;
@@ -350,6 +349,9 @@ static void *si_buffer_get_transfer(struct pipe_context *ctx, struct pipe_resour
       transfer = slab_zalloc(&sctx->pool_transfers_unsync);
    else
       transfer = slab_zalloc(&sctx->pool_transfers);
+
+   if (!transfer)
+      return NULL;
 
    pipe_resource_reference(&transfer->b.b.resource, resource);
    transfer->b.b.usage = usage;

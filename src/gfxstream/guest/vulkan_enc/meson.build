@@ -18,8 +18,7 @@ gfxstream_vk_entrypoints = custom_target(
         '@OUTPUT1@',
         '--prefix',
         'gfxstream_vk',
-        '--beta',
-        with_vulkan_beta.to_string(),
+        vulkan_gen_beta_arg,
     ],
 )
 
@@ -29,7 +28,6 @@ files_lib_vulkan_enc = files(
     'GfxStreamVulkanConnection.cpp',
     'HostVisibleMemoryVirtualization.cpp',
     'ResourceTracker.cpp',
-    'Resources.cpp',
     'Validation.cpp',
     'VulkanStreamGuest.cpp',
     'gfxstream_vk_private.cpp',

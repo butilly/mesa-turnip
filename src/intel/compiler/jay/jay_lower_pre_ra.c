@@ -18,12 +18,9 @@
 /**
  * Vectors need to be allocated to contiguous registers. This means that a value
  * cannot appear in multiple channels of an instruction, as register allocation
- * would need to assign the same value to locations <X+i> and <X+j>. Scalars
- * don't have this restriction, except for SENDs because the hardware bans
- * repeated sources.
+ * would need to assign the same value to locations <X+i> and <X+j>.
  *
- * If a value appears in multiple positions, we emit copies so that each
- * can be register allocated in the correct position.
+ * If a value appears in multiple positions, we emit copies to legalize.
  */
 static void
 lower_contiguous_sources(jay_builder *b, jay_inst *I)
@@ -33,6 +30,18 @@ lower_contiguous_sources(jay_builder *b, jay_inst *I)
 
    jay_foreach_src(I, s) {
       if (jay_num_values(I->src[s]) > 1 || I->op == JAY_OPCODE_SEND) {
+         bool duplicate_vector = false;
+         for (unsigned i = 0; i < s; ++i) {
+            duplicate_vector |= jay_defs_equivalent(I->src[s], I->src[i]);
+         }
+
+         /* If the whole vector is reused as-is, there's no RA implication.
+          * However, for SENDs the hardware bans repeated sources.
+          */
+         if (duplicate_vector && I->op != JAY_OPCODE_SEND) {
+            continue;
+         }
+
          jay_foreach_index(I->src[s], c, index) {
             /* Search for the index */
             unsigned i;
@@ -45,7 +54,9 @@ lower_contiguous_sources(jay_builder *b, jay_inst *I)
                seen[nr_seen++] = index;
             } else {
                /* Insert a copy to access a duplicated index */
-               jay_def copy = jay_alloc_def(b, I->src[s].file, 1);
+               jay_def copy =
+                  jay_alloc_def(b, I->src[s].file,
+                                jay_size_to_bits(I->src[s].size), 1);
                jay_def x = jay_extract(I->src[s], c);
                x.negate = x.abs = false; /* XXX: rework modifiers */
                jay_MOV(b, copy, x);
@@ -89,13 +100,13 @@ lower_imm_to_ugpr(jay_builder *b,
     * The spiller should rematerialize constants where necessary to ensure we
     * don't lose the wave, but we could still probably optimize this.
     */
-   jay_def x = jay_alloc_def(b, UGPR, is_64bit ? 2 : 1);
+   jay_def x = jay_alloc_def(b, UGPR, 32, is_64bit ? 2 : 1);
    _mesa_hash_table_u64_insert(constants, key, jay_MOV(b, x, imm));
    return x;
 }
 
-static bool
-try_swap_src01(jay_inst *I)
+bool
+jay_try_swap_src01(jay_inst *I)
 {
    if (I->op == JAY_OPCODE_SEL) {
       /* sel(a, b, p) = sel(b, a, !p) */
@@ -141,7 +152,7 @@ lower_immediates(jay_builder *b, jay_inst *I, struct hash_table_u64 *constants)
    if ((other < I->num_srcs && jay_is_imm(I->src[other])) &&
        !_mesa_hash_table_u64_search(constants, jay_as_uint(I->src[other]))) {
 
-      try_swap_src01(I);
+      jay_try_swap_src01(I);
    }
 
    /* Immediates allowed only in certain cases, lower the rest */
@@ -163,10 +174,15 @@ lower_immediates(jay_builder *b, jay_inst *I, struct hash_table_u64 *constants)
                        I->op == JAY_OPCODE_DP4A_UU ||
                        (ver >= 12 && I->op == JAY_OPCODE_BFE);
 
+            uint32_t imm = jay_as_uint(I->src[s]);
+            bool is_int = !jay_type_is_any_float(I->type);
+
             /* Gen9 does not support 3-src immediates */
             allowed &= ver >= 11 &&
-                       !jay_type_is_any_float(I->type) &&
-                       jay_as_uint(I->src[s]) <= UINT16_MAX;
+                       (is_int || I->type == JAY_TYPE_F16) &&
+                       (imm == (uint16_t) imm ||
+                        (jay_base_type(jay_src_type(I, s)) == JAY_TYPE_S &&
+                         (int16_t) imm == (int32_t) imm));
 
             /* MAD/DP4A can have at most one immediate source on Gfx11 */
             allowed &= (ver >= 12 || s == 0 || !jay_is_imm(I->src[0])) ||
@@ -189,7 +205,7 @@ lower_immediates(jay_builder *b, jay_inst *I, struct hash_table_u64 *constants)
 }
 
 static void
-lower_bf16_restrictions(jay_inst *I, jay_function *f)
+lower_bf16_restrictions(jay_builder *b, jay_inst *I)
 {
    /* BSpec 56640 disallows broadcast of bfloat16 scalar.
     * Insert a MOV to eliminate bfloat scalar broadcast.
@@ -198,9 +214,9 @@ lower_bf16_restrictions(jay_inst *I, jay_function *f)
       bool is_bf16 = jay_src_type(I, s) == JAY_TYPE_BF16;
       bool is_broadcast = I->src[s].file == UGPR;
       if (is_bf16 && is_broadcast && I->dst.file != UGPR) {
-         jay_builder b = jay_init_builder(f, jay_before_inst(I));
-         jay_def tmp = jay_alloc_def(&b, GPR, 1);
-         jay_MOV(&b, tmp, I->src[s]);
+         b->cursor = jay_before_inst(I);
+         jay_def tmp = jay_alloc_def(b, GPR, 32, 1);
+         jay_MOV(b, tmp, I->src[s]);
          jay_replace_src(&I->src[s], tmp);
       }
    }
@@ -224,7 +240,8 @@ lower_repeated_phi_srcs(jay_function *f,
       unsigned idx = jay_index(phi->src[0]);
       if (u_sparse_bitset_test(seen, idx)) {
          jay_builder b = jay_init_builder(f, jay_after_block_logical(block));
-         jay_def repl = jay_alloc_def(&b, phi->src[0].file, 1);
+         jay_def repl = jay_alloc_def(&b, phi->src[0].file,
+                                      jay_size_to_bits(phi->src[0].size), 1);
          jay_inst *mov = jay_MOV(&b, repl, phi->src[0]);
          if (jay_is_flag(phi->src[0])) {
             mov->type = jay_flag_type(f);
@@ -240,21 +257,36 @@ lower_repeated_phi_srcs(jay_function *f,
 }
 
 static void
-lower_ex_desc_address_registers(jay_inst *I, jay_function *f)
+lower_send_desc_address_registers(jay_builder *b, jay_inst *I)
 {
    if (I->op != JAY_OPCODE_SEND)
       return;
-   if (jay_is_null(I->src[1]) || jay_is_imm(I->src[1]))
-      return;
-   /* ex_desc should have been in a UGPR so we could have more easily performed
-    * optimizations with it. It doesn't need to be an address register yet since
-    * we're moving it to one here.
-    */
-   assert(I->src[1].file == UGPR);
-   jay_builder b = jay_init_builder(f, jay_before_inst(I));
-   jay_def tmp = jay_alloc_def(&b, J_ADDRESS, 1);
-   jay_MOV(&b, tmp, I->src[1]);
-   jay_replace_src(&I->src[1], tmp);
+
+   for (unsigned i = 0; i < 2; ++i) {
+      if (jay_is_null(I->src[i]))
+         continue;
+
+      /* desc/ex_desc should have been in a UGPR so we could have more easily
+       * performed optimizations with it. It doesn't need to be an address
+       * register yet since we're moving it to one here.
+       */
+      assert(jay_is_uniform(I->src[i]));
+
+      b->cursor = jay_before_inst(I);
+      jay_def tmp = jay_alloc_def(b, J_ADDRESS, 32, 1);
+
+      if (i == 0 || !jay_send_bindless(I)) {
+         jay_PACK_MLEN(b, tmp, I->src[i], jay_null());
+      } else {
+         /* We are using both an address register and the immediate portion of
+          * the SEND instruction. The message length will be packed into the
+          * immediate, so no PACK_MLEN is needed for the address register.
+          */
+         jay_MOV(b, tmp, I->src[i]);
+      }
+
+      jay_replace_src(&I->src[i], tmp);
+   }
 }
 
 void
@@ -279,11 +311,11 @@ jay_lower_pre_ra(jay_shader *s)
          }
 
          jay_foreach_inst_in_block(block, I) {
-            lower_ex_desc_address_registers(I, f);
-
             jay_builder b = { .shader = s, .func = f };
 
-            lower_bf16_restrictions(I, f);
+            lower_send_desc_address_registers(&b, I);
+
+            lower_bf16_restrictions(&b, I);
 
             /* We use predicated-default with flags to optimize OR/AND of
              * booleans. RA forcibly ties the flags for this case, so insert
@@ -291,7 +323,7 @@ jay_lower_pre_ra(jay_shader *s)
              */
             if (I->predication > 1) {
                b.cursor = jay_before_inst(I);
-               jay_def copy = jay_alloc_def(&b, FLAG, 1);
+               jay_def copy = jay_alloc_def(&b, FLAG, 32, 1);
                jay_MOV(&b, copy, I->src[I->num_srcs - 1])->type =
                   jay_flag_type(f);
                assert(jay_defs_equivalent(I->src[I->num_srcs - 1],

@@ -56,6 +56,9 @@ struct ir3_compiler_options {
    bool dual_color_blend_by_location;
 
    uint64_t uche_trap_base;
+
+   /* If draw_id should be lowered in nir */
+   bool lower_draw_id;
 };
 
 struct ir3_compiler {
@@ -95,8 +98,8 @@ struct ir3_compiler {
     */
    bool unminify_coords;
 
-   /* on a3xx do txf_ms w/ isaml and scaled coords: */
-   bool txf_ms_with_isaml;
+   /* on a3xx do txf_ms w/ isam and scaled coords: */
+   bool txf_ms_with_isam;
 
    /* on a4xx, for array textures we need to add 0.5 to the array
     * index coordinate:
@@ -212,6 +215,11 @@ struct ir3_compiler {
 
    /* True if preamble instructions (shps, shpe, etc.) are supported */
    bool has_preamble;
+
+   /* Whether UBO loads that aren't pushed to constants use ldc (and
+    * nir_lower_ubo_vec4), rather than ldg from IR3_CONST_ALLOC_UBO_PTRS.
+    */
+   bool has_ldc_ubos;
 
    /* Where the shared consts start in constants file, in vec4's. */
    uint16_t shared_consts_base_offset;

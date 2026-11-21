@@ -3,8 +3,8 @@
 
 use crate::ir::*;
 use compiler::cfg::CFG;
-use std::cmp::max;
 use std::cmp::Reverse;
+use std::cmp::max;
 
 pub mod graph {
     #[derive(Clone)]
@@ -414,19 +414,6 @@ pub struct FutureReadyInstr {
     /// The first cycle that the instruction can end executing
     pub ready_cycle: Reverse<u32>,
     pub index: usize,
-}
-
-impl FutureReadyInstr {
-    pub fn new<E>(g: &graph::Graph<NodeLabel, E>, i: usize) -> Self {
-        let label = &g.nodes[i].label;
-        // NodeLabel::ready_cycle is the earliest beginning cycle for the
-        // instruction, but we need the earliest end cycle for the instruction.
-        let ready_cycle = label.ready_cycle.saturating_sub(label.exec_latency);
-        FutureReadyInstr {
-            ready_cycle: Reverse(ready_cycle),
-            index: i,
-        }
-    }
 }
 
 #[allow(dead_code)]

@@ -42,7 +42,7 @@
  * Return the API bit (one of EGL_xxx_BIT) of the context.
  */
 static EGLint
-_eglGetContextAPIBit(_EGLContext *ctx)
+_eglGetContextAPIBit(struct _egl_context *ctx)
 {
    EGLint bit = 0;
 
@@ -79,7 +79,7 @@ _eglGetContextAPIBit(_EGLContext *ctx)
  * Parse the list of context attributes and return the proper error code.
  */
 static EGLint
-_eglParseContextAttribList(_EGLContext *ctx, _EGLDisplay *disp,
+_eglParseContextAttribList(struct _egl_context *ctx, struct _egl_display *disp,
                            const EGLint *attrib_list)
 {
    EGLenum api = ctx->ClientAPI;
@@ -641,7 +641,7 @@ _eglParseContextAttribList(_EGLContext *ctx, _EGLDisplay *disp,
 }
 
 /**
- * Initialize the given _EGLContext object to defaults and/or the values
+ * Initialize the given struct _egl_context object to defaults and/or the values
  * in the attrib_list.
  *
  * According to EGL 1.5 Section 3.7:
@@ -655,8 +655,8 @@ _eglParseContextAttribList(_EGLContext *ctx, _EGLDisplay *disp,
  * responsible for determining whether that's an API it supports.
  */
 EGLBoolean
-_eglInitContext(_EGLContext *ctx, _EGLDisplay *disp, _EGLConfig *conf,
-                _EGLContext *share_list, const EGLint *attrib_list)
+_eglInitContext(struct _egl_context *ctx, struct _egl_display *disp, struct _egl_config *conf,
+                struct _egl_context *share_list, const EGLint *attrib_list)
 {
    const EGLenum api = eglQueryAPI();
    EGLint err;
@@ -720,9 +720,9 @@ _eglInitContext(_EGLContext *ctx, _EGLDisplay *disp, _EGLConfig *conf,
 }
 
 static EGLint
-_eglQueryContextRenderBuffer(_EGLContext *ctx)
+_eglQueryContextRenderBuffer(struct _egl_context *ctx)
 {
-   _EGLSurface *surf = ctx->DrawSurface;
+   struct _egl_surface *surf = ctx->DrawSurface;
 
    /* From the EGL 1.5 spec:
     *
@@ -762,9 +762,9 @@ _eglQueryContextRenderBuffer(_EGLContext *ctx)
 }
 
 EGLBoolean
-_eglQueryContext(_EGLContext *c, EGLint attribute, EGLint *value)
+_eglQueryContext(struct _egl_context *c, EGLint attribute, EGLint *value)
 {
-   _EGLDisplay *disp = c->Resource.Display;
+   struct _egl_display *disp = c->Resource.Display;
    EGLenum api = c->ClientAPI;
 
    if (!value)
@@ -822,10 +822,10 @@ _eglQueryContext(_EGLContext *c, EGLint attribute, EGLint *value)
  *
  * Note that the context may be NULL.
  */
-_EGLContext *
-_eglBindContextToThread(_EGLContext *ctx, _EGLThreadInfo *t)
+struct _egl_context *
+_eglBindContextToThread(struct _egl_context *ctx, struct _egl_thread_info *t)
 {
-   _EGLContext *oldCtx;
+   struct _egl_context *oldCtx;
 
    oldCtx = t->CurrentContext;
    if (ctx != oldCtx) {
@@ -844,10 +844,10 @@ _eglBindContextToThread(_EGLContext *ctx, _EGLThreadInfo *t)
  * Return true if the given context and surfaces can be made current.
  */
 static EGLBoolean
-_eglCheckMakeCurrent(_EGLContext *ctx, _EGLSurface *draw, _EGLSurface *read)
+_eglCheckMakeCurrent(struct _egl_context *ctx, struct _egl_surface *draw, struct _egl_surface *read)
 {
-   _EGLThreadInfo *t = _eglGetCurrentThread();
-   _EGLDisplay *disp;
+   struct _egl_thread_info *t = _eglGetCurrentThread();
+   struct _egl_display *disp;
 
    /* this is easy */
    if (!ctx) {
@@ -909,13 +909,13 @@ _eglCheckMakeCurrent(_EGLContext *ctx, _EGLSurface *draw, _EGLSurface *read)
  * counts.
  */
 EGLBoolean
-_eglBindContext(_EGLContext *ctx, _EGLSurface *draw, _EGLSurface *read,
-                _EGLContext **old_ctx, _EGLSurface **old_draw,
-                _EGLSurface **old_read)
+_eglBindContext(struct _egl_context *ctx, struct _egl_surface *draw, struct _egl_surface *read,
+                struct _egl_context **old_ctx, struct _egl_surface **old_draw,
+                struct _egl_surface **old_read)
 {
-   _EGLThreadInfo *t = _eglGetCurrentThread();
-   _EGLContext *prev_ctx;
-   _EGLSurface *prev_draw, *prev_read;
+   struct _egl_thread_info *t = _eglGetCurrentThread();
+   struct _egl_context *prev_ctx;
+   struct _egl_surface *prev_draw, *prev_read;
 
    if (!_eglCheckMakeCurrent(ctx, draw, read))
       return EGL_FALSE;

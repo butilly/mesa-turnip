@@ -91,10 +91,35 @@ static bool
 fill_operation(struct teflon_delegate *delegate, TfLiteContext *tf_context, TfLiteNode *node, TfLiteRegistration *node_registration, struct pipe_ml_operation *operation)
 {
    struct pipe_tensor *tensors = delegate->tensors;
+   unsigned input_count = node->inputs->size;
 
-   operation->input_count = node->inputs->size;
+   /*
+    * The following ops have an optional final input (the bias).
+    * For instances with no bias, the tflite format allows the tensor to be
+    * left out of the list, or present with index -1 (kTfLiteOptionalTensor).
+    * Treat the -1 case as if the tensor is completely omitted.
+    */
+   switch (node_registration->builtin_code) {
+   case kTfLiteBuiltinConv2d:
+   case kTfLiteBuiltinDepthwiseConv2d:
+   case kTfLiteBuiltinFullyConnected:
+      if (input_count == 3 && node->inputs->data[2] < 0)
+         input_count = 2;
+      break;
+   }
+
+   /*
+    * We can't handle kTfLiteOptionalTensor in any other case
+    * (this likely indicates an invalid model).
+    */
+   for (unsigned i = 0; i < input_count; i++) {
+      if (node->inputs->data[i] < 0)
+         return false;
+   }
+
+   operation->input_count = input_count;
    operation->input_tensors = calloc(operation->input_count, sizeof(void *));
-   for (unsigned i = 0; i < node->inputs->size; i++)
+   for (unsigned i = 0; i < input_count; i++)
       operation->input_tensors[i] = &tensors[node->inputs->data[i]];
 
    operation->output_count = node->outputs->size;
@@ -107,7 +132,7 @@ fill_operation(struct teflon_delegate *delegate, TfLiteContext *tf_context, TfLi
    case kTfLiteBuiltinDepthwiseConv2d: {
       operation->type = PIPE_ML_OPERATION_TYPE_CONVOLUTION;
       operation->conv.weight_tensor = &tensors[node->inputs->data[1]];
-      operation->conv.bias_tensor = &tensors[node->inputs->data[2]];
+      operation->conv.bias_tensor = input_count > 2 ? operation->input_tensors[2] : NULL;
       if (node_registration->builtin_code == kTfLiteBuiltinConv2d) {
          TfLiteConvParams *params = (TfLiteConvParams *)node->builtin_data;
 
@@ -473,7 +498,7 @@ fill_operation(struct teflon_delegate *delegate, TfLiteContext *tf_context, TfLi
 
       operation->type = PIPE_ML_OPERATION_TYPE_FULLY_CONNECTED;
       operation->fcon.weight_tensor = &tensors[node->inputs->data[1]];
-      operation->fcon.bias_tensor = &tensors[node->inputs->data[2]];
+      operation->fcon.bias_tensor = input_count > 2 ? operation->input_tensors[2] : NULL;
       operation->fcon.relu = params->activation == kTfLiteActRelu;
       break;
    }
@@ -835,22 +860,44 @@ fill_tensor(struct teflon_delegate *delegate, TfLiteContext *tf_context, struct 
 }
 
 static void
-dump_graph(struct pipe_tensor *tensors, unsigned tensor_count, struct pipe_ml_operation *operations, unsigned operation_count)
+dump_used_tensors(struct pipe_tensor *tensors, unsigned tensor_count,
+                  struct pipe_ml_operation *operations,
+                  unsigned operation_count)
 {
-   teflon_debug("\n");
-   teflon_debug("teflon: compiling graph: %d tensors %d operations\n",
-                tensor_count, operation_count);
+   bool *used = calloc(tensor_count, sizeof(*used));
 
-   teflon_debug("%3s %-8s %3s %s %-12s\n", "idx", "scale", "zp", "has_data", "size");
+   for (unsigned i = 0; i < operation_count; i++) {
+      for (unsigned j = 0; j < operations[i].input_count; j++)
+         used[operations[i].input_tensors[j]->index] = true;
+      for (unsigned j = 0; j < operations[i].output_count; j++)
+         used[operations[i].output_tensors[j]->index] = true;
+   }
+
+   teflon_debug("%3s %-8s %4s %s %-12s\n", "idx", "scale", "zp", "has_data", "size");
    teflon_debug("=======================================\n");
-   for (int i = 0; i < tensor_count; i++) {
-      teflon_debug("%3d %6f %3x %-8s %dx%dx%dx%d\n",
+   for (unsigned i = 0; i < tensor_count; i++) {
+      if (!used[i])
+         continue;
+
+      teflon_debug("%3d %6f %4d %-8s %dx%dx%dx%d\n",
                    tensors[i].index,
                    tensors[i].scale,
                    tensors[i].zero_point,
                    tensors[i].data == NULL ? "no" : "yes",
                    tensors[i].dims[0], tensors[i].dims[1], tensors[i].dims[2], tensors[i].dims[3]);
    }
+
+   free(used);
+}
+
+static void
+dump_graph(struct pipe_tensor *tensors, unsigned tensor_count, struct pipe_ml_operation *operations, unsigned operation_count)
+{
+   teflon_debug("\n");
+   teflon_debug("teflon: compiling graph: %d tensors %d operations\n",
+                tensor_count, operation_count);
+
+   dump_used_tensors(tensors, tensor_count, operations, operation_count);
 
    teflon_debug("\n");
    teflon_debug("%3s %-15s %-20s %-20s\n", "idx", "type", "inputs", "outputs");
@@ -1554,8 +1601,14 @@ PrepareDelegate(TfLiteContext *tf_context, TfLiteDelegate *tf_delegate)
                    registration->version,
                    supported ? "supported" : "unsupported");
       for (int j = 0; j < node->inputs->size; j++) {
-         teflon_debug(" %d(%s)", node->inputs->data[j],
-                      tflite_type_name(tf_context->tensors[node->inputs->data[j]].type));
+         int tensor_idx = node->inputs->data[j];
+
+         if (tensor_idx < 0) {
+            teflon_debug(" %d(none)", tensor_idx);
+            continue;
+         }
+         teflon_debug(" %d(%s)", tensor_idx,
+                      tflite_type_name(tf_context->tensors[tensor_idx].type));
       }
       teflon_debug(" out:");
       for (int j = 0; j < node->outputs->size; j++) {

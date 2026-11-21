@@ -451,41 +451,46 @@ anv_device_init_rt_shaders(struct anv_device *device)
          anv_rt_debug_archiver_open(tmp_ctx, trampoline_nir,
                                     &trampoline_key, sizeof(trampoline_key));
 
-      struct brw_cs_prog_data trampoline_prog_data = {
-         .uses_btd_stack_ids = true,
-      };
-      struct brw_compile_cs_params params = {
-         .base = {
+      char *error_str = NULL;
+      const intel_shader_bin *bin;
+      if (intel_use_jay(device->info, trampoline_nir)) {
+         struct jay_compile_params params = {
+            .mem_ctx = tmp_ctx,
+            .nir = trampoline_nir,
+            .key = (union brw_any_prog_key *)&trampoline_key.key,
+            .cs.uses_btd_stack_ids = true,
+            .archiver = debug_archiver,
+            .error_str = &error_str,
+         };
+         bin = jay_compile(device->info, &params);
+      } else {
+         struct brw_compile_params params = {
+            .mem_ctx = tmp_ctx,
             .nir = trampoline_nir,
             .key = &trampoline_key.key.base,
-            .prog_data = (struct brw_stage_prog_data *)&trampoline_prog_data,
             .log_data = device,
-            .mem_ctx = tmp_ctx,
+            .cs.uses_btd_stack_ids = true,
             .archiver = debug_archiver,
-         },
-      };
+         };
 
-      const unsigned *tramp_data = NULL;
-      if (intel_use_jay(device->info, trampoline_nir)) {
-         struct jay_shader_bin *bin =
-            jay_compile(device->info, tmp_ctx, trampoline_nir,
-                        (union brw_any_prog_data *)&trampoline_prog_data,
-                        (union brw_any_prog_key *)&trampoline_key.key.base,
-                        debug_archiver, NULL);
+         bin = brw_compile(device->physical->compiler, &params);
+         error_str = params.error_str;
+      }
 
-         tramp_data = bin->kernel;
-      } else {
-         tramp_data = brw_compile(device->physical->compiler, &params.base);
+      if (!bin) {
+         VkResult result =
+            vk_errorf(device, VK_ERROR_UNKNOWN, "%s",
+                      error_str ?: "Shader compilation failed");
+         debug_archiver_close(debug_archiver);
+         ralloc_free(tmp_ctx);
+         return result;
       }
 
       struct anv_shader_upload_params upload_params = {
          .stage               = MESA_SHADER_COMPUTE,
          .key_data            = &trampoline_key,
          .key_size            = sizeof(trampoline_key),
-         .kernel_data         = tramp_data,
-         .kernel_size         = trampoline_prog_data.base.program_size,
-         .prog_data           = &trampoline_prog_data.base,
-         .prog_data_size      = sizeof(trampoline_prog_data),
+         .bin                 = bin,
          .bind_map            = &empty_bind_map,
          .push_desc_info      = &empty_push_desc_info,
       };
@@ -529,39 +534,44 @@ anv_device_init_rt_shaders(struct anv_device *device)
       NIR_PASS(_, trivial_return_nir, brw_nir_lower_rt_intrinsics,
                  &return_key.key.base, device->info);
 
-      struct brw_bs_prog_data return_prog_data = { 0, };
-      struct brw_compile_bs_params params = {
-         .base = {
+      char *error_str = NULL;
+      const intel_shader_bin *bin;
+      if (intel_use_jay(device->info, trivial_return_nir)) {
+         struct jay_compile_params params = {
+            .mem_ctx = tmp_ctx,
+            .nir = trivial_return_nir,
+            .key = (union brw_any_prog_key *)&return_key.key,
+            .archiver = debug_archiver,
+            .error_str = &error_str,
+         };
+         bin = jay_compile(device->info, &params);
+      } else {
+         struct brw_compile_params params = {
+            .mem_ctx = tmp_ctx,
             .nir = trivial_return_nir,
             .key = &return_key.key.base,
-            .prog_data = (struct brw_stage_prog_data *)&return_prog_data,
             .log_data = device,
-            .mem_ctx = tmp_ctx,
             .archiver = debug_archiver,
-         },
-      };
+         };
 
-      const unsigned *return_data = NULL;
-      if (intel_use_jay(device->info, trivial_return_nir)) {
-         struct jay_shader_bin *bin =
-            jay_compile(device->info, tmp_ctx, trivial_return_nir,
-                        (union brw_any_prog_data *)&return_prog_data,
-                        (union brw_any_prog_key *)&return_key.key.base,
-                        debug_archiver, NULL);
+         bin = brw_compile(device->physical->compiler, &params);
+         error_str = params.error_str;
+      }
 
-         return_data = bin->kernel;
-      } else {
-         return_data = brw_compile(device->physical->compiler, &params.base);
+      if (!bin) {
+         VkResult result =
+            vk_errorf(device, VK_ERROR_UNKNOWN, "%s",
+                      error_str ?: "Shader compilation failed");
+         debug_archiver_close(debug_archiver);
+         ralloc_free(tmp_ctx);
+         return result;
       }
 
       struct anv_shader_upload_params upload_params = {
          .stage               = MESA_SHADER_CALLABLE,
          .key_data            = &return_key,
          .key_size            = sizeof(return_key),
-         .kernel_data         = return_data,
-         .kernel_size         = return_prog_data.base.program_size,
-         .prog_data           = &return_prog_data.base,
-         .prog_data_size      = sizeof(return_prog_data),
+         .bin                 = bin,
          .bind_map            = &empty_bind_map,
          .push_desc_info      = &empty_push_desc_info,
       };
@@ -604,38 +614,42 @@ anv_device_init_rt_shaders(struct anv_device *device)
       NIR_PASS(_, null_ahs_nir, brw_nir_lower_rt_intrinsics,
                  &null_return_key.key.base, device->info);
 
-      struct brw_bs_prog_data return_prog_data = { 0, };
-      struct brw_compile_bs_params params = {
-         .base = {
+      char *error_str = NULL;
+      const intel_shader_bin *bin;
+      if (intel_use_jay(device->info, null_ahs_nir)) {
+         struct jay_compile_params params = {
+            .mem_ctx = tmp_ctx,
+            .nir = null_ahs_nir,
+            .key = (union brw_any_prog_key *)&null_return_key.key,
+            .archiver = debug_archiver,
+            .error_str = &error_str,
+         };
+         bin = jay_compile(device->info, &params);
+      } else {
+         struct brw_compile_params params = {
+            .mem_ctx = tmp_ctx,
             .nir = null_ahs_nir,
             .key = &null_return_key.key.base,
-            .prog_data = (struct brw_stage_prog_data *)&return_prog_data,
             .log_data = device,
-            .mem_ctx = tmp_ctx,
-         },
-      };
-      const unsigned *return_data = NULL;
-      if (intel_use_jay(device->info, null_ahs_nir)) {
-         struct jay_shader_bin *bin =
-            jay_compile(device->info, tmp_ctx, null_ahs_nir,
-                        (union brw_any_prog_data *)&return_prog_data,
-                        (union brw_any_prog_key *)&null_return_key.key.base,
-                        debug_archiver, NULL);
-
-         return_data = bin->kernel;
-      } else {
-         return_data = brw_compile(device->physical->compiler, &params.base);
+         };
+         bin = brw_compile(device->physical->compiler, &params);
+         error_str = params.error_str;
       }
 
+      if (!bin) {
+         VkResult result =
+            vk_errorf(device, VK_ERROR_UNKNOWN, "%s",
+                      error_str ?: "Shader compilation failed");
+         debug_archiver_close(debug_archiver);
+         ralloc_free(tmp_ctx);
+         return result;
+      }
 
       struct anv_shader_upload_params upload_params = {
          .stage               = MESA_SHADER_CALLABLE,
          .key_data            = &null_return_key,
          .key_size            = sizeof(null_return_key),
-         .kernel_data         = return_data,
-         .kernel_size         = return_prog_data.base.program_size,
-         .prog_data           = &return_prog_data.base,
-         .prog_data_size      = sizeof(return_prog_data),
+         .bin                 = bin,
          .bind_map            = &empty_bind_map,
          .push_desc_info      = &empty_push_desc_info,
       };
