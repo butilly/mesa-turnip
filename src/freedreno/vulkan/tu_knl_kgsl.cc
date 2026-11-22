@@ -62,7 +62,7 @@ kgsl_submitqueue_new(struct tu_device *dev, struct tu_queue *queue)
 
    queue->msm_queue_id = req.drawctxt_id;
 
-   mesa_logi("TU-LOSS diagnostic enabled: KGSL queue=%u", queue->msm_queue_id);
+   mesa_logi("TU-WAIT-FIX enabled: KGSL queue=%u", queue->msm_queue_id);
 
    return 0;
 }
@@ -832,7 +832,7 @@ get_relative_ms(uint64_t abs_timeout_ns)
  * which could lead to waiting substantially longer than requested
  */
 static VkResult
-wait_timestamp_safe(int fd,
+wait_timestamp_safe(struct tu_device *device,
                     unsigned int context_id,
                     unsigned int timestamp,
                     uint64_t abs_timeout_ns)
@@ -844,7 +844,7 @@ wait_timestamp_safe(int fd,
    };
 
    while (true) {
-      int ret = ioctl(fd, IOCTL_KGSL_DEVICE_WAITTIMESTAMP_CTXTID, &wait);
+      int ret = ioctl(device->fd, IOCTL_KGSL_DEVICE_WAITTIMESTAMP_CTXTID, &wait);
 
       if (ret == -1 && (errno == EINTR || errno == EAGAIN)) {
          int timeout_ms = get_relative_ms(abs_timeout_ns);
@@ -856,13 +856,36 @@ wait_timestamp_safe(int fd,
          wait.timeout = timeout_ms;
       } else if (ret == -1) {
          const int saved_errno = errno;
-         if (saved_errno != ETIMEDOUT) {
-            mesa_loge("TU-LOSS WAITTIMESTAMP: queue=%u timestamp=%u errno=%d (%s)",
-                      context_id, timestamp, saved_errno, strerror(saved_errno));
-            errno = saved_errno;
+         if (saved_errno == ETIMEDOUT)
+            return VK_TIMEOUT;
+
+         /* A faulted KGSL context can return EPROTO.  Reporting that as a
+          * timeout leaves callers retrying a fence that cannot complete.
+          * Snapshot progress before marking the device lost, since the
+          * application's loss handling may immediately destroy the context.
+          */
+         mesa_loge("TU-LOSS WAITTIMESTAMP: queue=%u timestamp=%u errno=%d (%s)",
+                   context_id, timestamp, saved_errno, strerror(saved_errno));
+         const unsigned types[] = {
+            KGSL_TIMESTAMP_CONSUMED, KGSL_TIMESTAMP_RETIRED,
+         };
+         for (unsigned type : types) {
+            struct kgsl_cmdstream_readtimestamp_ctxtid progress = {
+               .context_id = context_id,
+               .type = type,
+            };
+            int progress_ret = safe_ioctl(device->fd,
+               IOCTL_KGSL_CMDSTREAM_READTIMESTAMP_CTXTID, &progress);
+            const int progress_errno = progress_ret ? errno : 0;
+            mesa_loge("TU-LOSS PROGRESS: queue=%u waited=%u type=%s "
+                      "timestamp=%u errno=%d",
+                      context_id, timestamp,
+                      type == KGSL_TIMESTAMP_CONSUMED ? "consumed" : "retired",
+                      progress.timestamp, progress_errno);
          }
-         assert(errno == ETIMEDOUT);
-         return VK_TIMEOUT;
+         return vk_device_set_lost(&device->vk,
+            "KGSL timestamp wait failed: queue=%u timestamp=%u errno=%d (%s)",
+            context_id, timestamp, saved_errno, strerror(saved_errno));
       } else {
          return VK_SUCCESS;
       }
@@ -875,7 +898,7 @@ kgsl_queue_wait_fence(struct tu_queue *queue, uint32_t fence,
 {
    uint64_t abs_timeout_ns = os_time_get_nano() + timeout_ns;
 
-   return wait_timestamp_safe(queue->device->fd, queue->msm_queue_id,
+   return wait_timestamp_safe(queue->device, queue->msm_queue_id,
                               fence, abs_timeout_ns);
 }
 
@@ -924,7 +947,7 @@ kgsl_syncobj_wait(struct tu_device *device,
       return VK_TIMEOUT;
 
    case KGSL_SYNCOBJ_STATE_TS: {
-      return wait_timestamp_safe(device->fd, s->queue->msm_queue_id,
+      return wait_timestamp_safe(device, s->queue->msm_queue_id,
                                  s->timestamp, abs_timeout_ns);
    }
 
@@ -1028,7 +1051,7 @@ kgsl_syncobj_wait_any(struct tu_device* device, struct kgsl_syncobj **syncobjs, 
    }
 
    if (u_vector_length(&poll_fds) == 0) {
-      result = wait_timestamp_safe(device->fd, queue->msm_queue_id,
+      result = wait_timestamp_safe(device, queue->msm_queue_id,
                                    lowest_timestamp, MIN2(abs_timeout_ns, INT64_MAX));
    } else {
       int ret, i;
