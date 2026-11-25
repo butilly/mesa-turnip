@@ -28,6 +28,9 @@ def declare_options():
     ]
 
     perf_options = [
+        B("tu_force_sysmem", False,
+          "Force system-memory rendering instead of GMEM tiling",
+          c_name="force_sysmem"),
         B("tu_allow_concurrent_binning", False,
           "Allow concurrent binning on A7XX+, the CB is disabled by default because it regresses performance on desktop games",
           c_name="allow_concurrent_binning"),
