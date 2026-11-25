@@ -229,6 +229,12 @@ static void
 __debug_init(void)
 {
    ir3_shader_debug = debug_get_option_ir3_shader_debug();
+   /* This diagnostic replaces the oversized compute dump with breadcrumbs.
+    * Keep all code-generation debug flags unchanged.
+    */
+   ir3_shader_debug &= ~(IR3_DBG_SHADER_CS | IR3_DBG_DISASM);
+   fprintf(stderr, "[TU_CS_DIAG] gen8 compiler diagnostic active; compute dumps suppressed\n");
+   fflush(stderr);
    ir3_shader_override_path =
       __normal_user() ? debug_get_option_ir3_shader_override_path() : NULL;
 

@@ -435,17 +435,36 @@ assemble_variant(struct ir3_shader_variant *v, bool internal)
    }
 }
 
+void
+ir3_shader_diag(const nir_shader *nir, const char *phase)
+{
+   static unsigned lines;
+   const char *label = nir->info.label;
+   if (!label || (strcmp(label, "c0038ebf1ebe2cf2.dxil") &&
+                  strcmp(label, "27a10d07e7fdb08d.dxil")))
+      return;
+   if (__atomic_fetch_add(&lines, 1, __ATOMIC_RELAXED) >= 512)
+      return;
+   fprintf(stderr, "[TU_CS_DIAG] shader=%s nir=%p phase=%s\n",
+           label, (const void *)nir, phase);
+   fflush(stderr);
+}
+
 static bool
 compile_variant(struct ir3_shader *shader, struct ir3_shader_variant *v)
 {
+   ir3_shader_diag(shader->nir, "ir3-compile-begin");
    int ret = ir3_compile_shader_nir(shader->compiler, shader, v);
+   ir3_shader_diag(shader->nir, ret ? "ir3-compile-failed" : "ir3-compile-end");
    if (ret) {
       mesa_loge("compile failed! (%s:%s)", shader->nir->info.name,
                 shader->nir->info.label);
       return false;
    }
 
+   ir3_shader_diag(shader->nir, "assemble-begin");
    assemble_variant(v, shader->nir->info.internal);
+   ir3_shader_diag(shader->nir, "assemble-end");
    if (!v->bin) {
       mesa_loge("assemble failed! (%s:%s)", shader->nir->info.name,
                 shader->nir->info.label);
