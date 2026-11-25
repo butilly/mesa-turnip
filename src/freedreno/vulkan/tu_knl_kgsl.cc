@@ -839,6 +839,12 @@ wait_timestamp_safe(int fd,
 
          wait.timeout = timeout_ms;
       } else if (ret == -1) {
+         if (errno != ETIMEDOUT) {
+            const int wait_errno = errno;
+            mesa_loge("TU-DIAG WAITTIMESTAMP queue=%u timestamp=%u errno=%d (%s)",
+                      context_id, timestamp, wait_errno, strerror(wait_errno));
+            errno = wait_errno;
+         }
          assert(errno == ETIMEDOUT);
          return VK_TIMEOUT;
       } else {
@@ -1429,6 +1435,10 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
    struct tu_kgsl_queue_submit *submit =
       (struct tu_kgsl_queue_submit *)_submit;
 
+   p_atomic_set(&queue->diagnostic_ib_count,
+                util_dynarray_num_elements(&submit->commands,
+                                            struct kgsl_command_object));
+
 #if HAVE_PERFETTO
    uint64_t start_ts = tu_perfetto_begin_submit();
 #endif
@@ -1603,6 +1613,18 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
       ret = safe_ioctl(queue->device->physical_device->local_fd,
                        IOCTL_KGSL_GPU_COMMAND, &req);
 
+      if (ret) {
+         const int submit_errno = errno;
+         mesa_loge("TU-DIAG GPU_COMMAND queue=%u submit=%u command_buffers=%u "
+                   "ibs=%u waits=%u signals=%u last_fence=%d errno=%d (%s)",
+                   queue->msm_queue_id, queue->device->submit_count,
+                   p_atomic_read(&queue->diagnostic_command_buffer_count),
+                   req.numcmds, wait_count, signal_count,
+                   p_atomic_read(&queue->fence), submit_errno,
+                   strerror(submit_errno));
+         errno = submit_errno;
+      }
+
       timestamp = req.timestamp;
    } else {
       /* kgsl doesn't support multiple bind commands at once */
@@ -1635,6 +1657,13 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
                           IOCTL_KGSL_GPU_AUX_COMMAND, &req);
 
          if (ret) {
+            const int submit_errno = errno;
+            mesa_loge("TU-DIAG GPU_AUX_COMMAND queue=%u submit=%u "
+                      "command_buffers=0 bind_index=%u waits=%u signals=%u "
+                      "errno=%d (%s)", queue->msm_queue_id,
+                      queue->device->submit_count, i, wait_count, signal_count,
+                      submit_errno, strerror(submit_errno));
+            errno = submit_errno;
             result = vk_device_set_lost(&queue->device->vk,
                                         "bind submit failed: %s\n",
                                         strerror(errno));
@@ -1769,11 +1798,30 @@ kgsl_device_check_status(struct tu_device *device)
          uint32_t value = device->queues[i][q].msm_queue_id;
          VkResult status = get_kgsl_prop(device->fd, KGSL_PROP_GPU_RESET_STAT,
                                        &value, sizeof(value));
-         if (status != VK_SUCCESS)
+         if (status != VK_SUCCESS) {
+            const int status_errno = errno;
+            struct tu_queue *queue = &device->queues[i][q];
+            mesa_loge("TU-DIAG RESET_STAT query queue=%u submit=%u "
+                      "command_buffers=%u ibs=%u errno=%d (%s)",
+                      queue->msm_queue_id,
+                      p_atomic_read(&queue->diagnostic_submit_id),
+                      p_atomic_read(&queue->diagnostic_command_buffer_count),
+                      p_atomic_read(&queue->diagnostic_ib_count),
+                      status_errno, strerror(status_errno));
+            errno = status_errno;
             return vk_device_set_lost(&device->vk, "Failed to get GPU reset status");
+         }
 
          if (value != KGSL_CTX_STAT_NO_ERROR &&
             value != KGSL_CTX_STAT_INNOCENT_CONTEXT_RESET_EXT) {
+            struct tu_queue *queue = &device->queues[i][q];
+            mesa_loge("TU-DIAG RESET_STAT fault queue=%u submit=%u "
+                      "command_buffers=%u ibs=%u last_fence=%d reset_status=%u errno=0",
+                      queue->msm_queue_id,
+                      p_atomic_read(&queue->diagnostic_submit_id),
+                      p_atomic_read(&queue->diagnostic_command_buffer_count),
+                      p_atomic_read(&queue->diagnostic_ib_count),
+                      p_atomic_read(&queue->fence), value);
             return vk_device_set_lost(&device->vk, "GPU faulted or hung");
          }
       }
