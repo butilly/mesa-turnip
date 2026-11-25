@@ -36,6 +36,7 @@
 #include "vk_util.h"
 #include "util/compiler.h"
 #include "util/detect_os.h"
+#include "util/log.h"
 #include "util/u_debug.h"
 #include "util/hash_table.h"
 #include "util/perf/cpu_trace.h"
@@ -438,6 +439,13 @@ _vk_device_set_lost(struct vk_device *device,
 
    va_list ap;
    va_start(ap, msg);
+   va_list diagnostic_ap;
+   va_copy(diagnostic_ap, ap);
+   char diagnostic_msg[512];
+   vsnprintf(diagnostic_msg, sizeof(diagnostic_msg), msg, diagnostic_ap);
+   va_end(diagnostic_ap);
+   mesa_loge("TU-LOSS-DIAG device=%p source=%s:%d reason=%s",
+             (void *)device, file, line, diagnostic_msg);
    __vk_errorv(device, VK_ERROR_DEVICE_LOST, file, line, msg, ap);
    va_end(ap);
 
