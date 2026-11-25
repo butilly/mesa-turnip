@@ -1416,6 +1416,11 @@ use_sysmem_rendering(struct tu_cmd_buffer *cmd,
                      tu_autotune::rp_ctx_t *rp_ctx,
                      tu_autotune::rp_key_opt rp_key)
 {
+   if (cmd->device->instance->drirc.perf.force_sysmem) {
+      cmd->state.rp.force_render_mode_reason = "tu_force_sysmem";
+      return true;
+   }
+
    if (TU_DEBUG(SYSMEM)) {
       cmd->state.rp.force_render_mode_reason = "TU_DEBUG(SYSMEM)";
       return true;
