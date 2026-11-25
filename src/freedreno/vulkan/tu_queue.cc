@@ -9,6 +9,8 @@
 
 #include "tu_queue.h"
 
+#include <unistd.h>
+
 #include "vk_util.h"
 
 #include "tu_buffer.h"
@@ -557,6 +559,25 @@ queue_submit(struct vk_queue *_queue, struct vk_queue_submit *vk_submit)
       tu_queue_submit(queue, submit, vk_submit->waits, vk_submit->wait_count,
                       vk_submit->signals, vk_submit->signal_count,
                       u_trace_submission_data);
+
+   if (device->submit_count < 8 ||
+       (device->submit_count <= 8192 &&
+        (device->submit_count & (device->submit_count - 1)) == 0)) {
+      uint64_t renderpasses = 0, dispatches = 0;
+      for (uint32_t i = 0; i < cmdbuf_count; i++) {
+         renderpasses += cmd_buffers[i]->state.total_renderpasses;
+         dispatches += cmd_buffers[i]->state.total_dispatches;
+      }
+      fprintf(stderr,
+              "TU-CIV5-DIAG submit pid=%d instance=%u device=%u appName=%s queue=%u submit=%u "
+              "cmdbufs=%u renderpasses=%" PRIu64 " dispatches=%" PRIu64
+              " waits=%u signals=%u traceEnabled=%u tracePoints=%u result=%d\n",
+              (int) getpid(), device->instance->instance_idx, device->device_idx,
+              device->instance->vk.app_info.app_name ? device->instance->vk.app_info.app_name : "unknown",
+              queue->msm_queue_id, device->submit_count, cmdbuf_count,
+              renderpasses, dispatches, vk_submit->wait_count, vk_submit->signal_count,
+              (unsigned) u_trace_enabled, (unsigned) has_trace_points, (int) result);
+   }
 
    if (result != VK_SUCCESS) {
       pthread_mutex_unlock(&device->submit_mutex);

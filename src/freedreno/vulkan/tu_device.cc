@@ -9,6 +9,8 @@
 
 #include "tu_device.h"
 
+#include <unistd.h>
+
 #include "drm-uapi/drm_fourcc.h"
 #include "git_sha1.h"
 #include "perfcntrs/freedreno_perfcntr.h"
@@ -2056,6 +2058,14 @@ tu_CreateInstance(const VkInstanceCreateInfo *pCreateInfo,
 
    tu_init_dri_options(instance);
 
+   fprintf(stderr,
+           "TU-CIV5-DIAG instance pid=%d instance=%u appName=%s engineName=%s nativeBits=%zu build="
+           PACKAGE_VERSION MESA_GIT_SHA1 "\n",
+           (int) getpid(), instance->instance_idx,
+           instance->vk.app_info.app_name ? instance->vk.app_info.app_name : "unknown",
+           instance->vk.app_info.engine_name ? instance->vk.app_info.engine_name : "unknown",
+           sizeof(void *) * 8);
+
    *pInstance = tu_instance_to_handle(instance);
 
 #ifdef HAVE_PERFETTO
@@ -3318,6 +3328,15 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
    device->vk.cmd_fill_buffer_addr = tu_cmd_fill_buffer_addr;
 
    device->vis_stream_count = 0;
+
+   fprintf(stderr,
+           "TU-CIV5-DIAG device pid=%d instance=%u device=%u appName=%s chip=%" PRIx64
+           " TUdebugFlags=%s IR3debugFlags=%s traceMask=0x%x lrz=%u\n",
+           (int) getpid(), device->instance->instance_idx, device->device_idx,
+           device->instance->vk.app_info.app_name ? device->instance->vk.app_info.app_name : "unknown",
+           physical_device->dev_id.chip_id, tu_env_debug_as_string(),
+           ir3_shader_debug_as_string(), (unsigned) device->trace_context.enabled_traces,
+           (unsigned) device->use_lrz);
 
    *pDevice = tu_device_to_handle(device);
    return VK_SUCCESS;
