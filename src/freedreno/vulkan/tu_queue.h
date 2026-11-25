@@ -36,6 +36,12 @@ struct tu_queue
    unsigned render_pass_idx;
 
    int fence;           /* timestamp/fence of the last queue submission */
+
+   /* Diagnostic only: atomic pair of latest attempted submit ID and Vulkan
+    * command-buffer count. A reset may belong to an older in-flight submit.
+    */
+   uint64_t diagnostic_submit;
+   uint32_t diagnostic_reset_reported;
 };
 VK_DEFINE_HANDLE_CASTS(tu_queue, vk.base, VkQueue, VK_OBJECT_TYPE_QUEUE)
 
