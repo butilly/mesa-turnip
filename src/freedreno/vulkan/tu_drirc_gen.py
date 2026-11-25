@@ -22,6 +22,12 @@ def declare_options():
     EV = drirc_gen.DrircEnumValue
 
     debug_options = [
+        B("tu_gen8_flush_all", False,
+          "Diagnostic full cache clean and invalidate at Gen8 flush points",
+          c_name="gen8_flush_all"),
+        B("tu_gen8_sync_draw", False,
+          "Diagnostic execution waits at Gen8 cache flush points",
+          c_name="gen8_sync_draw"),
         B("tu_dont_care_as_load", False,
           "Treat VK_ATTACHMENT_LOAD_OP_DONT_CARE as LOAD_OP_LOAD, workaround on tiler GPUs for games that confuse these two load ops",
           c_name="dont_care_as_load")
