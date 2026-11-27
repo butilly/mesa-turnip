@@ -853,6 +853,9 @@ wait_timestamp_safe(int fd,
 
          wait.timeout = timeout_ms;
       } else if (ret == -1) {
+         if (errno != ETIMEDOUT)
+            mesa_loge_once("KGSL timestamp wait: context=%u timestamp=%u errno=%d",
+                           context_id, timestamp, errno);
          assert(errno == ETIMEDOUT);
          return VK_TIMEOUT;
       } else {
@@ -1788,6 +1791,8 @@ kgsl_device_check_status(struct tu_device *device)
 
          if (value != KGSL_CTX_STAT_NO_ERROR &&
             value != KGSL_CTX_STAT_INNOCENT_CONTEXT_RESET_EXT) {
+            mesa_loge("KGSL reset: context=%u status=%u",
+                      device->queues[i][q].msm_queue_id, value);
             return vk_device_set_lost(&device->vk, "GPU faulted or hung");
          }
       }
