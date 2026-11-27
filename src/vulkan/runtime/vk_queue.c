@@ -34,6 +34,7 @@
 #include "vk_device.h"
 #include "vk_fence.h"
 #include "vk_log.h"
+#include "util/log.h"
 #include "vk_physical_device.h"
 #include "vk_semaphore.h"
 #include "vk_sync.h"
@@ -130,6 +131,9 @@ _vk_queue_set_lost(struct vk_queue *queue,
    va_start(ap, msg);
    vsnprintf(queue->_lost.error_msg, sizeof(queue->_lost.error_msg), msg, ap);
    va_end(ap);
+
+   mesa_loge("Vulkan queue loss at %s:%d: %s", file, line,
+             queue->_lost.error_msg);
 
    p_atomic_inc(&queue->base.device->_lost.lost);
 

@@ -28,6 +28,7 @@
 #include "vk_fence.h"
 #include "vk_instance.h"
 #include "vk_log.h"
+#include "util/log.h"
 #include "vk_physical_device.h"
 #include "vk_queue.h"
 #include "vk_semaphore.h"
@@ -437,6 +438,11 @@ _vk_device_set_lost(struct vk_device *device,
    device->_lost.reported = true;
 
    va_list ap;
+   va_start(ap, msg);
+   char reason[256];
+   vsnprintf(reason, sizeof(reason), msg ? msg : "unspecified", ap);
+   va_end(ap);
+   mesa_loge("Vulkan device loss at %s:%d: %s", file, line, reason);
    va_start(ap, msg);
    __vk_errorv(device, VK_ERROR_DEVICE_LOST, file, line, msg, ap);
    va_end(ap);
