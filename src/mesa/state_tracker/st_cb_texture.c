@@ -1091,9 +1091,24 @@ guess_and_alloc_texture(struct st_context *st,
                              firstImage->Depth2,
                              firstImage->Level,
                              &width, &height, &depth)) {
-      if (stImage->Width2 == u_minify(width, stImage->Level) &&
-          stImage->Height2 == u_minify(height, stImage->Level) &&
-          stImage->Depth2 == u_minify(depth, stImage->Level))
+      /* Compare the sizes as gallium sizes, because the GL height or depth
+       * of an array texture is its number of layers, which doesn't change
+       * between mipmap levels.
+       */
+      unsigned base_w, base_h, img_w, img_h;
+      uint16_t base_d, base_layers, img_d, img_layers;
+
+      st_gl_texture_dims_to_pipe_dims(stObj->Target, width, height, depth,
+                                      &base_w, &base_h, &base_d,
+                                      &base_layers);
+      st_gl_texture_dims_to_pipe_dims(stObj->Target, stImage->Width2,
+                                      stImage->Height2, stImage->Depth2,
+                                      &img_w, &img_h, &img_d, &img_layers);
+
+      if (img_w == u_minify(base_w, stImage->Level) &&
+          img_h == u_minify(base_h, stImage->Level) &&
+          img_d == u_minify(base_d, stImage->Level) &&
+          img_layers == base_layers)
          guessed_box = true;
    }
 
@@ -3344,9 +3359,9 @@ st_finalize_texture(struct gl_context *ctx,
     * can read a flag instead of re-deriving it on every call.
     */
    if (tObj->pt) {
-      enum pipe_format view_format = st_get_view_format(tObj);
-      tObj->needs_yuv_plane_views = (view_format != tObj->pt->format ||
-                                     util_format_is_yuv(view_format));
+      tObj->needs_yuv_plane_views =
+         st_needs_yuv_plane_views(st->screen, st_get_view_format(tObj),
+                                  tObj->pt);
    }
 
    /* Pull in any images not in the object's texture:
@@ -3381,6 +3396,9 @@ st_finalize_texture(struct gl_context *ctx,
                  stImage->Depth == depth)) {
                /* src image fits expected dest mipmap level size */
                copy_image_data_to_texture(st, tObj, level, stImage);
+               /* framebuffers rendering to the image have to follow it */
+               if (tObj->_RenderToTexture)
+                  ST_SET_FRAMEBUFFER_STATES(ctx->NewDriverState);
             }
          }
       }
@@ -3715,8 +3733,8 @@ st_TextureView(struct gl_context *ctx,
     * textures without computing this.
     */
    tex->needs_yuv_plane_views = tex->pt &&
-      (tex->surface_format != tex->pt->format ||
-       util_format_is_yuv(tex->surface_format));
+      st_needs_yuv_plane_views(st_context(ctx)->screen, tex->surface_format,
+                               tex->pt);
 
    tex->lastLevel = numLevels - 1;
 
@@ -3839,9 +3857,13 @@ st_SetTextureStorageForMemoryObject(struct gl_context *ctx,
                                     GLsizei height, GLsizei depth,
                                     GLuint64 offset, const char *func)
 {
-   return st_texture_storage(ctx, texObj, levels,
-                             width, height, depth,
-                             memObj, offset, func);
+   if (!st_texture_storage(ctx, texObj, levels,
+                           width, height, depth,
+                           memObj, offset, func))
+      return GL_FALSE;
+
+   texObj->FromMemoryObject = true;
+   return GL_TRUE;
 }
 
 GLboolean

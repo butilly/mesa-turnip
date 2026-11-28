@@ -14,14 +14,17 @@
 /* Common encoder utils */
 void mtl_end_encoding(void *encoder);
 void mtl_barrier_after_stages(void *encoder, enum mtl_stages after_stages,
-                              enum mtl_stages before_queue_stages);
+                              enum mtl_stages before_queue_stages,
+                              enum mtl_visibility_options visibility);
 void mtl_barrier_after_encoder_stages(void *encoder,
                                       enum mtl_stages after_stages,
-                                      enum mtl_stages before_queue_stages);
+                                      enum mtl_stages before_stages,
+                                      enum mtl_visibility_options visibility);
 
 void mtl_barrier_after_queue_stages(void *encoder,
                                     enum mtl_stages after_queue_stages,
-                                    enum mtl_stages before_stages);
+                                    enum mtl_stages before_stages,
+                                    enum mtl_visibility_options visibility);
 
 void mtl_update_fence(void *encoder, mtl_fence *fence,
                       enum mtl_stages after_stages);
@@ -64,12 +67,20 @@ void mtl_compute_set_pipeline_state(mtl_compute_encoder *encoder,
 void mtl_compute_set_argument_table(mtl_compute_encoder *encoder,
                                     mtl_argument_table *table);
 
+void mtl_set_threadgroup_memory_length(mtl_compute_encoder *encoder,
+                                       uint32_t length, uint32_t index);
+
 void mtl_dispatch_threads(mtl_compute_encoder *encoder,
                           struct mtl_size grid_size,
                           struct mtl_size local_size);
 
 void mtl_dispatch_threadgroups_with_indirect_buffer(
    mtl_compute_encoder *encoder, uint64_t addr, struct mtl_size local_size);
+
+void mtl_dispatch_threads_with_indirect_buffer(mtl_compute_encoder *encoder,
+                                               uint64_t addr);
+
+enum mtl_stages mtl_compute_used_stages(mtl_compute_encoder *encoder);
 
 /* MTLRenderEncoder */
 mtl_render_encoder *mtl_new_render_command_encoder_with_descriptor(

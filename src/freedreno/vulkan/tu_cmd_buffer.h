@@ -295,12 +295,13 @@ struct tu_vs_params {
    uint32_t first_instance;
    uint32_t draw_id;
    uint32_t view_index;
+   uint32_t draw_id_offset;
    /* Whether the last emitted params were for a SW multiview replay. Both the
     * size of the uploaded const and whether VFD registers are part of the draw
     * state depend on it, so it has to invalidate the cache below.
     */
    bool sw_multiview;
-   bool skip_vfd;
+   bool indirect;
    bool empty;
 };
 
@@ -495,7 +496,7 @@ struct tu_cmd_state
 
    struct tu_shader *shaders[MESA_SHADER_STAGES];
 
-   struct tu_program_state program;
+   const struct tu_program_state *program;
 
    struct tu_render_pass_state rp;
 
@@ -1035,6 +1036,9 @@ tu7_set_thread_br_patchpoint(struct tu_cmd_buffer *cmd,
 void
 tu7_set_thread_both_patchpoint(struct tu_cmd_buffer *cmd,
                                struct tu_cs *cs);
+
+void
+tu7_wait_for_rb_done(struct tu_cs *cs, enum cp_thread threads, bool clear);
 
 /* For bin offsetting we want to do "Euclidean division," where the remainder
  * (i.e. the offset of the bin) is always positive. Unfortunately C/C++

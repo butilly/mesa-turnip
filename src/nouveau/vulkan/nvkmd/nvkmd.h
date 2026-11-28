@@ -15,7 +15,6 @@
 
 #include <assert.h>
 #include <stdbool.h>
-#include <stdbool.h>
 #include <sys/types.h>
 
 struct nvkmd_ctx;
@@ -181,7 +180,8 @@ struct nvkmd_dev_ops {
 
    VkResult (*import_dma_buf)(struct nvkmd_dev *dev,
                               struct vk_object_base *log_obj,
-                              int fd, struct nvkmd_mem **mem_out);
+                              int fd, uint64_t va_align_B,
+                              struct nvkmd_mem **mem_out);
 
    VkResult (*alloc_va)(struct nvkmd_dev *dev,
                         struct vk_object_base *log_obj,
@@ -312,7 +312,7 @@ struct nvkmd_ctx_bind {
    struct nvkmd_va *va;
    uint64_t va_offset_B;
 
-   /* Ignored if op != NVK_BIND_OP_UNBIND */
+   /* Ignored if op != NVKMD_BIND_OP_BIND */
    struct nvkmd_mem *mem;
    uint64_t mem_offset_B;
 
@@ -462,7 +462,8 @@ nvkmd_dev_alloc_mapped_mem(struct nvkmd_dev *dev,
 VkResult MUST_CHECK
 nvkmd_dev_import_dma_buf(struct nvkmd_dev *dev,
                          struct vk_object_base *log_obj,
-                         int fd, struct nvkmd_mem **mem_out);
+                         int fd, uint64_t va_align_B,
+                         struct nvkmd_mem **mem_out);
 
 struct nvkmd_mem *
 nvkmd_dev_lookup_mem_by_va(struct nvkmd_dev *dev,

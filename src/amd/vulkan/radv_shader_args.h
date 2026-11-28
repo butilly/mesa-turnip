@@ -40,6 +40,7 @@ enum radv_ud_index {
    AC_UD_VS_PROLOG_INPUTS,
    AC_UD_VS_MAX_UD,
    AC_UD_PS_STATE,
+   AC_UD_PS_MSRTSS_INPUTS,
    AC_UD_PS_MAX_UD,
    AC_UD_CS_GRID_SIZE = AC_UD_SHADER_START,
    AC_UD_CS_SBT_DESCRIPTORS,
@@ -60,6 +61,32 @@ enum radv_ud_index {
    AC_UD_TES_MAX_UD = AC_UD_TCS_MAX_UD,
    AC_UD_MAX_UD = AC_UD_CS_MAX_UD,
 };
+
+/* AC_UD_PS_MSRTSS_INPUTS points to the following table, or is 0 if there is none:
+ *
+ *                   0 +--------------------------------+
+ *                     | mask                           |
+ *                   4 +--------------------------------+
+ *                     | ds_shared_mask                 |
+ *                   8 +--------------------------------+
+ *                     | unused, for 32-byte alignment  |
+ *                  32 +--------------------------------+
+ *                     | descriptor, slot 0             |
+ *      32 + desc_size +--------------------------------+
+ *                     | descriptor, slot 1             |
+ *                     +--------------------------------+
+ *                     | ...                            |
+ *                     +--------------------------------+
+ *                     | descriptor, slot N             |  N = popcount(mask) + popcount(ds_shared_mask) - 1
+ *                     +--------------------------------+
+ *
+ * Bits 30 and 31 of mask are for depth/stencil input attachments without index.
+ * ds_shared_mask has the indices shared by depth and stencil: they have two consecutive descriptors, depth first.
+ */
+#define RADV_MSRTSS_INPUTS_DESC_OFFSET 32
+#define RADV_MSRTSS_MAX_INPUTS         30
+#define RADV_MSRTSS_DEPTH_INPUT        30
+#define RADV_MSRTSS_STENCIL_INPUT      31
 
 struct radv_userdata_info {
    int8_t sgpr_idx;
@@ -103,6 +130,7 @@ struct radv_shader_args {
 
    /* Fragment shaders */
    struct ac_arg ps_state;
+   struct ac_arg ps_msrtss_inputs;
 
    struct ac_arg prolog_inputs;
    struct ac_arg vs_inputs[MAX_VERTEX_ATTRIBS];

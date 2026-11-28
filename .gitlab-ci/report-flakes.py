@@ -29,18 +29,25 @@ import time
 
 
 class Connection:
-    def __init__(self, host, port, verbose):
-        self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.s.connect((host, port))
-        self.s.setblocking(0)
+    def __init__(self, host: str, port: int, verbose: bool, proxy_connect: str | None):
         self.verbose = verbose
+        self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        if proxy_connect:
+            proxy_host, proxy_port = proxy_connect.rsplit(':', maxsplit=1)
+            self.s.connect((proxy_host, int(proxy_port)))
+            self.s.setblocking(0)
+            self.s.sendall(f"CONNECT {host}:{port} HTTP/1.1\r\n\r\n".encode())
+            self.wait(2)
+        else:
+            self.s.connect((host, port))
+            self.s.setblocking(0)
 
-    def send_line(self, line):
+    def send_line(self, line: str) -> None:
         if self.verbose:
             print(f"IRC: sending {line}")
         self.s.sendall((line + '\n').encode())
 
-    def wait(self, secs):
+    def wait(self, secs: int) -> None:
         for i in range(secs):
             if self.verbose:
                 while True:
@@ -54,32 +61,36 @@ class Connection:
                         print(f"IRC: received {line}")
             time.sleep(1)
 
-    def quit(self):
+    def quit(self) -> None:
         self.send_line("QUIT")
         self.s.shutdown(socket.SHUT_WR)
         self.s.close()
 
 
-def read_flakes(results):
-    flakes = []
+def read_flakes(results: str) -> tuple[list[str], list[str]]:
+    new_flakes = []
+    known_flakes = []
     csv = re.compile("(.*),(.*),(.*)")
     for line in open(results, 'r').readlines():
         match = csv.match(line)
         if match.group(2) == "Flake":
-            flakes.append(match.group(1))
-    return flakes
+            new_flakes.append(match.group(1))
+        if match.group(2) == "KnownFlake":
+            known_flakes.append(match.group(1))
+    return new_flakes, known_flakes
 
-def main():
+
+def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument('--host', type=str,
                         help='IRC server hostname', required=True)
     parser.add_argument('--port', type=int,
                         help='IRC server port', required=True)
+    parser.add_argument('--proxy-connect', type=str,
+                        help='Use the specified CONNECT proxy')
     parser.add_argument('--results', type=str,
                         help='results.csv file from deqp-runner or piglit-runner', required=True)
-    parser.add_argument('--known-flakes', type=str,
-                        help='*-flakes.txt file passed to deqp-runner or piglit-runner', required=True)
-    parser.add_argument('--channel', type=str,
+    parser.add_argument('--channel', type=str, nargs=argparse.ONE_OR_MORE,
                         help='Known flakes report channel', required=True)
     parser.add_argument('--url', type=str,
                         help='$CI_JOB_URL', required=True)
@@ -95,18 +106,13 @@ def main():
                         help='log IRC interactions')
     args = parser.parse_args()
 
-    flakes = read_flakes(args.results)
-    if not flakes:
+    new_flakes, known_flakes = read_flakes(args.results)
+    if not new_flakes and not known_flakes:
+        if args.verbose:
+            print("No flakes to report, exiting")
         exit(0)
 
-    known_flakes = []
-    for line in open(args.known_flakes).readlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        known_flakes.append(re.compile(line))
-
-    irc = Connection(args.host, args.port, args.verbose)
+    irc = Connection(args.host, args.port, args.verbose, args.proxy_connect)
 
     # The nick needs to be something unique so that multiple runners
     # connecting at the same time don't race for one nick and get blocked.
@@ -122,26 +128,24 @@ def main():
     irc.send_line(f"NICK {nick}")
     irc.send_line(f"USER {nick} unused unused: Gitlab CI Notifier")
     irc.wait(10)
-    irc.send_line(f"JOIN {args.channel}")
-    irc.wait(1)
 
-    branchinfo = ""
-    if args.branch:
-        branchinfo = f" on branch {args.branch} ({args.branch_title})"
-    irc.send_line(
-        f"PRIVMSG {args.channel} :Flakes detected in job {args.url} on {args.runner}{branchinfo}:")
+    for channel in args.channel:
+        irc.send_line(f"JOIN {channel}")
+        irc.wait(1)
 
-    for flake in flakes:
-        status = "NEW "
-        for known in known_flakes:
-            if known.match(flake):
-                status = ""
-                break
+        branchinfo = ""
+        if args.branch:
+            branchinfo = f" on branch {args.branch} ({args.branch_title})"
+        irc.send_line(
+            f"PRIVMSG {channel} :Flakes detected in job {args.url} on {args.runner}{branchinfo}:")
 
-        irc.send_line(f"PRIVMSG {args.channel} :{status}{flake}")
+        for flake in new_flakes:
+            irc.send_line(f"PRIVMSG {channel} :NEW {flake}")
+        for flake in known_flakes:
+            irc.send_line(f"PRIVMSG {channel} :{flake}")
 
-    irc.send_line(
-        f"PRIVMSG {args.channel} :See {args.url}/artifacts/browse/results/")
+        irc.send_line(
+            f"PRIVMSG {channel} :See {args.url}/artifacts/browse/results/")
 
     irc.quit()
 

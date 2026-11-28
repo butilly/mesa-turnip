@@ -3,8 +3,8 @@
 
 use crate::ir::*;
 use compiler::cfg::CFG;
-use std::cmp::max;
 use std::cmp::Reverse;
+use std::cmp::max;
 
 pub mod graph {
     #[derive(Clone)]
@@ -208,6 +208,13 @@ pub fn side_effect_type(op: &Op) -> SideEffect {
         // Geometry ops
         Op::Out(_) | Op::OutFinal(_) => SideEffect::Barrier,
 
+        // TTU ops
+        Op::TtuOpen(_)
+        | Op::TtuMacroFuse(_)
+        | Op::TtuGo(_)
+        | Op::TtuLd(_)
+        | Op::TtuSt(_) => SideEffect::Barrier,
+
         // Miscellaneous ops
         Op::Bar(_)
         | Op::TexDepBar(_)
@@ -340,6 +347,16 @@ pub fn estimate_variable_latency(sm: &ShaderModelInfo, op: &Op) -> u32 {
 
         Op::Hmma(_) | Op::Imma(_) => 22,
 
+        // TTU ops
+        Op::TtuSt(_) => 1,
+        Op::TtuLd(op) => {
+            if op.close {
+                2
+            } else {
+                1
+            }
+        }
+
         _ => panic!("Unknown variable latency op {op}"),
     }
 }
@@ -414,19 +431,6 @@ pub struct FutureReadyInstr {
     /// The first cycle that the instruction can end executing
     pub ready_cycle: Reverse<u32>,
     pub index: usize,
-}
-
-impl FutureReadyInstr {
-    pub fn new<E>(g: &graph::Graph<NodeLabel, E>, i: usize) -> Self {
-        let label = &g.nodes[i].label;
-        // NodeLabel::ready_cycle is the earliest beginning cycle for the
-        // instruction, but we need the earliest end cycle for the instruction.
-        let ready_cycle = label.ready_cycle.saturating_sub(label.exec_latency);
-        FutureReadyInstr {
-            ready_cycle: Reverse(ready_cycle),
-            index: i,
-        }
-    }
 }
 
 #[allow(dead_code)]

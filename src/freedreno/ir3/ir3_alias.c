@@ -25,34 +25,42 @@ supports_alias_srcs(struct ir3_instruction *instr)
 }
 
 static bool
+has_valid_alias_flags(struct ir3_register *src)
+{
+   /* We haven't seen any indication that aliasing supports the address
+    * register, nor does it seem important to do so based on how many fossils
+    * it took to find a case of it being attempted during alias setup.
+    */
+   return !(src->flags & (IR3_REG_SHARED | IR3_REG_RELATIV | IR3_REG_ARRAY));
+}
+
+static bool
 can_alias_src(struct ir3_register *src)
 {
-   return is_reg_gpr(src) && !(src->flags & IR3_REG_SHARED);
+   return is_reg_gpr(src) && has_valid_alias_flags(src);
 }
 
 static bool
 can_alias_srcs_of_def(struct ir3_register *src)
 {
-   if (!can_alias_src(src)) {
+   if (!(src->flags & IR3_REG_SSA)) {
       return false;
    }
 
-   assert(src->flags & IR3_REG_SSA);
    struct ir3_instruction *def_instr = src->def->instr;
 
-   if (def_instr->opc == OPC_META_COLLECT) {
-      return true;
-   }
-   if (def_instr->opc == OPC_MOV) {
-      /* We haven't seen any indication that aliasing supports the address
-       * register, nor does it seem important to do so based on how many fossils
-       * it took to find a case of it being attempted during alias setup.
-       */
-      return is_same_type_mov(def_instr) &&
-             !(def_instr->srcs[0]->flags & (IR3_REG_SHARED | IR3_REG_RELATIV));
+   if (def_instr->opc != OPC_MOV && def_instr->opc != OPC_META_COLLECT) {
+      return false;
    }
 
-   return false;
+   foreach_src (def_src, def_instr) {
+      if (!has_valid_alias_flags(def_src)) {
+         return false;
+      }
+   }
+
+   return def_instr->opc == OPC_META_COLLECT ||
+          is_same_type_mov(def_instr, false);
 }
 
 static bool
@@ -699,8 +707,9 @@ create_output_aliases(struct ir3_shader_variant *v, struct ir3_instruction *end)
       unsigned rt = output->slot - FRAG_RESULT_DATA0;
 
       foreach_src_n (comp_src, comp, src_instr) {
-         if (!(comp_src->flags & (IR3_REG_IMMED | IR3_REG_CONST))) {
-            /* Only const and immediate values can be aliased. */
+         if (!(comp_src->flags & (IR3_REG_IMMED | IR3_REG_CONST)) ||
+             (comp_src->flags & IR3_REG_RELATIV)) {
+            /* Only (non-relative) const and immediate values can be aliased. */
             continue;
          }
 

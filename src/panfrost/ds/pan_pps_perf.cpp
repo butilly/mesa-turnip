@@ -18,11 +18,8 @@
 
 namespace pps {
 
-PanfrostPerf::PanfrostPerf(const PanfrostDevice &dev)
+PanfrostPerf::PanfrostPerf()
 {
-   assert(dev.fd >= 0);
-   perf = pan_perf_create(dev.fd);
-   assert(perf);
 }
 
 PanfrostPerf::~PanfrostPerf()
@@ -43,6 +40,14 @@ PanfrostPerf::operator=(PanfrostPerf &&o)
 {
    std::swap(perf, o.perf);
    return *this;
+}
+
+bool
+PanfrostPerf::init(const PanfrostDevice &dev)
+{
+   assert(dev.fd >= 0);
+   perf = pan_perf_create(dev.fd);
+   return perf != nullptr;
 }
 
 int
@@ -82,28 +87,6 @@ PanfrostPerf::get_subinstance() {
    return perf;
 }
 
-static std::string
-get_counter_name(const char *base_name, enum mali_perf_block_type blk_type,
-                 uint8_t blk_idx)
-{
-   std::stringstream ss;
-
-   switch (blk_type) {
-   case MALI_PERF_BLOCK_MEMSYS:
-      ss << base_name << " (slice " << (unsigned)blk_idx << ")";
-      break;
-   case MALI_PERF_BLOCK_SHADER_CORE:
-      ss << base_name << " (core " << (unsigned)blk_idx << ")";
-      break;
-   default:
-      assert(!blk_idx);
-      ss << base_name;
-      break;
-   }
-
-   return ss.str();
-}
-
 Counter::Units
 convert_pan_units(enum mali_perf_counter_units unit)
 {
@@ -116,6 +99,8 @@ convert_pan_units(enum mali_perf_counter_units unit)
       return Counter::Units::Byte;
    case MALI_PERF_COUNTER_UNITS_PIXELS:
       return Counter::Units::Pixel;
+   case MALI_PERF_COUNTER_UNITS_PERCENT:
+      return Counter::Units::Percent;
    default:
       return Counter::Units::None;
    }
@@ -131,10 +116,7 @@ convert_classes(uint64_t classes)
    static_assert((int)MALI_PERF_PRIMITIVES == (int)Perfettogrp::PRIMITIVES);
    static_assert((int)MALI_PERF_MEMORY == (int)Perfettogrp::MEMORY);
    static_assert((int)MALI_PERF_COMPUTE == (int)Perfettogrp::COMPUTE);
-
-   /* RAY_TRACING not yet exposed by pps_counter. */
-   if (classes & MALI_PERF_RAY_TRACING)
-      classes &= ~MALI_PERF_RAY_TRACING;
+   static_assert((int)MALI_PERF_RAY_TRACING == (int)Perfettogrp::RAYTRACING);
 
    assert(!(classes &
             ~(BITFIELD64_BIT(MALI_PERF_UNCLASSIFIED) |
@@ -162,24 +144,32 @@ PanfrostPerf::create_available_counters() const
 
    for (const struct mali_perf_counter *cinfo = perf->info->counters;
         cinfo->name; cinfo++) {
-      for (uint32_t j = 0;
-           j < mali_perf_block_count(cinfo->block, &perf->constants); j++) {
+      if (mali_perf_counter_is_config(cinfo))
+         continue;
 
-         Counter counter = {};
-         counter.id = global_counter_id++;
-         counter.name = get_counter_name(cinfo->name, cinfo->block, j);
-         counter.description = cinfo->desc;
-         counter.group = cinfo->block;
-         counter.group_mask = convert_classes(cinfo->classes);
-         counter.units = convert_pan_units(cinfo->units);
-         counter.set_getter([=](const Counter &c, const Driver &d) {
-            auto &pan_driver = PanfrostDriver::into(d);
-            struct pan_perf *perf = static_cast<struct pan_perf *>(
-               pan_driver.perf->get_subinstance());
-            return pan_perf_counter_read(perf, cinfo, j);
-         });
-         counters.emplace_back(counter);
-      }
+      uint8_t nblocks = mali_perf_block_count(cinfo->block, &perf->constants);
+
+      /* Don't use up space for counters this device doesn't have. */
+      if (nblocks == 0)
+         continue;
+
+      Counter counter = {};
+      counter.id = global_counter_id++;
+      counter.name = cinfo->name;
+      counter.description = cinfo->desc;
+      counter.group = cinfo->block;
+      counter.group_mask = convert_classes(cinfo->classes);
+      counter.units = convert_pan_units(cinfo->units);
+
+      counter.set_getter([=](const Counter &c, const Driver &d) {
+         auto &pan_driver = PanfrostDriver::into(d);
+         struct pan_perf *perf =
+            static_cast<struct pan_perf *>(pan_driver.perf->get_subinstance());
+
+         return pan_perf_counter_read(perf, cinfo);
+      });
+
+      counters.emplace_back(counter);
    }
 
    for (uint32_t i = 0; i < MALI_PERF_BLOCK_TYPE_COUNT; i++) {
@@ -211,8 +201,10 @@ PanfrostPerf::next()
 uint32_t
 PanfrostPerf::gpu_clock_id() const
 {
-   assert(pan_perf_gpu_clock_id(perf) == CLOCK_MONOTONIC_RAW);
-   return perfetto::protos::pbzero::BUILTIN_CLOCK_MONOTONIC_RAW;
+   /* This is a sequence scoped clock.
+    * See: https://perfetto.dev/docs/concepts/clock-sync
+    */
+   return 64;
 }
 
 uint64_t

@@ -9,38 +9,104 @@
 #include "jay_opcodes.h"
 #include "jay_private.h"
 
-/* General instruction latencies from IGC */
-#define XE_LATENCY_FPU_ACC    6  /* SIMD8 latency if dst is acc. */
-#define XE_LATENCY_FPU        10 /* SIMD8 latency for general FPU ops. */
-#define XE_LATENCY_MATH       17 /* Math latency. */
-#define XE_LATENCY_BRANCH     23 /* Latency for SIMD16 branch. */
-#define XE_LATENCY_BARRIER    30 /* Latency for barrier. */
-#define XE_LATENCY_DELTA      1  /* Extra cycles for wider SIMD sizes */
-#define XE_LATENCY_DELTA_MATH 4
-#define XE_LATENCY_ARF        16 /* Latency for ARF dependencies */
-#define XE_LATENCY_DPAS       21 /* Latency for DPAS 8x1 */
-
-/* Latency for SIMD16 SLM messages. If accessing the same location it takes 28
- * cycles. For the sequential access pattern it takes 26 cycles.
+/* Zero means inherit from the parent. Only general_latency may have a NULL
+ * parent; LAT must be called with a platform table, not general_latency.
  */
-#define XE_LATENCY_SLM16 28
-#define XE_LATENCY_SLM32 45
+#define LAT(table, field)                                                      \
+   ((table)->field ? (table)->field : (table)->parent->field)
 
-#define XE_LATENCY_SEND_OTHERS       50  /* Latency for other messages. */
-#define XE_LATENCY_DP_L3             146 /* Dataport L3 hit */
-#define XE_LATENCY_SAMPLER_L3        214 /* Sampler L3 hit */
-#define XE_LATENCY_SLM_FENCE         23  /* Fence SLM */
-#define XE_LATENCY_LSC_UNTYPED_L1    45  /* LSC untyped L1 cache hit */
-#define XE_LATENCY_LSC_UNTYPED_L3    200 /* LSC untyped L3 cache hit */
-#define XE_LATENCY_LSC_UNTYPED_FENCE 35  /* LSC untyped fence (best case) */
-#define XE_LATENCY_LSC_TYPED_L1      75  /* LSC typed L1 cache hit */
-#define XE_LATENCY_LSC_TYPED_L3      200 /* LSC typed L3 cache hit */
-#define XE_LATENCY_LSC_TYPED_FENCE   60  /* LSC typed fence */
-#define XE_LATENCY_ADDR_MOV          2
-#define XE_LATENCY_SEND_ARB          8 /* Arbitration acquire/release */
+struct jay_latency_table {
+   const struct jay_latency_table *parent;
 
-#define XE_OC_MATH   4
-#define XE_OC_OTHERS 1
+   /* General Instruction latencies */
+   unsigned fpu_acc;
+   unsigned fpu;
+   unsigned math;
+   unsigned branch;
+   unsigned barrier;
+   unsigned delta;
+   unsigned delta_math;
+   unsigned arf;
+   unsigned demote;
+   unsigned dpas_1;
+   unsigned dpas_2;
+   unsigned dpas_8;
+
+   unsigned slm16;
+   unsigned slm32;
+
+   unsigned send_others;
+   unsigned dp_l3;
+   unsigned sampler_l3;
+   unsigned slm_fence;
+   unsigned lsc_untyped_l1;
+   unsigned lsc_untyped_l3;
+   unsigned lsc_untyped_fence;
+   unsigned lsc_typed_l1;
+   unsigned lsc_typed_l3;
+   unsigned lsc_typed_fence;
+   unsigned addr_mov;
+   unsigned send_arb;
+
+   unsigned oc_math;
+   unsigned oc_others;
+};
+
+static const struct jay_latency_table general_latency = {
+   /* General instruction latencies from IGC. */
+   .fpu_acc = 6,  /* SIMD8 latency if dst is acc. */
+   .fpu = 10,     /* SIMD8 latency for general FPU ops. */
+   .math = 17,    /* Math latency. */
+   .branch = 23,  /* Latency for SIMD16 branch. */
+   .barrier = 30, /* Latency for barrier. */
+   .delta = 1,    /* Extra cycles for wider SIMD sizes. */
+   .delta_math = 4,
+   .arf = 16, /* Latency for ARF dependencies. */
+   .demote = 100,
+   .dpas_1 = 22,
+   .dpas_2 = 23,
+   .dpas_8 = 33,
+
+   /* Message latencies. */
+   /* SIMD16 SLM messages take 28 cycles when accessing the same location,
+    * and 26 cycles for a sequential access pattern.
+    */
+   .slm16 = 28,
+   .slm32 = 45,
+
+   .send_others = 50,       /* Latency for other messages. */
+   .dp_l3 = 146,            /* Dataport L3 hit. */
+   .sampler_l3 = 214,       /* Sampler L3 hit. */
+   .slm_fence = 23,         /* SLM fence. */
+   .lsc_untyped_l1 = 45,    /* LSC untyped L1 cache hit. */
+   .lsc_untyped_l3 = 200,   /* LSC untyped L3 cache hit. */
+   .lsc_untyped_fence = 35, /* LSC untyped fence (best case). */
+   .lsc_typed_l1 = 75,      /* LSC typed L1 cache hit. */
+   .lsc_typed_l3 = 200,     /* LSC typed L3 cache hit. */
+   .lsc_typed_fence = 60,   /* LSC typed fence. */
+   .addr_mov = 2,
+   .send_arb = 8, /* Arbitration acquire/release. */
+
+   /* Occupancy. */
+   .oc_math = 4,
+   .oc_others = 1,
+};
+
+static const struct jay_latency_table xe2_latency = {
+   .parent = &general_latency,
+   .sampler_l3 = 300,
+};
+
+static const struct jay_latency_table xe3_latency = {
+   .parent = &general_latency,
+   .sampler_l3 = 550,
+};
+
+static const struct jay_latency_table *
+jay_get_latency_table(const struct intel_device_info *devinfo)
+{
+   return devinfo->verx10 >= 300 ? &xe3_latency : &xe2_latency;
+}
 
 /*
  * Estimate latency in cycles for an instruction. This is roughly the IGC's Xe2+
@@ -51,84 +117,92 @@
 unsigned
 jay_latency(jay_shader *s, jay_inst *I, bool bias_acc)
 {
+   const struct jay_latency_table *lat = jay_get_latency_table(s->devinfo);
+
    if (I->op == JAY_OPCODE_SEND) {
       switch (jay_send_sfid(I)) {
       case GEN_SFID_TGM:
          /* TODO: Check cache settings */
-         return XE_LATENCY_LSC_TYPED_L3;
+         return LAT(lat, lsc_typed_l3);
 
       case GEN_SFID_UGM:
       case GEN_SFID_URB:
          /* TODO: Fences, check cache settings */
-         return XE_LATENCY_LSC_UNTYPED_L3;
+         return LAT(lat, lsc_untyped_l3);
 
       case GEN_SFID_SLM:
          /* TODO: Fence */
-         return jay_simd_width_logical(s, I) == 32 ? XE_LATENCY_SLM32 :
-                                                     XE_LATENCY_SLM16;
+         return jay_simd_width_logical(s, I) == 32 ? LAT(lat, slm32) :
+                                                     LAT(lat, slm16);
 
       case GEN_SFID_SAMPLER:
-         return XE_LATENCY_SAMPLER_L3;
+         return LAT(lat, sampler_l3);
 
       case GEN_SFID_HDC0:
       case GEN_SFID_HDC1:
       case GEN_SFID_HDC2:
       case GEN_SFID_HDC_READ_ONLY:
-         return XE_LATENCY_DP_L3;
+         return LAT(lat, dp_l3);
 
       case GEN_SFID_MESSAGE_GATEWAY:
-         return XE_LATENCY_BARRIER;
+         return LAT(lat, barrier);
 
       default:
-         return XE_LATENCY_SEND_OTHERS;
+         return LAT(lat, send_others);
       }
    } else if (I->op == JAY_OPCODE_DEMOTE) {
       /* Try to hoist demotes without waiting prematurely on sends. */
-      return 100;
+      return LAT(lat, demote);
    } else if (I->op == JAY_OPCODE_MATH) {
       unsigned sz = jay_simd_width_logical(s, I);
       unsigned scale = (sz <= 8) ? 0 : (sz == 16) ? 1 : 3;
-      return XE_LATENCY_MATH + XE_LATENCY_DELTA_MATH * scale;
+      return LAT(lat, math) + LAT(lat, delta_math) * scale;
    } else if (I->op == JAY_OPCODE_DPAS) {
       /* This is correct for Xe2 and PTL but not for older/newer platforms */
       switch (jay_dpas_rcount(I)) {
       case 1:
-         return 22;
+         return LAT(lat, dpas_1);
       case 2:
-         return 23;
+         return LAT(lat, dpas_2);
       case 8:
-         return 33;
+         return LAT(lat, dpas_8);
       default:
-         return 33;
+         return LAT(lat, dpas_8);
       }
    } else if (jay_is_flag(I->dst) ||
               !jay_is_null(I->cond_flag) ||
               I->dst.file == J_ADDRESS) {
-      return XE_LATENCY_ARF;
+      return LAT(lat, arf);
    } else {
       bool acc = I->dst.file == ACCUM;
       bool maybe_acc =
          I->dst.file == GPR && I->type == JAY_TYPE_F32 && bias_acc;
 
-      unsigned base = acc       ? XE_LATENCY_FPU_ACC :
-                      maybe_acc ? (XE_LATENCY_FPU_ACC + XE_LATENCY_FPU) / 2 :
-                                  XE_LATENCY_FPU;
+      unsigned base = acc       ? LAT(lat, fpu_acc) :
+                      maybe_acc ? (LAT(lat, fpu_acc) + LAT(lat, fpu)) / 2 :
+                                  LAT(lat, fpu);
 
       unsigned sz = jay_simd_width_logical(s, I);
-      return base + XE_LATENCY_DELTA * ((sz <= 8) ? 0 : (sz == 16) ? 1 : 3);
+      return base + LAT(lat, delta) * ((sz <= 8) ? 0 : (sz == 16) ? 1 : 3);
    }
 }
 
 static unsigned
 jay_send_src_latency(jay_shader *s, jay_inst *I)
 {
+   const struct jay_latency_table *lat = jay_get_latency_table(s->devinfo);
+
    /* ARB cycle + GRF read lengths */
-   return XE_LATENCY_SEND_ARB + jay_send_mlen(I) + jay_send_ex_mlen(I);
+   return LAT(lat, send_arb) +
+          gen_message_desc_decode(s->devinfo, jay_send_desc_imm(I)).msg_length +
+          gen_message_ex_desc_ex_mlen(s->devinfo, jay_send_ex_desc_imm(I));
 }
 
 static unsigned
 jay_occupancy(jay_shader *s, jay_inst *I)
 {
+   const struct jay_latency_table *lat = jay_get_latency_table(s->devinfo);
+
    unsigned exec_size = jay_simd_width_logical(s, I) >> I->simd_split;
    unsigned native = jay_ugpr_per_grf(s);
    uint16_t scale = (exec_size <= native)     ? 1 :
@@ -136,7 +210,7 @@ jay_occupancy(jay_shader *s, jay_inst *I)
                                                 4;
 
    if (I->op == JAY_OPCODE_MATH)
-      return XE_OC_MATH * scale;
+      return LAT(lat, oc_math) * scale;
    if (false /* TODO: isFastHFInstruction */) {
       scale = (exec_size <= native * 2) ? 1 : 2;
    } else if (I->op == JAY_OPCODE_SHUFFLE) {
@@ -146,7 +220,7 @@ jay_occupancy(jay_shader *s, jay_inst *I)
       scale = (exec_size <= native / 2) ? 1 : 2;
    }
 
-   return XE_OC_OTHERS * scale;
+   return LAT(lat, oc_others) * scale;
 }
 
 gen_pipe
@@ -230,21 +304,42 @@ estimate_block_cycles(jay_function *f, jay_block *block)
          cycle += jay_occupancy(shader, prev);
       }
 
-      if (I->dep.mode && sbid[I->dep.sbid]) {
-         unsigned latency = 0;
-         if (I->dep.mode == GEN_SBID_SRC) {
-            if (sbid[I->dep.sbid]->op == JAY_OPCODE_SEND) {
-               latency = jay_send_src_latency(shader, sbid[I->dep.sbid]);
+      uint32_t wait_src = 0, wait_dst = 0;
+
+      if (I->op == JAY_OPCODE_SYNC) {
+         if (jay_sync_op(I) == TGL_SYNC_ALLWR) {
+            wait_dst = jay_as_uint(I->src[0]);
+         } else if (jay_sync_op(I) == TGL_SYNC_ALLRD) {
+            wait_src = jay_as_uint(I->src[0]);
+         }
+      }
+
+      if (I->dep.mode == GEN_SBID_SRC) {
+         wait_src |= BITFIELD_BIT(I->dep.sbid);
+      } else if (I->dep.mode == GEN_SBID_DST || I->dep.mode == GEN_SBID_SET) {
+         wait_dst |= BITFIELD_BIT(I->dep.sbid);
+      }
+
+      u_foreach_bit(sb, wait_src) {
+         if (sbid[sb]) {
+            unsigned latency = 0;
+            if (sbid[sb]->op == JAY_OPCODE_SEND) {
+               latency = jay_send_src_latency(shader, sbid[sb]);
             } else {
                /* IGC uses occupancy for this. Hit only by DPAS */
-               latency = jay_occupancy(shader, sbid[I->dep.sbid]);
+               latency = jay_occupancy(shader, sbid[sb]);
             }
-         } else {
-            latency = jay_latency(shader, sbid[I->dep.sbid], false);
-            sbid[I->dep.sbid] = NULL;
-         }
 
-         cycle = MAX2(cycle, sbid_issue[I->dep.sbid] + latency);
+            cycle = MAX2(cycle, sbid_issue[sb] + latency);
+         }
+      }
+
+      u_foreach_bit(sb, wait_dst) {
+         if (sbid[sb]) {
+            cycle = MAX2(cycle,
+                         sbid_issue[sb] + jay_latency(shader, sbid[sb], false));
+            sbid[sb] = NULL;
+         }
       }
 
       if (I->dep.regdist) {
@@ -267,7 +362,7 @@ estimate_block_cycles(jay_function *f, jay_block *block)
 
       if (0) {
          printf("%4u: ", cycle);
-         jay_print_inst(stdout, f, I);
+         jay_print_inst(stderr, f, I);
       }
 
       unsigned ready_cycle = cycle + jay_latency(shader, I, false);
@@ -298,11 +393,10 @@ estimate_block_cycles(jay_function *f, jay_block *block)
 unsigned
 jay_estimate_cycles(jay_function *f)
 {
-   unsigned cycles = 0;
+   float cycles = 0;
 
    jay_foreach_block(f, block) {
-      /* TODO: Scale by block repetition */
-      cycles += estimate_block_cycles(f, block);
+      cycles += block->weight * (float) estimate_block_cycles(f, block);
    }
 
    return cycles;

@@ -202,6 +202,7 @@ to_dxil_shader_stage(VkShaderStageFlagBits in)
 }
 
 struct dzn_nir_options {
+   bool depth_clip_negative_one_to_one;
    enum dxil_spirv_yz_flip_mode yz_flip_mode;
    uint16_t y_flip_mask, z_flip_mask;
    bool force_sample_rate_shading;
@@ -263,6 +264,7 @@ dzn_pipeline_get_nir_shader(struct dzn_device *device,
          .y_mask = options->y_flip_mask,
          .z_mask = options->z_flip_mask,
       },
+      .depth_clip_negative_one_to_one = options->depth_clip_negative_one_to_one,
       .declared_read_only_images_as_srvs = !device->bindless,
       .inferred_read_only_images_as_srvs = !device->bindless,
       .force_sample_rate_shading = options->force_sample_rate_shading,
@@ -420,6 +422,7 @@ dzn_pipeline_compile_shader(struct dzn_device *device,
       container_of(device->vk.physical, struct dzn_physical_device, vk);
    struct nir_to_dxil_options opts = {
       .environment = DXIL_ENVIRONMENT_VULKAN,
+      .lower_fp32_compare_select = pdev->desc.vendor_id == 0x10de,
       .lower_int16 = !pdev->options4.Native16BitShaderOpsSupported &&
       /* Don't lower 16-bit types if they can only come from min-precision */
          (device->vk.enabled_extensions.KHR_shader_float16_int8 ||
@@ -637,36 +640,46 @@ dzn_pipeline_cache_lookup_gfx_pipeline(struct dzn_graphics_pipeline *pipeline,
 
    assert(cached_blob->size >= sizeof(*info));
 
+   const D3D12_INPUT_ELEMENT_DESC *inputs = NULL;
    if (info->input_count > 0) {
-      const D3D12_INPUT_ELEMENT_DESC *inputs =
-         (const D3D12_INPUT_ELEMENT_DESC *)((uint8_t *)cached_blob->data + offset);
+      inputs =
+         (const D3D12_INPUT_ELEMENT_DESC *)((const uint8_t *)cached_blob->data + offset);
 
       assert(cached_blob->size >= offset + sizeof(*inputs) * info->input_count);
-
-      memcpy(pipeline->templates.inputs, inputs,
-             sizeof(*inputs) * info->input_count);
-      d3d12_gfx_pipeline_state_stream_new_desc(stream_desc, INPUT_LAYOUT, D3D12_INPUT_LAYOUT_DESC, desc);
-      desc->pInputElementDescs = pipeline->templates.inputs;
-      desc->NumElements = info->input_count;
       offset += sizeof(*inputs) * info->input_count;
    }
 
    assert(cached_blob->size == offset + util_bitcount(info->stages) * BLAKE3_KEY_LEN);
 
+   D3D12_SHADER_BYTECODE bcs[MESA_VULKAN_SHADER_STAGES] = { 0 };
+   VkResult ret = VK_SUCCESS;
+
    u_foreach_bit(s, info->stages) {
-      uint8_t *dxil_hash = (uint8_t *)cached_blob->data + offset;
+      const uint8_t *dxil_hash = (const uint8_t *)cached_blob->data + offset;
       mesa_shader_stage stage;
 
-      D3D12_SHADER_BYTECODE *slot =
-         dzn_pipeline_get_gfx_shader_slot(stream_desc, s);
-
-      VkResult ret =
-         dzn_pipeline_cache_lookup_dxil_shader(cache, dxil_hash, &stage, slot);
-      if (ret != VK_SUCCESS)
-         return ret;
+      assert(s < MESA_VULKAN_SHADER_STAGES);
+      ret = dzn_pipeline_cache_lookup_dxil_shader(cache, dxil_hash, &stage, &bcs[s]);
+      if (ret != VK_SUCCESS || stage == MESA_SHADER_NONE)
+         goto out;
 
       assert(stage == s);
       offset += BLAKE3_KEY_LEN;
+   }
+
+   if (info->input_count > 0) {
+      memcpy(pipeline->templates.inputs, inputs,
+             sizeof(*inputs) * info->input_count);
+      d3d12_gfx_pipeline_state_stream_new_desc(stream_desc, INPUT_LAYOUT, D3D12_INPUT_LAYOUT_DESC, desc);
+      desc->pInputElementDescs = pipeline->templates.inputs;
+      desc->NumElements = info->input_count;
+   }
+
+   u_foreach_bit(s, info->stages) {
+      D3D12_SHADER_BYTECODE *slot =
+         dzn_pipeline_get_gfx_shader_slot(stream_desc, s);
+      *slot = bcs[s];
+      pipeline->templates.shaders[s].bc = slot;
    }
 
    pipeline->rast_disabled_from_missing_position = info->rast_disabled_from_missing_position;
@@ -674,8 +687,13 @@ dzn_pipeline_cache_lookup_gfx_pipeline(struct dzn_graphics_pipeline *pipeline,
 
    *cache_hit = true;
 
+out:
+   if (!*cache_hit) {
+      for (uint32_t i = 0; i < ARRAY_SIZE(bcs); i++)
+         free((void *)bcs[i].pShaderBytecode);
+   }
    vk_pipeline_cache_object_unref(cache->base.device, cache_obj);
-   return VK_SUCCESS;
+   return ret;
 }
 
 static void
@@ -766,7 +784,7 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
       uint8_t spirv_hash[BLAKE3_KEY_LEN];
       uint8_t dxil_hash[BLAKE3_KEY_LEN];
       uint8_t nir_hash[BLAKE3_KEY_LEN];
-      uint8_t link_hashes[BLAKE3_KEY_LEN][2];
+      uint8_t link_hashes[2][BLAKE3_KEY_LEN];
    } stages[MESA_VULKAN_SHADER_STAGES] = { 0 };
    const uint8_t *dxil_hashes[MESA_VULKAN_SHADER_STAGES] = { 0 };
    uint8_t attribs_hash[BLAKE3_KEY_LEN];
@@ -809,8 +827,13 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
       info->pRasterizationState &&
       info->pRasterizationState->polygonMode == VK_POLYGON_MODE_POINT &&
       !(active_stage_mask & (1 << MESA_SHADER_GEOMETRY));
+   const mesa_shader_stage depth_clip_stage = last_raster_stage;
    if (pipeline->use_gs_for_polygon_mode_point)
       last_raster_stage = MESA_SHADER_GEOMETRY;
+
+   const VkPipelineViewportDepthClipControlCreateInfoEXT *depth_clip = vp_info ?
+      vk_find_struct_const(vp_info->pNext, PIPELINE_VIEWPORT_DEPTH_CLIP_CONTROL_CREATE_INFO_EXT) : NULL;
+   const bool depth_clip_negative_one_to_one = depth_clip && depth_clip->negativeOneToOne;
 
    enum dxil_spirv_yz_flip_mode yz_flip_mode = DXIL_SPIRV_YZ_FLIP_NONE;
    uint16_t y_flip_mask = 0, z_flip_mask = 0;
@@ -850,6 +873,7 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
       _mesa_blake3_init(&pipeline_hash_ctx);
       _mesa_blake3_update(&pipeline_hash_ctx, &device->bindless, sizeof(device->bindless));
       _mesa_blake3_update(&pipeline_hash_ctx, attribs_hash, sizeof(attribs_hash));
+      _mesa_blake3_update(&pipeline_hash_ctx, &depth_clip_negative_one_to_one, sizeof(depth_clip_negative_one_to_one));
       _mesa_blake3_update(&pipeline_hash_ctx, &yz_flip_mode, sizeof(yz_flip_mode));
       _mesa_blake3_update(&pipeline_hash_ctx, &y_flip_mask, sizeof(y_flip_mask));
       _mesa_blake3_update(&pipeline_hash_ctx, &z_flip_mask, sizeof(z_flip_mask));
@@ -897,6 +921,8 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
          }
          if (stage == MESA_SHADER_VERTEX)
             _mesa_blake3_update(&nir_hash_ctx, attribs_hash, sizeof(attribs_hash));
+         if (stage == depth_clip_stage)
+            _mesa_blake3_update(&nir_hash_ctx, &depth_clip_negative_one_to_one, sizeof(depth_clip_negative_one_to_one));
          if (stage == last_raster_stage) {
             _mesa_blake3_update(&nir_hash_ctx, &yz_flip_mode, sizeof(yz_flip_mode));
             _mesa_blake3_update(&nir_hash_ctx, &y_flip_mask, sizeof(y_flip_mask));
@@ -908,6 +934,7 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
       }
 
       struct dzn_nir_options options = {
+         .depth_clip_negative_one_to_one = stage == depth_clip_stage && depth_clip_negative_one_to_one,
          .yz_flip_mode = stage == last_raster_stage ? yz_flip_mode : DXIL_SPIRV_YZ_FLIP_NONE,
          .y_flip_mask = y_flip_mask,
          .z_flip_mask = z_flip_mask,
@@ -1074,7 +1101,11 @@ dzn_graphics_pipeline_compile_shaders(struct dzn_device *device,
              !(pipeline->templates.shaders[prev_stage].nir->info.outputs_written & VARYING_BIT_POS)) {
             pipeline->rast_disabled_from_missing_position = true;
             /* Clear a cache hit if there was one. */
-            pipeline->templates.shaders[stage].bc = NULL;
+            if (pipeline->templates.shaders[stage].bc) {
+               free((void *)pipeline->templates.shaders[stage].bc->pShaderBytecode);
+               *pipeline->templates.shaders[stage].bc = (D3D12_SHADER_BYTECODE){ 0 };
+               pipeline->templates.shaders[stage].bc = NULL;
+            }
             continue;
          }
       } else if (prev_stage != MESA_SHADER_NONE) {

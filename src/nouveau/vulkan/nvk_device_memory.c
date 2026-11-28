@@ -78,7 +78,7 @@ nvk_GetMemoryFdPropertiesKHR(VkDevice device,
 
    switch (handleType) {
    case VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT:
-      result = nvkmd_dev_import_dma_buf(dev->nvkmd, &dev->vk.base, fd, &mem);
+      result = nvkmd_dev_import_dma_buf(dev->nvkmd, &dev->vk.base, fd, 0, &mem);
       if (result != VK_SUCCESS)
          return result;
       break;
@@ -203,6 +203,12 @@ nvk_AllocateMemory(VkDevice device,
       }
    }
 
+   const VkBufferDeviceAddressAlignmentAllocateInfoVALVE *align_info =
+      vk_find_struct_const(pAllocateInfo->pNext,
+                           BUFFER_DEVICE_ADDRESS_ALIGNMENT_ALLOCATE_INFO_VALVE);
+   if (align_info)
+      alignment = MAX2(alignment, align_info->alignment);
+
    const enum nvkmd_mem_flags flags =
       nvk_memory_type_flags(type, handle_types, pinned_to_vram);
 
@@ -217,7 +223,7 @@ nvk_AllocateMemory(VkDevice device,
                VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT);
 
       result = nvkmd_dev_import_dma_buf(dev->nvkmd, &dev->vk.base,
-                                        fd_info->fd, &mem->mem);
+                                        fd_info->fd, alignment, &mem->mem);
       if (result != VK_SUCCESS)
          goto fail_alloc;
 

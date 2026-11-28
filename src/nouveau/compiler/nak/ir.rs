@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 extern crate mesa_util;
+extern crate mesa_util_proc;
 extern crate nak_ir_proc;
 
 use mesa_util::bitview::{
@@ -20,9 +21,10 @@ pub use crate::ssa_value::*;
 use compiler::as_slice::*;
 use compiler::cfg::CFG;
 use compiler::dataflow::ForwardDataflow;
-use compiler::enum_as_u8::EnumAsU8;
 use compiler::smallvec::SmallVec;
 use compiler::vec_pair::VecPair;
+use mesa_util::enum_as_u8::EnumAsU8;
+use mesa_util_proc::EnumAsU8;
 use nak_ir_proc::*;
 use std::cmp::{max, min};
 use std::fmt;
@@ -596,6 +598,10 @@ impl SrcRef {
         }
     }
 
+    pub fn is_immediate(&self) -> bool {
+        matches!(self, SrcRef::Imm32(_))
+    }
+
     pub fn is_carry(&self) -> bool {
         match self {
             SrcRef::SSA(ssa) => ssa.file() == RegFile::Carry,
@@ -692,11 +698,7 @@ impl SrcRef {
 
 impl From<bool> for SrcRef {
     fn from(b: bool) -> SrcRef {
-        if b {
-            SrcRef::True
-        } else {
-            SrcRef::False
-        }
+        if b { SrcRef::True } else { SrcRef::False }
     }
 }
 
@@ -1084,11 +1086,7 @@ impl Src {
         match self.src_ref {
             SrcRef::Imm32(i) => {
                 assert!(self.is_unmodified());
-                if (i & 0xfff) == 0 {
-                    None
-                } else {
-                    Some(i)
-                }
+                if (i & 0xfff) == 0 { None } else { Some(i) }
             }
             _ => None,
         }
@@ -1146,6 +1144,10 @@ impl Src {
 
     pub fn is_predicate(&self) -> bool {
         self.src_ref.is_predicate()
+    }
+
+    pub fn is_immediate(&self) -> bool {
+        self.src_ref.is_immediate()
     }
 
     pub fn is_zero(&self) -> bool {
@@ -1460,7 +1462,7 @@ fn fmt_dst_slice(f: &mut fmt::Formatter<'_>, dsts: &[Dst]) -> fmt::Result {
 }
 
 #[allow(dead_code)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum FoldData {
     Pred(bool),
     Carry(bool),
@@ -1511,11 +1513,7 @@ impl OpFoldData<'_> {
     #[allow(dead_code)]
     pub fn get_u32_bnot_src(&self, op: &impl SrcsAsSlice, src: &Src) -> u32 {
         let x = self.get_u32_src(op, src);
-        if src.src_mod.is_bnot() {
-            !x
-        } else {
-            x
-        }
+        if src.src_mod.is_bnot() { !x } else { x }
     }
 
     #[allow(dead_code)]
@@ -2840,7 +2838,7 @@ impl DisplayOp for OpFFma {
 impl_display_for_op!(OpFFma);
 
 #[repr(C)]
-#[derive(SrcsAsSlice, DstsAsSlice)]
+#[derive(Clone, SrcsAsSlice, DstsAsSlice)]
 pub struct OpFMnMx {
     #[dst_type(F32)]
     pub dst: Dst,
@@ -2852,19 +2850,65 @@ pub struct OpFMnMx {
     pub min: Src,
 
     pub ftz: bool,
+    pub nan: bool,
+    pub xorsign: bool,
 }
 
 impl DisplayOp for OpFMnMx {
     fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let ftz = if self.ftz { ".ftz" } else { "" };
+        let nan = if self.nan { ".nan" } else { "" };
+        let xorsign = if self.xorsign { ".xorsign" } else { "" };
         write!(
             f,
-            "fmnmx{ftz} {} {} {}",
+            "fmnmx{ftz}{nan}{xorsign} {} {} {}",
             self.srcs[0], self.srcs[1], self.min
         )
     }
 }
 impl_display_for_op!(OpFMnMx);
+
+impl Foldable for OpFMnMx {
+    fn fold(&self, _sm: &ShaderModelInfo, f: &mut OpFoldData<'_>) {
+        let a = f.get_f32_src(self, &self.srcs[0]);
+        let b = f.get_f32_src(self, &self.srcs[1]);
+        let min = f.get_pred_src(self, &self.min);
+
+        let op = if min { PartialOrd::lt } else { PartialOrd::gt };
+
+        // Canonical NaN results are represented by None are not impacted by
+        // xorsigns behavior.
+        let res = if a == 0.0 && b == 0.0 {
+            if min && a.is_sign_negative() || !min && a.is_sign_positive() {
+                Some(a)
+            } else {
+                Some(b)
+            }
+        } else if !a.is_nan() && !b.is_nan() {
+            Some(if op(&a, &b) { a } else { b })
+        } else if (a.is_nan() && b.is_nan()) || self.nan {
+            None
+        } else if a.is_nan() {
+            Some(b)
+        } else {
+            Some(a)
+        };
+
+        let res = if let Some(mut res) = res {
+            if self.xorsign {
+                let sign =
+                    (a.to_bits() & 0x80000000) ^ (b.to_bits() & 0x80000000);
+                res = f32::from_bits((res.to_bits() & 0x7fff_ffff) | sign);
+            }
+
+            res
+        } else {
+            f32::from_bits(0x7fff_ffff)
+        };
+
+        f.set_f32_dst(self, &self.dst, res);
+    }
+}
 
 #[repr(C)]
 #[derive(SrcsAsSlice, DstsAsSlice)]
@@ -3623,14 +3667,18 @@ pub struct OpHMnMx2 {
     pub min: Src,
 
     pub ftz: bool,
+    pub nan: bool,
+    pub xorsign: bool,
 }
 
 impl DisplayOp for OpHMnMx2 {
     fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let ftz = if self.ftz { ".ftz" } else { "" };
+        let nan = if self.nan { ".nan" } else { "" };
+        let xorsign = if self.xorsign { ".xorsign" } else { "" };
         write!(
             f,
-            "hmnmx2{ftz} {} {} {}",
+            "hmnmx2{ftz}{nan}{xorsign} {} {} {}",
             self.srcs[0], self.srcs[1], self.min
         )
     }
@@ -5072,7 +5120,7 @@ impl fmt::Display for PrmtMode {
             PrmtMode::Backward4Extract => write!(f, ".b4e"),
             PrmtMode::Replicate8 => write!(f, ".rc8"),
             PrmtMode::EdgeClampLeft => write!(f, ".ecl"),
-            PrmtMode::EdgeClampRight => write!(f, ".ecl"),
+            PrmtMode::EdgeClampRight => write!(f, ".ecr"),
             PrmtMode::Replicate16 => write!(f, ".rc16"),
         }
     }
@@ -7054,7 +7102,7 @@ pub struct OpMemBar {
 
 impl DisplayOp for OpMemBar {
     fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "membar.sc.{}", self.scope)
+        write!(f, "membar.sc{}", self.scope)
     }
 }
 impl_display_for_op!(OpMemBar);
@@ -7117,7 +7165,7 @@ pub struct OpBSSy {
     #[dst_type(Bar)]
     pub bar_out: Dst,
 
-    #[src_type(Pred)]
+    #[src_type(Bar)]
     pub bar_in: Src,
 
     #[src_type(Pred)]
@@ -7635,6 +7683,86 @@ impl_display_for_op!(OpMatch);
 
 #[repr(C)]
 #[derive(SrcsAsSlice, DstsAsSlice)]
+pub struct OpTtuOpen {
+    /// Unofficial name
+    ///
+    /// Always set when a secondary ray traversal operation is set in TTU[0x80..0x90] range.
+    /// If TTU[0x80..0x90] is modified without that bit set, an error code will be
+    /// returned at TTU[0x300]. (0xe00000XX)
+    pub dual: bool,
+}
+
+impl DisplayOp for OpTtuOpen {
+    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let dual_str = if self.dual { ".dual" } else { "" };
+        write!(f, "ttuopen{}", dual_str)
+    }
+}
+impl_display_for_op!(OpTtuOpen);
+
+#[repr(C)]
+#[derive(SrcsAsSlice, DstsAsSlice)]
+pub struct OpTtuSt {
+    #[src_type(GPR)]
+    pub srcs: [Src; 2],
+
+    pub offset: u16,
+}
+
+impl DisplayOp for OpTtuSt {
+    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "ttust [0x{:x}] {} {}",
+            self.offset, self.srcs[0], self.srcs[1],
+        )
+    }
+}
+impl_display_for_op!(OpTtuSt);
+
+#[repr(C)]
+#[derive(SrcsAsSlice, DstsAsSlice)]
+pub struct OpTtuLd {
+    pub dsts: [Dst; 2],
+
+    pub offset: u16,
+    pub close: bool,
+}
+
+impl DisplayOp for OpTtuLd {
+    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let close = if self.close { ".close" } else { "" };
+        write!(f, "ttuld{} [0x{:x}]", close, self.offset)
+    }
+}
+impl_display_for_op!(OpTtuLd);
+
+#[repr(C)]
+#[derive(SrcsAsSlice, DstsAsSlice)]
+pub struct OpTtuGo {}
+
+impl DisplayOp for OpTtuGo {
+    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ttugo")
+    }
+}
+impl_display_for_op!(OpTtuGo);
+
+#[repr(C)]
+#[derive(SrcsAsSlice, DstsAsSlice)]
+pub struct OpTtuMacroFuse {
+    pub imm: u8,
+}
+
+impl DisplayOp for OpTtuMacroFuse {
+    fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ttumacrofuse {:x}", self.imm)
+    }
+}
+impl_display_for_op!(OpTtuMacroFuse);
+
+#[repr(C)]
+#[derive(SrcsAsSlice, DstsAsSlice)]
 pub struct OpUndef {
     pub dst: Dst,
 }
@@ -7662,7 +7790,7 @@ impl_display_for_op!(OpSrcBar);
 mod phi {
     #[allow(unused_imports)]
     use crate::ir::{OpPhiDsts, OpPhiSrcs};
-    use compiler::bitset::IntoBitIndex;
+    use mesa_util::bitset::IntoBitIndex;
     use std::fmt;
 
     /// A phi node
@@ -8199,6 +8327,11 @@ pub enum Op {
     S2R(Box<OpS2R>),
     Vote(Box<OpVote>),
     Match(Box<OpMatch>),
+    TtuOpen(Box<OpTtuOpen>),
+    TtuSt(Box<OpTtuSt>),
+    TtuLd(Box<OpTtuLd>),
+    TtuGo(Box<OpTtuGo>),
+    TtuMacroFuse(Box<OpTtuMacroFuse>),
     Undef(Box<OpUndef>),
     SrcBar(Box<OpSrcBar>),
     PhiSrcs(Box<OpPhiSrcs>),
@@ -8374,6 +8507,12 @@ impl Op {
             // Geometry ops
             Op::Out(_) | Op::OutFinal(_) => false,
 
+            // TTU ops
+            Op::TtuOpen(_) | Op::TtuSt(_) | Op::TtuLd(_) | Op::TtuGo(_) => {
+                false
+            }
+            Op::TtuMacroFuse(_) => true,
+
             // Miscellaneous ops
             Op::Bar(_)
             | Op::TexDepBar(_)
@@ -8423,6 +8562,8 @@ impl Op {
                 | Op::Bra(_)
                 | Op::Nanosleep(_)
                 | Op::Exit(_)
+                | Op::TtuOpen(_)
+                | Op::TtuGo(_)
         )
     }
 
@@ -8559,6 +8700,13 @@ impl Op {
 
             // Geometry ops
             Op::Out(_) | Op::OutFinal(_) => false,
+
+            // TTU ops
+            Op::TtuOpen(_)
+            | Op::TtuSt(_)
+            | Op::TtuLd(_)
+            | Op::TtuGo(_)
+            | Op::TtuMacroFuse(_) => false,
 
             // Miscellaneous ops
             Op::Bar(_)
@@ -8964,7 +9112,12 @@ impl Instr {
             | Op::OutFinal(_)
             | Op::Isbewr(_)
             | Op::Nanosleep(_)
+            | Op::TtuOpen(_)
+            | Op::TtuSt(_)
+            | Op::TtuGo(_)
+            | Op::TtuMacroFuse(_)
             | Op::Annotate(_) => false,
+            Op::TtuLd(op) => !op.close,
             Op::BMov(op) => !op.clear,
             _ => true,
         }
@@ -9111,6 +9264,11 @@ impl Instr {
             | Op::S2R(_)
             | Op::Vote(_)
             | Op::Match(_)
+            | Op::TtuOpen(_)
+            | Op::TtuSt(_)
+            | Op::TtuLd(_)
+            | Op::TtuGo(_)
+            | Op::TtuMacroFuse(_)
             | Op::Undef(_)
             | Op::SrcBar(_)
             | Op::PhiSrcs(_)
@@ -9125,6 +9283,32 @@ impl Instr {
             | Op::OutFinal(_)
             | Op::Nanosleep(_)
             | Op::Annotate(_) => false,
+        }
+    }
+
+    /// Returns true if the operations output depends on any pre modified
+    /// input.
+    ///
+    /// This indicates that e.g. merging a modifier with a constant source
+    /// could change the result of this instruction.
+    pub fn result_depends_on_pre_mod_srcs(&self) -> bool {
+        match &self.op {
+            // modifier overflowing the source is returned as an overflow
+            // through the carry/predicate out.
+            Op::IAdd2(op) => !op.carry_out.is_none(),
+            Op::IAdd2X(op) => !op.carry_out.is_none(),
+            Op::IAdd3(op) => {
+                !op.overflow[0].is_none() || !op.overflow[1].is_none()
+            }
+            Op::IAdd3X(op) => {
+                !op.overflow[0].is_none() || !op.overflow[1].is_none()
+            }
+            Op::Lea(op) => !op.overflow.is_none(),
+            Op::LeaX(op) => !op.overflow.is_none(),
+            // .xorsign takes the sign bit of the unmodified sources
+            Op::FMnMx(op) => op.xorsign,
+            Op::HMnMx2(op) => op.xorsign,
+            _ => false,
         }
     }
 }
@@ -9376,10 +9560,12 @@ pub struct VertexShaderInfo {
 #[derive(Debug)]
 pub struct FragmentShaderInfo {
     pub uses_kill: bool,
-    pub does_interlock: bool,
+    pub reads_interlock_ticket: bool,
     pub post_depth_coverage: bool,
     pub early_fragment_tests: bool,
     pub uses_sample_shading: bool,
+    pub z_min_bounded: bool,
+    pub z_max_bounded: bool,
 }
 
 #[derive(Debug)]
@@ -9625,6 +9811,7 @@ pub struct ShaderInfo {
     pub uses_global_mem: bool,
     pub writes_global_mem: bool,
     pub uses_fp64: bool,
+    pub uses_ttu: bool,
     pub stage: ShaderStageInfo,
     pub io: ShaderIoInfo,
 }

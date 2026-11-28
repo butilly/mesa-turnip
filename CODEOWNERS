@@ -50,6 +50,9 @@ meson.build @dbaker @eric
 # Android Gralloc
 /src/util/u_gralloc/ @roman.stratiienko @zzyiwei
 
+# poly
+/src/poly/ @alyssa @marysaka @olivia
+
 #############
 # PLATFORMS #
 #############
@@ -124,13 +127,16 @@ gitlab-ci*.yml @eric
 /src/glx/applegl_glx.c @jeremyhu
 
 # Asahi
-/src/asahi/ @alyssa
-/src/gallium/drivers/asahi/ @alyssa
+/src/asahi/ @alyssa @marysaka @jannau
+/src/gallium/drivers/asahi/ @alyssa @marysaka @jannau
 
 # Broadcom
 /src/broadcom/ @chema @jasuarez @itoral @apinheiro
 /src/gallium/drivers/v3d/ @chema @jasuarez @itoral @apinheiro
 /src/gallium/drivers/vc4/ @chema @jasuarez @itoral @apinheiro
+
+# Earthqaic
+/src/gallium/drivers/earthqaic/ @zmckevitt-qcom @jhugo
 
 # Freedreno
 /src/gallium/drivers/freedreno/ @robclark

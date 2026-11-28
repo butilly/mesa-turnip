@@ -16,6 +16,7 @@
 #include "intel_nir.h"
 #include "nir.h"
 #include "nir_builder_opcodes.h"
+#include "nir_builtin_builder.h"
 #include "nir_intrinsics.h"
 #include "nir_intrinsics_indices.h"
 #include "shader_enums.h"
@@ -1149,7 +1150,9 @@ brw_nir_lower_16bit_io(nir_shader *nir, nir_variable_mode mode)
 }
 
 static bool
-brw_nir_pack_vs_input(nir_shader *nir, struct brw_vs_prog_data *prog_data,
+brw_nir_pack_vs_input(nir_shader *nir,
+                      const struct brw_vs_prog_key *prog_key,
+                      uint32_t vf_component_packing[4],
                       unsigned *out_nr_packed_input_components)
 {
    struct vf_attribute {
@@ -1227,7 +1230,7 @@ brw_nir_pack_vs_input(nir_shader *nir, struct brw_vs_prog_data *prog_data,
     *     enabled."
     */
    if (nir->info.inputs_read == 0) {
-      if (prog_data->no_vf_slot_compaction) {
+      if (prog_key->no_vf_slot_compaction) {
          attributes[VERT_ATTRIB_GENERIC0].is_used = true;
          attributes[VERT_ATTRIB_GENERIC0].component_mask = 0x1;
       } else if (!BITSET_TEST(nir->info.system_values_read, SYSTEM_VALUE_IS_INDEXED_DRAW) &&
@@ -1323,13 +1326,13 @@ brw_nir_pack_vs_input(nir_shader *nir, struct brw_vs_prog_data *prog_data,
    unsigned vf_element_count = 0;
    for (unsigned a = VERT_ATTRIB_GENERIC0; a < MAX_HW_VERT_ATTRIB && vf_element_count < 32; a++) {
       /* Consider all attributes used when no slot compaction is active */
-      if (!attributes[a].is_used && !prog_data->no_vf_slot_compaction)
+      if (!attributes[a].is_used && !prog_key->no_vf_slot_compaction)
          continue;
 
       uint32_t mask;
       /* Stores masks in attributes[a].component_mask are in terms of 32-bit
        * components, but the HW depending on the format will interpret
-       * prog_data->vf_component_packing[] bits as either a 32-bit or 64-bit
+       * vf_component_packing[] bits as either a 32-bit or 64-bit
        * component. So we need to only consider every other bit.
        */
       if (attributes[a].is_64bit) {
@@ -1342,7 +1345,7 @@ brw_nir_pack_vs_input(nir_shader *nir, struct brw_vs_prog_data *prog_data,
       /* We should only have 4bits enabled max */
       assert((mask & ~0xfu) == 0);
 
-      prog_data->vf_component_packing[vf_element_count / 8] |=
+      vf_component_packing[vf_element_count / 8] |=
          mask << (4 * (vf_element_count % 8));
       vf_element_count++;
    }
@@ -1358,10 +1361,13 @@ void
 brw_nir_lower_vs_inputs(nir_shader *nir,
                         const struct intel_device_info *devinfo,
                         const struct brw_vs_prog_key *prog_key,
-                        struct brw_vs_prog_data *prog_data,
+                        const struct intel_push_layout *push_layout,
+                        uint32_t vf_component_packing[4],
                         unsigned *out_nr_input_components,
                         unsigned *out_urb_read_length)
 {
+   const uint64_t inputs_read = nir->info.inputs_read;
+
    /* Start with the location of the variable's base. */
    nir_foreach_shader_in_variable(var, nir)
       var->data.driver_location = var->data.location;
@@ -1502,13 +1508,14 @@ brw_nir_lower_vs_inputs(nir_shader *nir,
       }
    }
 
-   memset(prog_data->vf_component_packing, 0,
-          sizeof(prog_data->vf_component_packing));
+   memset(vf_component_packing, 0,
+          4 * sizeof(*vf_component_packing));
    unsigned nr_packed_input_components = 0;
    if (prog_key->vf_component_packing)
-      NIR_PASS(_, nir, brw_nir_pack_vs_input, prog_data, &nr_packed_input_components);
+      NIR_PASS(_, nir, brw_nir_pack_vs_input, prog_key, vf_component_packing,
+               &nr_packed_input_components);
 
-   unsigned nr_input_slots = util_bitcount64(prog_data->inputs_read);
+   unsigned nr_input_slots = util_bitcount64(inputs_read);
    /* gl_VertexID and gl_InstanceID are system values, but arrive via an
     * incoming vertex attribute.  So, add an extra slot.
     */
@@ -1540,8 +1547,8 @@ brw_nir_lower_vs_inputs(nir_shader *nir,
    /* reserve space for the R0 & R1 header */
    max_size -= 2 * REG_SIZE * reg_unit(devinfo);
    /* reserve space for push constants */
-   for (uint32_t i = 0; i < ARRAY_SIZE(prog_data->base.base.push_sizes); i++)
-      max_size -= prog_data->base.base.push_sizes[i];
+   for (uint32_t i = 0; i < ARRAY_SIZE(push_layout->push_sizes); i++)
+      max_size -= push_layout->push_sizes[i];
 
    const unsigned max_push_bytes = MAX2(max_size, 0);
 
@@ -1846,7 +1853,7 @@ lower_fs_config_intel(nir_builder *b, nir_intrinsic_instr *intrin, void *data)
 
 static uint32_t
 generate_fs_config_state_bits(const struct brw_fs_prog_key *key,
-                              const struct brw_fs_prog_data *prog_data,
+                              const struct intel_shader_info *info,
                               enum intel_sometimes comp_value)
 {
    uint32_t f = 0;
@@ -1854,10 +1861,10 @@ generate_fs_config_state_bits(const struct brw_fs_prog_key *key,
    if (key->multisample_fbo == comp_value)
       f |= INTEL_FS_CONFIG_MULTISAMPLE_FBO;
 
-   if (prog_data->alpha_to_coverage == comp_value)
+   if (info->fs.alpha_to_coverage == comp_value)
       f |= INTEL_FS_CONFIG_ALPHA_TO_COVERAGE;
 
-   if (prog_data->provoking_vertex_last == comp_value)
+   if (info->fs.provoking_vertex_last == comp_value)
       f |= INTEL_FS_CONFIG_PROVOKING_VERTEX_LAST;
 
    if (key->conservative_raster == comp_value)
@@ -1867,10 +1874,10 @@ generate_fs_config_state_bits(const struct brw_fs_prog_key *key,
       f |= INTEL_FS_CONFIG_PER_PRIMITIVE_REMAPPING;
 
    if (comp_value == INTEL_ALWAYS) {
-      if (prog_data->persample_dispatch)
+      if (info->fs.persample_dispatch)
          f |= INTEL_FS_CONFIG_PERSAMPLE_DISPATCH;
 
-      if (prog_data->coarse_pixel_dispatch)
+      if (info->fs.coarse_pixel_dispatch)
          f |= INTEL_FS_CONFIG_COARSE_RT_WRITES;
 
    }
@@ -1882,11 +1889,11 @@ generate_fs_config_state_bits(const struct brw_fs_prog_key *key,
 bool
 brw_nir_lower_fs_config_intel(nir_shader *nir,
                               const struct brw_fs_prog_key *key,
-                              const struct brw_fs_prog_data *prog_data)
+                              const struct intel_shader_info *info)
 {
    struct lower_fs_config_state state = {
-      .known_bits = ~generate_fs_config_state_bits(key, prog_data, INTEL_SOMETIMES),
-      .enabled_bits = generate_fs_config_state_bits(key, prog_data, INTEL_ALWAYS),
+      .known_bits = ~generate_fs_config_state_bits(key, info, INTEL_SOMETIMES),
+      .enabled_bits = generate_fs_config_state_bits(key, info, INTEL_ALWAYS),
    };
 
    return nir_shader_intrinsics_pass(nir, lower_fs_config_intel,
@@ -1927,6 +1934,19 @@ lower_sample_pos(nir_builder *b, nir_intrinsic_instr *intrin)
    nir_def_rewrite_uses_after(&intrin->def, pos);
 }
 
+static void
+lower_barycentric_at_sample(nir_builder *b, nir_intrinsic_instr *intrin)
+{
+   b->cursor = nir_before_instr(&intrin->instr);
+
+   nir_def *sample_id = nir_bcsel(
+      b,
+      nir_test_fs_config_intel(b, 1, INTEL_FS_CONFIG_MULTISAMPLE_FBO),
+      intrin->src[0].ssa, nir_imm_int(b, 0));
+
+   nir_src_rewrite(&intrin->src[0], sample_id);
+}
+
 static bool
 lower_msaa_config(nir_builder *b, nir_intrinsic_instr *intrin, void *data)
 {
@@ -1937,6 +1957,9 @@ lower_msaa_config(nir_builder *b, nir_intrinsic_instr *intrin, void *data)
    case nir_intrinsic_load_sample_pos:
    case nir_intrinsic_load_sample_pos_or_center:
       lower_sample_pos(b, intrin);
+      return true;
+   case nir_intrinsic_load_barycentric_at_sample:
+      lower_barycentric_at_sample(b, intrin);
       return true;
    default:
       return false;
@@ -2240,6 +2263,21 @@ brw_nir_code_motion(const brw_pass_tracker *pt)
           INTEL_CODE_MOTION_LICM : INTEL_CODE_MOTION_GCM;
 }
 
+static bool
+brw_nir_licm_filter(nir_instr *instr, nir_loop *loop,
+                    bool instr_block_dominates_exit)
+{
+   if (instr_block_dominates_exit)
+      return true;
+
+   if (instr->type != nir_instr_type_intrinsic)
+      return false;
+
+   nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
+   return nir_intrinsic_has_access(intrin) &&
+          (nir_intrinsic_access(intrin) & ACCESS_CAN_SPECULATE);
+}
+
 void
 brw_nir_optimize(brw_pass_tracker *pt, bool run_code_motion)
 {
@@ -2323,7 +2361,7 @@ brw_nir_optimize(brw_pass_tracker *pt, bool run_code_motion)
       }
       LOOP_OPT(nir_opt_remove_phis);
       if (code_motion == INTEL_CODE_MOTION_LICM) {
-         LOOP_OPT(nir_opt_licm, NULL);
+         LOOP_OPT(nir_opt_licm, brw_nir_licm_filter);
       } else if (code_motion == INTEL_CODE_MOTION_GCM) {
          LOOP_OPT(nir_opt_gcm, false);
       }
@@ -2514,6 +2552,93 @@ lower_xehp_tg4_offset_filter(const nir_instr *instr, UNUSED const void *data)
    return offset_x < -8 || offset_x > 7 || offset_y < -8 || offset_y > 7;
 }
 
+static bool
+lower_txd_cb(const nir_tex_instr *tex, const void *data)
+{
+   const struct intel_device_info *devinfo = data;
+
+   int min_lod_index = nir_tex_instr_src_index(tex, nir_tex_src_min_lod);
+   if (tex->is_shadow && min_lod_index >= 0)
+      return true;
+
+   int offset_index = nir_tex_instr_src_index(tex, nir_tex_src_offset);
+   if (tex->is_shadow && offset_index >= 0 && min_lod_index >= 0)
+      return true;
+
+   /* Cases that require a sampler header and the payload is already too large
+    * for the HW to handle.
+    */
+   const int sampler_offset_idx =
+      nir_tex_instr_src_index(tex, nir_tex_src_sampler_deref);
+   if (min_lod_index >= 0 && sampler_offset_idx >= 0) {
+      /* if (!nir_src_is_const(tex->src[sampler_offset_idx].src) || */
+      /*     (nir_src_is_const(tex->src[sampler_offset_idx].src) && */
+      /*      (tex->sampler_index + */
+      /*       nir_src_as_uint(tex->src[sampler_offset_idx].src)) >= 16)) */
+         return true;
+   }
+
+   const int sampler_handle_idx =
+      nir_tex_instr_src_index(tex, nir_tex_src_sampler_deref);
+   if (sampler_handle_idx >= 0 && min_lod_index >= 0)
+      return true;
+
+   if (tex->sampler_dim == GLSL_SAMPLER_DIM_CUBE)
+      return true;
+
+   if (devinfo->verx10 >= 125) {
+      /* For below, See bspec 45942, "Enable new message layout for cube
+       * array"
+       */
+      if (tex->sampler_dim == GLSL_SAMPLER_DIM_3D)
+         return true;
+
+      if (tex->is_array)
+         return true;
+   }
+
+   if (tex->is_shadow && offset_index >= 0 &&
+       !brw_nir_tex_offset_in_constant_range(tex, offset_index))
+      return true;
+
+   return false;
+}
+
+static nir_def *
+build_txs_lod0_intel(nir_builder *b,
+                     nir_tex_instr *tex,
+                     void *data)
+{
+   b->cursor = nir_before_instr(&tex->instr);
+
+   return nir_build_texture_query(b, tex, nir_texop_txs_lod0_intel,
+                                  nir_tex_instr_dest_size(tex),
+                                  nir_type_int32, false, true);
+}
+
+void
+brw_nir_select_divergence_options(const struct brw_compiler *compiler,
+                                  nir_shader *nir, bool use_jay)
+{
+   const struct nir_shader_compiler_options *options = nir->options;
+
+   if (use_jay && nir->info.stage == MESA_SHADER_FRAGMENT)
+      options = &compiler->nir_options_fs_single_prim;
+   else if (mesa_shader_stage_is_compute(nir->info.stage) &&
+            !nir->info.workgroup_size_variable &&
+            nir->info.workgroup_size[0] * nir->info.workgroup_size[1] % 32 == 0)
+      options = &compiler->nir_options_cs_uniform_local_id_z;
+
+   if (options == nir->options)
+      return;
+
+   nir->options = options;
+
+   /* Invalidate existing divergence metadata. */
+   nir_foreach_function_impl(impl, nir)
+      nir_progress(true, impl, ~nir_metadata_divergence);
+}
+
 /* Does some simple lowering and runs the standard suite of optimizations
  *
  * This is intended to be called more-or-less directly after you get the
@@ -2584,9 +2709,22 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir,
    if (OPT(nir_opt_memcpy))
       OPT(nir_split_var_copies);
 
+   const struct nir_lower_var_copies_options early_var_copies_options = {
+      .loop_array_copy_modes =
+         nir_var_all & ~brw_nir_no_indirect_mask(nir->info.stage),
+      .early_lowering = true,
+   };
+
+   /* Propagate aggregate copy sources before lowering, so intermediate arrays
+    * made redundant by copy chains can be removed during normal optimization.
+    * Then lower copies before array splitting can expand them.
+    */
+   OPT(nir_opt_copy_prop_vars);
+   OPT(nir_lower_var_copies_with_options, &early_var_copies_options);
+
    brw_nir_optimize(pt, true);
 
-   if (nir->info.ray_queries) {
+   if (devinfo->has_ray_tracing) {
       OPT(nir_opt_ray_queries);
       OPT(nir_opt_ray_query_ranges);
    }
@@ -2624,7 +2762,11 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir,
    OPT(nir_lower_bit_size, lower_bit_size_callback, (void *)devinfo);
 
    /* Lower a bunch of stuff */
-   OPT(nir_lower_var_copies);
+   const struct nir_lower_var_copies_options final_var_copies_options = {
+      .loop_array_copy_modes =
+         early_var_copies_options.loop_array_copy_modes,
+   };
+   OPT(nir_lower_var_copies_with_options, &final_var_copies_options);
 
    /* This needs to be run after the first optimization pass but before we
     * lower indirect derefs away
@@ -2709,11 +2851,42 @@ brw_preprocess_nir(const struct brw_compiler *compiler, nir_shader *nir,
     * nir_lower_system_values above.
     */
    if (nir->info.stage == MESA_SHADER_TESS_CTRL &&
-       intel_use_tcs_multi_patch(devinfo))
+       intel_use_tcs_multi_patch(devinfo)) {
       OPT(intel_nir_clamp_per_vertex_loads);
+   }
 
    /* Get rid of split copies */
    brw_nir_optimize(pt, true);
+
+   const nir_lower_tex_options tex_options = {
+      .lower_txp = ~0,
+      .lower_txf_offset = true,
+      .lower_rect_offset = true,
+      .lower_txb_shadow_clamp = true,
+      .lower_tg4_offsets = true,
+      .lower_txs_lod = true, /* Wa_14012320009 */
+      .lower_offset_filter =
+         devinfo->verx10 >= 125 ? lower_xehp_tg4_offset_filter : NULL,
+      .lower_invalid_implicit_lod = true,
+      .lower_index_to_offset = true,
+      .lower_txd_cb = lower_txd_cb,
+      .lower_txd_data = devinfo,
+      .build_txs_lod0 = opts->lower_tex_use_txs_lod0_intel ? build_txs_lod0_intel : NULL,
+   };
+
+   /* In the case where TG4 coords are lowered to offsets and we have a
+    * lower_xehp_tg4_offset_filter lowering those offsets further, we need to
+    * rerun the pass because the instructions inserted by the first lowering
+    * are not visible during that first pass.
+    */
+   if (OPT(nir_lower_tex, &tex_options))
+      OPT(nir_lower_tex, &tex_options);
+
+   const nir_lower_image_options image_options = {
+      .lower_cube_size = true,
+      .lower_image_samples_to_one = true,
+   };
+   OPT(nir_lower_image, &image_options);
 }
 
 static bool
@@ -3469,58 +3642,6 @@ nir_shader_has_local_variables(const nir_shader *nir)
 }
 
 static bool
-lower_txd_cb(const nir_tex_instr *tex, const void *data)
-{
-   const struct intel_device_info *devinfo = data;
-
-   int min_lod_index = nir_tex_instr_src_index(tex, nir_tex_src_min_lod);
-   if (tex->is_shadow && min_lod_index >= 0)
-      return true;
-
-   int offset_index = nir_tex_instr_src_index(tex, nir_tex_src_offset);
-   if (tex->is_shadow && offset_index >= 0 && min_lod_index >= 0)
-      return true;
-
-   /* Cases that require a sampler header and the payload is already too large
-    * for the HW to handle.
-    */
-   const int sampler_offset_idx =
-      nir_tex_instr_src_index(tex, nir_tex_src_sampler_offset);
-   if (min_lod_index >= 0 && sampler_offset_idx >= 0) {
-      if (!nir_src_is_const(tex->src[sampler_offset_idx].src) ||
-          (nir_src_is_const(tex->src[sampler_offset_idx].src) &&
-           (tex->sampler_index +
-            nir_src_as_uint(tex->src[sampler_offset_idx].src)) >= 16))
-         return true;
-   }
-
-   const int sampler_handle_idx =
-      nir_tex_instr_src_index(tex, nir_tex_src_sampler_handle);
-   if (sampler_handle_idx >= 0 && min_lod_index >= 0)
-      return true;
-
-   if (tex->sampler_dim == GLSL_SAMPLER_DIM_CUBE)
-      return true;
-
-   if (devinfo->verx10 >= 125) {
-      /* For below, See bspec 45942, "Enable new message layout for cube
-       * array"
-       */
-      if (tex->sampler_dim == GLSL_SAMPLER_DIM_3D)
-         return true;
-
-      if (tex->is_array)
-         return true;
-   }
-
-   if (tex->is_shadow && offset_index >= 0 &&
-       !brw_nir_tex_offset_in_constant_range(tex, offset_index))
-      return true;
-
-   return false;
-}
-
-static bool
 flag_fused_eu_disable_instr(nir_builder *b, nir_instr *instr, void *data)
 {
    switch (instr->type) {
@@ -3639,34 +3760,15 @@ brw_postprocess_nir_opts(brw_pass_tracker *pt)
    if (enabled_cases != 0)
       OPT(intel_nir_opt_atomic_branch, enabled_cases);
 
-   const nir_lower_tex_options tex_options = {
-      .lower_txp = ~0,
-      .lower_txf_offset = true,
-      .lower_rect_offset = true,
-      .lower_txb_shadow_clamp = true,
-      .lower_tg4_offsets = true,
-      .lower_txs_lod = true, /* Wa_14012320009 */
-      .lower_offset_filter =
-         devinfo->verx10 >= 125 ? lower_xehp_tg4_offset_filter : NULL,
-      .lower_invalid_implicit_lod = true,
-      .lower_index_to_offset = true,
-      .lower_txd_cb = lower_txd_cb,
-      .lower_txd_data = devinfo,
-   };
-
-   /* In the case where TG4 coords are lowered to offsets and we have a
-    * lower_xehp_tg4_offset_filter lowering those offsets further, we need to
-    * rerun the pass because the instructions inserted by the first lowering
-    * are not visible during that first pass.
-    */
-   if (OPT(nir_lower_tex, &tex_options))
-      OPT(nir_lower_tex, &tex_options);
 
    OPT(brw_nir_lower_mcs_fetch, devinfo);
 
    bool jay = intel_use_jay(devinfo, nir);
 
    OPT(intel_nir_lower_sparse_intrinsics, jay);
+
+   /* Remove texture_index/sampler_index values */
+   OPT(nir_lower_tex, &(nir_lower_tex_options) { .lower_index_to_offset = true, });
 
    /* Any constants leftover should be folded so we have constant textures */
    OPT(nir_opt_constant_folding);
@@ -3767,7 +3869,6 @@ brw_postprocess_nir_opts(brw_pass_tracker *pt)
    if (OPT(intel_nir_opt_peephole_ffma))
       OPT(nir_opt_shrink_vectors, false);
 
-   OPT(nir_opt_generate_bfi);
    OPT(nir_opt_reassociate_bfi);
 
    if (OPT(nir_opt_comparison_pre)) {
@@ -3823,11 +3924,22 @@ brw_postprocess_nir_opts(brw_pass_tracker *pt)
       .lower_boolean_shuffle = jay,
    };
 
-   if (OPT(nir_opt_uniform_atomics, false))
-      OPT(nir_lower_subgroups, &subgroups_options);
+   /* TODO: Unify this with the logic in jay_prog_data somehow */
+   const bool uses_helpers =
+      pt->nir->info.stage == MESA_SHADER_FRAGMENT &&
+      (pt->nir->info.fs.needs_coarse_quad_helper_invocations ||
+       pt->nir->info.uses_wide_subgroup_intrinsics ||
+       pt->nir->info.maximally_reconverges ||
+       !jay);
 
-   if (pt->key->divergent_atomics_flags)
-      OPT(brw_nir_opt_divergent_atomics, pt->key->divergent_atomics_flags);
+   if (OPT(nir_opt_uniform_atomics, !uses_helpers)) {
+      OPT(nir_lower_subgroups, &subgroups_options);
+   }
+
+   if (pt->key->divergent_atomics_flags) {
+      OPT(brw_nir_opt_divergent_atomics, pt->key->divergent_atomics_flags,
+          !uses_helpers);
+   }
 
    /* nir_opt_uniform_subgroup can create some operations (e.g.,
     * load_subgroup_lt_mask) that need to be lowered again.

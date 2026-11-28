@@ -53,7 +53,7 @@ copy_fbd(struct cs_builder *b, bool has_zs_ext, uint32_t rt_count,
     */
    const unsigned flags2_reg =
       offsetof(struct panvk_fb_layer_state, flags2) / sizeof(uint32_t);
-   struct cs_index mask = cs_scratch_reg32(b, 8);
+   struct cs_index mask = cs_scratch_reg32(b, 16);
 
    cs_move32_to(b, mask, BITFIELD_MASK(28));
    cs_and32(b, cs_scratch_reg32(b, flags2_reg), cs_scratch_reg32(b, flags2_reg),
@@ -95,6 +95,14 @@ copy_fbd(struct cs_builder *b, bool has_zs_ext, uint32_t rt_count,
 #endif
    cs_store(b, cs_scratch_reg_tuple(b, 0, 8), dst, BITFIELD_MASK(8),
             8 * sizeof(uint32_t));
+
+#if PAN_ARCH >= 11
+   /* Copy VRS Image Rate and VRS Image Plane fields. */
+   const unsigned vrs_offset = 16 * sizeof(uint32_t);
+   struct cs_index vrs = cs_scratch_reg64(b, 0);
+   cs_load64_to(b, vrs, src_other, vrs_offset);
+   cs_store64(b, vrs, dst, vrs_offset);
+#endif
 #endif
 
    if (has_zs_ext) {
@@ -181,6 +189,7 @@ generate_tiler_oom_handler(struct panvk_device *dev,
    assert(rt_count >= 1 && rt_count <= MAX_RTS);
 
    const uint32_t fbd_size = get_fbd_size(has_zs_ext, rt_count);
+   const uint32_t fbd_tag = get_fbd_tag(has_zs_ext, rt_count);
 
    const struct drm_panthor_csif_info *csif_info =
       panthor_kmod_get_csif_props(dev->kmod.dev);
@@ -207,16 +216,10 @@ generate_tiler_oom_handler(struct panvk_device *dev,
          offsetof(struct panvk_cs_subqueue_context, debug.tracebuf.cs),
    };
 
-#if PAN_ARCH < 14
-   struct mali_framebuffer_pointer_packed fb_tag;
-   pan_pack(&fb_tag, FRAMEBUFFER_POINTER, cfg) {
-      cfg.zs_crc_extension_present = has_zs_ext;
-      cfg.render_target_count = rt_count;
-   }
-#endif
-
    cs_function_def(&b, &handler, handler_ctx) {
       struct cs_index subqueue_ctx = cs_subqueue_ctx_reg(&b);
+      struct cs_index fbd_pointer = cs_sr_reg64(&b, FRAGMENT, FBD_POINTER);
+      cs_function_dont_restore(&handler, fbd_pointer);
 
       struct cs_index zero = cs_scratch_reg64(&b, 0);
       /* Have flush_id read part of the double zero register */
@@ -262,13 +265,14 @@ generate_tiler_oom_handler(struct panvk_device *dev,
             TILER_OOM_CTX_FIELD_OFFSET(ir_descs[PANVK_IR_FIRST_PASS]));
       }
 
-      cs_wait_slot(&b, SB_ID(LS));
+      cs_wait_ls(&b);
 
       cs_while(&b, MALI_CS_CONDITION_GREATER, layer_count) {
          cs_add_imm32(&b, layer_count, layer_count, -1);
 
          copy_fbd(&b, has_zs_ext, rt_count, current_fbd_ptr_reg, ir_descs_ptr,
                   scratch_fbd_ptr_reg);
+         cs_flush_stores(&b);
 
 #if PAN_ARCH >= 14
          /* Emit the scratch fbd layer state. */
@@ -278,8 +282,7 @@ generate_tiler_oom_handler(struct panvk_device *dev,
                                 MALI_TILE_RENDER_ORDER_Z_ORDER);
 #else
          /* Set FBD pointer to the scratch fbd */
-         cs_add_imm64(&b, cs_sr_reg64(&b, FRAGMENT, FBD_POINTER),
-                      scratch_fbd_ptr_reg, fb_tag.opaque[0]);
+         cs_add_imm64(&b, fbd_pointer, scratch_fbd_ptr_reg, fbd_tag);
          cs_trace_run_fragment(&b, &tracing_ctx, run_fragment_regs, false,
                                MALI_TILE_RENDER_ORDER_Z_ORDER);
 #endif
@@ -311,12 +314,17 @@ generate_tiler_oom_handler(struct panvk_device *dev,
          cs_add_imm32(&b, td_count, td_count, -1);
       }
 
-      /* If this is the first IR call, we need to patch the regular FBD
-       * to use the last IR config.
-       */
+      /* Leave the LAST-pass array base in FBD_POINTER on every OOM. */
+      cs_load64_to(&b, fbd_pointer, subqueue_ctx,
+                   TILER_OOM_CTX_FIELD_OFFSET(ir_final_fbds));
+
+      /* On the first OOM, prepare the final FBD for each enabled layer. */
       cs_if(&b, MALI_CS_CONDITION_EQUAL, ir_count) {
+         struct cs_index final_fbd_ptr = cs_scratch_reg64(&b, 10);
+
          invalidate_crc_addrs_from_oom_ctx(&b, subqueue_ctx);
 
+         cs_add_imm64(&b, final_fbd_ptr, fbd_pointer, 0);
          cs_load64_to(&b, current_fbd_ptr_reg, subqueue_ctx,
                       TILER_OOM_CTX_FIELD_OFFSET(layer_fbd_ptr));
          cs_load64_to(&b, ir_descs_ptr, subqueue_ctx,
@@ -331,13 +339,17 @@ generate_tiler_oom_handler(struct panvk_device *dev,
              * last IR config.
              */
             copy_fbd(&b, has_zs_ext, rt_count, current_fbd_ptr_reg,
-                     ir_descs_ptr, current_fbd_ptr_reg);
+                     ir_descs_ptr, final_fbd_ptr);
 
+            cs_add_imm64(&b, final_fbd_ptr, final_fbd_ptr, fbd_size);
             cs_add_imm64(&b, current_fbd_ptr_reg, current_fbd_ptr_reg,
                          fbd_size);
             cs_add_imm64(&b, ir_descs_ptr, ir_descs_ptr, fbd_size);
          }
       }
+
+      if (fbd_tag)
+         cs_add_imm64(&b, fbd_pointer, fbd_pointer, fbd_tag);
 
       /* Increment IR counter */
       cs_add_imm32(&b, ir_count, ir_count, 1);
@@ -347,6 +359,7 @@ generate_tiler_oom_handler(struct panvk_device *dev,
 
       /* We need to flush the texture caches so future preloads see the new
        * content. */
+      cs_move32_to(&b, flush_id, 0);
       cs_flush_caches(&b, MALI_CS_FLUSH_MODE_NONE, MALI_CS_FLUSH_MODE_NONE,
                       MALI_CS_OTHER_FLUSH_MODE_INVALIDATE, flush_id,
                       cs_defer(SB_IMM_MASK, SB_ID(IMM_FLUSH)));
@@ -370,7 +383,8 @@ panvk_per_arch(init_tiler_oom)(struct panvk_device *device)
    VkResult result = panvk_priv_bo_create(
       device, TILER_OOM_HANDLER_MAX_SIZE * 2 * MAX_RTS,
       panvk_device_adjust_bo_flags(device, PAN_KMOD_BO_FLAG_WB_MMAP),
-      VK_SYSTEM_ALLOCATION_SCOPE_DEVICE, &device->tiler_oom.handlers_bo);
+      VK_SYSTEM_ALLOCATION_SCOPE_DEVICE, "Tiler OOM handlers",
+      &device->tiler_oom.handlers_bo);
    if (result != VK_SUCCESS)
       return result;
 

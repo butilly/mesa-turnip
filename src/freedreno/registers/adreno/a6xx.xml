@@ -193,7 +193,16 @@ by a particular renderpass/blit.
 		<reg32 offset="0x0" name="REG"/>
 	</array>
 
-	<reg32 offset="0x0840" name="CP_RL_ERROR_DETAILS_0" variants="A8XX-"/>
+	<reg32 offset="0x09b4" name="CP_RL_ERROR_DETAILS_0" variants="A7XX">
+		<bitfield name="ADDR" low="0" high="19"/>
+		<bitfield name="WRITE" pos="28" type="boolean"/>
+	</reg32>
+	<reg32 offset="0x09cf" name="CP_RL_ERROR_DETAILS_1" variants="A7XX"/>
+
+	<reg32 offset="0x0840" name="CP_RL_ERROR_DETAILS_0" variants="A8XX-">
+		<bitfield name="ADDR" low="0" high="19"/>
+		<bitfield name="WRITE" pos="28" type="boolean"/>
+	</reg32>
 	<reg32 offset="0x0841" name="CP_RL_ERROR_DETAILS_1" variants="A8XX-"/>
 
 	<reg64 offset="0x0830" name="CP_SQE_INSTR_BASE" variants="A6XX-A7XX"/>
@@ -958,9 +967,13 @@ by a particular renderpass/blit.
 		<bitfield high="7" low="0" name="PING_INDEX"/>
 		<bitfield high="15" low="8" name="PING_BLK_SEL"/>
 	</reg32>
-	<reg32 offset="0x0603" name="DBGC_CFG_DBGBUS_SEL_D" variants="A7XX-">
+	<reg32 offset="0x0603" name="DBGC_CFG_DBGBUS_SEL_D" variants="A7XX">
 		<bitfield high="7" low="0" name="PING_INDEX"/>
 		<bitfield high="24" low="16" name="PING_BLK_SEL"/>
+	</reg32>
+	<reg32 offset="0x0603" name="DBGC_CFG_DBGBUS_SEL_D" variants="A8XX">
+		<bitfield high="7" low="0" name="PING_INDEX"/>
+		<bitfield high="27" low="16" name="PING_BLK_SEL"/>
 	</reg32>
 	<reg32 offset="0x0604" name="DBGC_CFG_DBGBUS_CNTLT">
 		<bitfield high="5" low="0" name="TRACEEN"/>
@@ -2175,7 +2188,7 @@ by a particular renderpass/blit.
 		<bitfield name="IS_SRC_YUV" pos="19" type="boolean"/>
 		<!-- some sort of channel mask, disabled channels are set to zero ? -->
 		<bitfield name="MASK" low="20" high="23"/>
-		<bitfield name="IFMT" low="24" high="26" type="a6xx_2d_ifmt"/>
+		<bitfield name="IFMT" low="24" high="26" type="adreno_2d_ifmt"/>
 		<bitfield name="FULL_RANGE_YUV" pos="27" type="boolean"/>
 		<bitfield name="LINEAR_YUV" pos="28" type="boolean"/>
 		<bitfield name="RASTER_MODE" pos="29" type="a6xx_raster_mode"/>
@@ -4339,15 +4352,10 @@ by a particular renderpass/blit.
 
 	<reg32 offset="0xab23" name="SP_UNKNOWN_AB23" variants="A8XX-"/>
 
-	<enum name="a6xx_sp_a2d_output_ifmt_type">
-		<value name="OUTPUT_IFMT_2D_FLOAT" value="0"/>
-		<value name="OUTPUT_IFMT_2D_SINT" value="1"/>
-		<value name="OUTPUT_IFMT_2D_UINT" value="2"/>
-	</enum>
 
 	<bitset name="a6xx_sp_a2d_output_info" inline="yes">
 		<bitfield name="HALF_PRECISION" pos="0" type="boolean"/>
-		<bitfield name="IFMT_TYPE" low="1" high="2" type="a6xx_sp_a2d_output_ifmt_type"/>
+		<bitfield name="IFMT_TYPE" low="1" high="2" type="adreno_2d_output_ifmt_type"/>
 		<!-- looks like HW only cares about the base type of this format,
 		     which matches the ifmt? -->
 		<bitfield name="COLOR_FORMAT" low="3" high="10" type="a6xx_format"/>
@@ -4382,7 +4390,17 @@ by a particular renderpass/blit.
 	<reg32 offset="0xae06" name="SP_ISDB_CNTL" variants="A7XX-" usage="init"/>
 	<reg32 offset="0xae07" name="SP_PERFCTR_CNTL"/>
 	<reg32 offset="0xae08" name="SP_CHICKEN_BITS_1" variants="A7XX-" usage="init"/>
-	<reg32 offset="0xae09" name="SP_CHICKEN_BITS_2" variants="A7XX-" usage="init"/>
+	<reg32 offset="0xae09" name="SP_CHICKEN_BITS_2" variants="A7XX-" usage="init">
+		<bitfield name="INDEPENDENT_ICACHE_MISS" pos="30" type="boolean">
+			<doc>
+				A750 only. When set, each wave handles its instruction
+				cache misses independently and only the wave that missed
+				waits. When clear, a miss stalls all waves together, which
+				helps when the other waves would take the same miss and
+				hurts when their fetches diverge.
+			</doc>
+		</bitfield>
+	</reg32>
 	<reg32 offset="0xae0a" name="SP_CHICKEN_BITS_3" variants="A7XX-" usage="init"/>
 	<reg32 offset="0xae0b" name="SP_CHICKEN_BITS_4" variants="A8XX-"/>
 	<reg32 offset="0xae0c" name="SP_STATUS"/>
@@ -5085,6 +5103,7 @@ by a particular renderpass/blit.
 	<reg32 offset="0x0005" name="CFG_DBGBUS_CNTLM">
 		<bitfield high="27" low="24" name="ENABLE"/>
 	</reg32>
+	<reg32 offset="0x0006" name="CFG_DBGBUS_OPL"/>
 	<reg32 offset="0x0008" name="CFG_DBGBUS_IVTL_0"/>
 	<reg32 offset="0x0009" name="CFG_DBGBUS_IVTL_1"/>
 	<reg32 offset="0x000a" name="CFG_DBGBUS_IVTL_2"/>
@@ -5114,15 +5133,26 @@ by a particular renderpass/blit.
 		<bitfield high="31" low="28" name="BYTEL15"/>
 	</reg32>
 
+	<reg32 offset="0x001e" name="CFG_DBGBUS_IDX"/>
+	<reg32 offset="0x0026" name="CFG_DBGBUS_OVER"/>
 	<reg32 offset="0x002f" name="CFG_DBGBUS_TRACE_BUF1"/>
 	<reg32 offset="0x0030" name="CFG_DBGBUS_TRACE_BUF2"/>
+	<reg32 offset="0x0031" name="CFG_DBGBUS_TRACE_BUF3"/>
 </domain>
 
 <domain name="A7XX_CX_DBGC" width="32" varset="chip">
 	<!-- Bitfields shifted, but otherwise the same: -->
-	<reg32 offset="0x0000" name="CFG_DBGBUS_SEL_A" variants="A7XX-">
+	<reg32 offset="0x0000" name="CFG_DBGBUS_SEL_A" variants="A7XX">
 		<bitfield high="7" low="0" name="PING_INDEX"/>
 		<bitfield high="24" low="16" name="PING_BLK_SEL"/>
+	</reg32>
+</domain>
+
+<domain name="A8XX_CX_DBGC" width="32" varset="chip">
+	<!-- Bitfields shifted, but otherwise the same: -->
+	<reg32 offset="0x0000" name="CFG_DBGBUS_SEL_A" variants="A8XX-">
+		<bitfield high="7" low="0" name="PING_INDEX"/>
+		<bitfield high="27" low="16" name="PING_BLK_SEL"/>
 	</reg32>
 </domain>
 

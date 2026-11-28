@@ -1180,6 +1180,7 @@ void st_init_extensions(struct pipe_screen *screen,
    EXT_CAP(OES_texture_view,                 sampler_view_target);
    EXT_CAP(INTEL_blackhole_render,           frontend_noop);
    EXT_CAP(ARM_shader_framebuffer_fetch_depth_stencil, fbfetch_zs);
+   EXT_CAP(MESA_map_buffer_client_pointer,   map_client_pointer);
    EXT_CAP(MESA_texture_const_bandwidth,     has_const_bw);
 
 #undef EXT_CAP
@@ -1401,11 +1402,18 @@ void st_init_extensions(struct pipe_screen *screen,
       extensions->ARB_draw_indirect = GL_TRUE;
    }
 
-   /* Needs pipe_caps.sample_shading + all the sample-related bits of
-    * ARB_gpu_shader5. This enables all the per-sample shading ES extensions.
+   /* Every driver exposing ARB_gpu_shader5 must also report the sample
+    * variables that it includes.
+    */
+   assert(!extensions->ARB_gpu_shader5 || screen->caps.fs_sample_variables);
+
+   /* OES_sample_shading, OES_sample_variables and
+    * OES_shader_multisample_interpolation all share this flag in
+    * extensions_table.h. Needs sample shading plus fragment shader
+    * sample variables, which every driver exposing ARB_gpu_shader5 reports.
     */
    extensions->OES_sample_variables = extensions->ARB_sample_shading &&
-      extensions->ARB_gpu_shader5;
+      screen->caps.fs_sample_variables;
 
    /* Maximum sample count. */
    {
@@ -1813,8 +1821,6 @@ void st_init_extensions(struct pipe_screen *screen,
 
    extensions->OES_primitive_bounding_box =
       extensions->ARB_ES3_1_compatibility || ESSLVersion >= 310;
-
-   consts->NoPrimitiveBoundingBoxOutput = true;
 
    extensions->ANDROID_extension_pack_es31a =
       consts->Program[MESA_SHADER_FRAGMENT].MaxImageUniforms &&

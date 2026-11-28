@@ -418,7 +418,6 @@ struct dzn_descriptor_state {
       const struct dzn_descriptor_set *set;
       uint32_t dynamic_offsets[MAX_DYNAMIC_BUFFERS];
    } sets[MAX_SETS];
-   struct dzn_descriptor_heap *heaps[NUM_POOL_TYPES];
 };
 
 struct dzn_sampler;
@@ -431,9 +430,6 @@ struct dzn_buffer_desc {
    VkDeviceSize range;
    VkDeviceSize offset;
 };
-
-#define MAX_DESCS_PER_SAMPLER_HEAP     D3D12_MAX_SHADER_VISIBLE_SAMPLER_HEAP_SIZE
-#define MAX_DESCS_PER_CBV_SRV_UAV_HEAP D3D12_MAX_SHADER_VISIBLE_DESCRIPTOR_HEAP_SIZE_TIER_1
 
 VkResult
 dzn_descriptor_heap_init(struct dzn_descriptor_heap *heap,
@@ -1057,6 +1053,7 @@ struct dzn_image {
       uint32_t size;
    } linear;
    D3D12_RESOURCE_DESC desc;
+   D3D12_RESOURCE_ALLOCATION_INFO allocation_info;
    ID3D12Resource *res;
    uint32_t castable_format_count;
    const DXGI_FORMAT *castable_formats;

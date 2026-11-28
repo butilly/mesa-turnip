@@ -23,8 +23,12 @@
 #include <stdio.h>
 #include <inttypes.h>
 
+#if DETECT_OS_POSIX_LITE
+#include <sched.h> /* sched_yield */
+#endif
+
 #ifndef AMDGPU_VA_RANGE_HIGH
-#define AMDGPU_VA_RANGE_HIGH	0x2
+#define AMDGPU_VA_RANGE_HIGH   0x2
 #endif
 
 /* Set to 1 for verbose output showing committed sparse buffer ranges. */
@@ -174,6 +178,25 @@ static void amdgpu_bo_get_syncobjs(struct amdgpu_winsys *aws, struct amdgpu_wins
    simple_mtx_unlock(&aws->bo_fence_lock);
 }
 
+static long long amdgpu_canonicalize_va(uint64_t va)
+{
+   /* Would be less hardcoded to use addr32_hi (0xffff8000) to generate a mask,
+    * but there are confusing differences between page fault reports from kernel where
+    * it seems to report the top 48 bits, where addr32_hi has 47-bits. */
+   return (long long) (va & ((1ull << 48) - 1));
+}
+
+static const char *amdgpu_va_op_name(uint32_t op)
+{
+   switch (op) {
+      case AMDGPU_VA_OP_MAP: return "map";
+      case AMDGPU_VA_OP_UNMAP: return "unmap";
+      case AMDGPU_VA_OP_CLEAR: return "clear";
+      case AMDGPU_VA_OP_REPLACE: return "replace";
+      default: return "??";
+   }
+}
+
 static int amdgpu_bo_va_op_common(struct amdgpu_winsys *aws, struct amdgpu_winsys_bo *bo,
                                   uint32_t bo_handle, bool send_input_fence,
                                   uint64_t *vm_timeline_point, uint64_t offset, uint64_t size,
@@ -205,6 +228,17 @@ static int amdgpu_bo_va_op_common(struct amdgpu_winsys *aws, struct amdgpu_winsy
       simple_mtx_unlock(&aws->vm_ioctl_lock);
    } else {
       r = ac_drm_bo_va_op_raw(aws->dev, bo_handle, offset, size, addr, flags, ops);
+   }
+
+   if (aws->bo_history_logfile) {
+      const uint64_t timestamp = os_time_get_nano();
+
+      fprintf(aws->bo_history_logfile, "ts=%llu, bo=%18p, h=%5u, VA=%.16llx-%.16llx, op=%6s, flags=0x%" PRIx64 "\n",
+              (long long)timestamp,
+              bo, bo_handle,
+              amdgpu_canonicalize_va(addr), amdgpu_canonicalize_va(addr + size),
+              amdgpu_va_op_name(ops), flags);
+      fflush(aws->bo_history_logfile);
    }
 
    return r;
@@ -245,11 +279,7 @@ void amdgpu_bo_destroy(struct amdgpu_winsys *aws, struct pb_buffer_lean *_buf)
 
    simple_mtx_lock(&aws->bo_export_table_lock);
 
-   /* amdgpu_bo_from_handle might have revived the bo */
-   if (p_atomic_read(&bo->b.base.reference.count)) {
-      simple_mtx_unlock(&aws->bo_export_table_lock);
-      return;
-   }
+   assert (p_atomic_read(&bo->b.base.reference.count) == 0);
 
    _mesa_hash_table_remove_key(aws->bo_export_table, bo->bo.abo);
 
@@ -276,14 +306,12 @@ void amdgpu_bo_destroy(struct amdgpu_winsys *aws, struct pb_buffer_lean *_buf)
 
    ac_drm_bo_free(aws->dev, bo->bo);
 
-#if MESA_DEBUG
    if (aws->debug_all_bos) {
       simple_mtx_lock(&aws->global_bo_list_lock);
       list_del(&bo->global_list_item);
       aws->num_buffers--;
       simple_mtx_unlock(&aws->global_bo_list_lock);
    }
-#endif
 
    /* Close all KMS handles retrieved for other DRM file descriptions */
    simple_mtx_lock(&aws->sws_list_lock);
@@ -394,7 +422,7 @@ void *amdgpu_bo_map(struct radeon_winsys *rws,
             if (acs && amdgpu_bo_is_referenced_by_cs_with_usage(acs, bo,
                                                                 RADEON_USAGE_WRITE)) {
                acs->flush_cs(acs->flush_data,
-			    RADEON_FLUSH_ASYNC_START_NEXT_GFX_IB_NOW, NULL);
+                             RADEON_FLUSH_ASYNC_START_NEXT_GFX_IB_NOW, NULL);
                return NULL;
             }
 
@@ -405,7 +433,7 @@ void *amdgpu_bo_map(struct radeon_winsys *rws,
          } else {
             if (acs && amdgpu_bo_is_referenced_by_cs(acs, bo)) {
                acs->flush_cs(acs->flush_data,
-			    RADEON_FLUSH_ASYNC_START_NEXT_GFX_IB_NOW, NULL);
+                             RADEON_FLUSH_ASYNC_START_NEXT_GFX_IB_NOW, NULL);
                return NULL;
             }
 
@@ -429,7 +457,7 @@ void *amdgpu_bo_map(struct radeon_winsys *rws,
                if (amdgpu_bo_is_referenced_by_cs_with_usage(acs, bo,
                                                             RADEON_USAGE_WRITE)) {
                   acs->flush_cs(acs->flush_data,
-			       RADEON_FLUSH_START_NEXT_GFX_IB_NOW, NULL);
+                                RADEON_FLUSH_START_NEXT_GFX_IB_NOW, NULL);
                } else {
                   /* Try to avoid busy-waiting in amdgpu_bo_wait. */
                   if (p_atomic_read(&bo->num_active_ioctls))
@@ -444,7 +472,7 @@ void *amdgpu_bo_map(struct radeon_winsys *rws,
             if (acs) {
                if (amdgpu_bo_is_referenced_by_cs(acs, bo)) {
                   acs->flush_cs(acs->flush_data,
-			       RADEON_FLUSH_START_NEXT_GFX_IB_NOW, NULL);
+                                RADEON_FLUSH_START_NEXT_GFX_IB_NOW, NULL);
                } else {
                   /* Try to avoid busy-waiting in amdgpu_bo_wait. */
                   if (p_atomic_read(&bo->num_active_ioctls))
@@ -536,14 +564,12 @@ void amdgpu_bo_unmap(struct radeon_winsys *rws, struct pb_buffer_lean *buf)
 
 static void amdgpu_add_buffer_to_global_list(struct amdgpu_winsys *aws, struct amdgpu_bo_real *bo)
 {
-#if MESA_DEBUG
    if (aws->debug_all_bos) {
       simple_mtx_lock(&aws->global_bo_list_lock);
       list_addtail(&bo->global_list_item, &aws->global_bo_list);
       aws->num_buffers++;
       simple_mtx_unlock(&aws->global_bo_list_lock);
    }
-#endif
 }
 
 static unsigned amdgpu_get_optimal_alignment(struct amdgpu_winsys *aws,
@@ -641,13 +667,8 @@ static struct amdgpu_winsys_bo *amdgpu_create_bo(struct amdgpu_winsys *aws,
        flags & RADEON_FLAG_NO_INTERPROCESS_SHARING)
       request.flags |= AMDGPU_GEM_CREATE_VM_ALWAYS_VALID;
 
-   if (flags & RADEON_FLAG_DISCARDABLE &&
-       aws->info.drm_minor >= 47)
+   if (flags & RADEON_FLAG_DISCARDABLE)
       request.flags |= AMDGPU_GEM_CREATE_DISCARDABLE;
-
-   if ((flags & RADEON_FLAG_CLEAR_VRAM) || (aws->zero_all_vram_allocs &&
-        (request.preferred_heap & AMDGPU_GEM_DOMAIN_VRAM)))
-      request.flags |= AMDGPU_GEM_CREATE_VRAM_CLEARED;
 
    if ((flags & RADEON_FLAG_ENCRYPTED) &&
        aws->info.has_tmz_support) {
@@ -1512,7 +1533,7 @@ no_slab:
 
    bool use_reusable_pool = !(domain & RADEON_DOMAIN_DOORBELL) &&
       (flags & RADEON_FLAG_NO_INTERPROCESS_SHARING) &&
-      !(flags & (RADEON_FLAG_DISCARDABLE | RADEON_FLAG_CLEAR_VRAM));
+      !(flags & (RADEON_FLAG_DISCARDABLE));
 
    if (use_reusable_pool) {
        /* RADEON_FLAG_NO_SUBALLOC is irrelevant for the cache. */
@@ -1599,6 +1620,7 @@ static struct pb_buffer_lean *amdgpu_bo_from_handle(struct radeon_winsys *rws,
       return NULL;
    }
 
+retry:
    r = ac_drm_bo_import(aws->dev, type, whandle->handle, &result);
    if (r)
       return NULL;
@@ -1610,7 +1632,21 @@ static struct pb_buffer_lean *amdgpu_bo_from_handle(struct radeon_winsys *rws,
     * counter and return it.
     */
    if (bo) {
-      p_atomic_inc(&bo->b.base.reference.count);
+      /* If we hold the only reference to the BO but it's still listed in
+       * bo_export_table it means that another thread is in the middle of
+       * destroying it.
+       * Give up the lock so that the other thread can complete its work
+       * and re-import the BO.
+       */
+      if (p_atomic_inc_return(&bo->b.base.reference.count) == 1) {
+         p_atomic_dec(&bo->b.base.reference.count);
+         simple_mtx_unlock(&aws->bo_export_table_lock);
+         ac_drm_bo_free(aws->dev, result.bo);
+#if DETECT_OS_POSIX_LITE
+         sched_yield();
+#endif
+         goto retry;
+      }
       simple_mtx_unlock(&aws->bo_export_table_lock);
 
       /* Release the buffer handle, because we don't need it anymore.
@@ -1804,8 +1840,8 @@ static bool amdgpu_bo_get_handle(struct radeon_winsys *rws,
 }
 
 static struct pb_buffer_lean *amdgpu_bo_from_ptr(struct radeon_winsys *rws,
-					    void *pointer, uint64_t size,
-					    enum radeon_bo_flag flags)
+                                                 void *pointer, uint64_t size,
+                                                 enum radeon_bo_flag flags)
 {
     struct amdgpu_winsys *aws = amdgpu_winsys(rws);
     ac_drm_bo buf_handle;

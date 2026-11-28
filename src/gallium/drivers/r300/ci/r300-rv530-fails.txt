@@ -266,12 +266,6 @@ spec@glsl-1.20@execution@fs-nan-builtin-min,Fail
 spec@glsl-1.20@execution@vs-nan-builtin-min,Fail
 spec@glsl-1.20@execution@vs-nan-builtin-max,Fail
 
-# piglit bug, requires GLSL >= 1.20 but specifies #version 130
-spec@glsl-1.20@execution@vs-loop-uint-induction-var-1,Fail
-spec@glsl-1.20@execution@vs-loop-uint-induction-var-2,Fail
-spec@glsl-1.20@execution@vs-loop-uint-induction-var-3,Fail
-spec@glsl-1.20@execution@vs-loop-uint-induction-var-4,Fail
-
 spec@glsl-1.20@execution@tex-miplevel-selection gl2:texture() cube,Fail
 spec@glsl-1.20@execution@tex-miplevel-selection gl2:texture(bias) cube,Fail
 
@@ -281,6 +275,9 @@ spec@khr_texture_compression_astc@basic-gles,Fail
 spec@khr_texture_compression_astc@miptree-gl srgb-fp@sRGB decode full precision,Fail
 
 # uprev Piglit in Mesa
+spec@!opengl 1.0@gl-1.0-front-back-interleave,Fail
+spec@!opengl 1.0@gl-1.0-read-front-after-swap,Fail
+spec@!opengl 1.5@gl-1.5-gen-buffers-unique,Crash
 spec@ext_framebuffer_multisample@accuracy all_samples color depthstencil linear,Fail
 spec@ext_framebuffer_multisample@accuracy all_samples color depthstencil,Fail
 spec@ext_framebuffer_multisample@accuracy all_samples color small depthstencil linear,Fail

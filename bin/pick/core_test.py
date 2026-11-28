@@ -20,11 +20,10 @@
 
 """Tests for pick's core data structures and routines."""
 
-from unittest import mock
 import textwrap
-import typing
+from dataclasses import dataclass
+from unittest import mock
 
-import attr
 import pytest
 
 from . import core
@@ -287,19 +286,19 @@ class TestRE:
 
 class TestResolveNomination:
 
-    @attr.s(slots=True)
+    @dataclass(slots=True)
     class FakeSubprocess:
 
         """A fake asyncio.subprocess like class for use with mock."""
 
-        out: typing.Optional[bytes] = attr.ib(None)
-        returncode: int = attr.ib(0)
+        out: bytes | None = None
+        returncode: int = 0
 
         async def mock(self, *_, **__):
             """A dirtly little helper for mocking."""
             return self
 
-        async def communicate(self) -> typing.Tuple[bytes, bytes]:
+        async def communicate(self) -> tuple[bytes, bytes]:
             assert self.out is not None
             return self.out, b''
 
@@ -444,6 +443,34 @@ class TestResolveNomination:
 
         assert c.nominated
         assert c.nomination_type is core.NominationType.FIXES
+
+    @pytest.mark.asyncio
+    async def test_is_not_fix_and_backport(self):
+        s = self.FakeSubprocess(
+            b'Fixes: 1234abcd\n'
+            b'Backport-to: 16.1'
+        )
+        c = core.Commit('abcdef1234567890', 'a commit')
+
+        with mock.patch('bin.pick.core.asyncio.create_subprocess_exec', s.mock):
+            with mock.patch('bin.pick.core.is_commit_in_branch', self.return_false):
+                await core.resolve_nomination(c, '16.1')
+
+        assert not c.nominated
+
+    @pytest.mark.asyncio
+    async def test_is_not_backport_and_cc(self):
+        s = self.FakeSubprocess(
+            b'Backport-to: 16.2\n'
+            b'Cc: mesa-stable'
+        )
+        c = core.Commit('abcdef1234567890', 'a commit')
+
+        with mock.patch('bin.pick.core.asyncio.create_subprocess_exec', s.mock):
+            with mock.patch('bin.pick.core.is_commit_in_branch', self.return_false):
+                await core.resolve_nomination(c, '16.1')
+
+        assert not c.nominated
 
 
 class TestResolveFixes:

@@ -27,11 +27,21 @@
 #include "vk_instance.h"
 #include "vk_log.h"
 
+#ifdef RADV_SUPPORT_RDP
+#include "ac_devdriver.h"
+#endif
+
 static const struct debug_control_bitset radv_debug_options[] = {
-#define OPT1(name, bit)                                                                                              \
-   { .string = name, .range = {bit, bit}, }
-#define OPT2(name, start, end)                                                                                        \
-   { .string = name, .range = {start, end}, }
+#define OPT1(name, bit)                                                                                                \
+   {                                                                                                                   \
+      .string = name,                                                                                                  \
+      .range = {bit, bit},                                                                                             \
+   }
+#define OPT2(name, start, end)                                                                                         \
+   {                                                                                                                   \
+      .string = name,                                                                                                  \
+      .range = {start, end},                                                                                           \
+   }
    OPT1("nofastclears", RADV_DEBUG_NO_FAST_CLEARS),
    OPT1("nodcc", RADV_DEBUG_NO_DCC),
    OPT2("shaders", RADV_DEBUG_DUMP_SHADERS_BEGIN, RADV_DEBUG_DUMP_SHADERS_END),
@@ -42,7 +52,6 @@ static const struct debug_control_bitset radv_debug_options[] = {
    OPT1("allbos", RADV_DEBUG_ALL_BOS),
    OPT1("noibchaining", RADV_DEBUG_NO_IB_CHAINING),
    OPT1("spirv", RADV_DEBUG_DUMP_SPIRV),
-   OPT1("zerovram", RADV_DEBUG_ZERO_VRAM),
    OPT1("syncshaders", RADV_DEBUG_SYNC_SHADERS),
    OPT1("preoptir", RADV_DEBUG_DUMP_PREOPT_IR),
    OPT1("info", RADV_DEBUG_INFO),
@@ -179,14 +188,19 @@ radv_get_perftest_option_name(int id)
    return NULL;
 }
 
+// clang-format off
 static const struct debug_control trace_options[] = {
    {"rgp", RADV_TRACE_MODE_RGP},
    {"rra", RADV_TRACE_MODE_RRA},
    {"gamma", RADV_TRACE_MODE_GAMMA},
    {"ctxroll", RADV_TRACE_MODE_CTX_ROLLS},
    {"ranges", RADV_TRACE_MODE_RANGES},
+#ifdef RADV_SUPPORT_RDP
+   {"rdp", RADV_TRACE_MODE_RDP},
+#endif
    {NULL, 0},
 };
+// clang-format on
 
 static const struct vk_instance_extension_table radv_instance_extensions_supported = {
    .KHR_device_group_creation = true,
@@ -245,6 +259,69 @@ radv_parse_pstate(const char *str)
    }
 }
 
+/* Initialize DevDriver for RDP integration. If no RDP is found, the driver runs as normal.
+ * The driver may halt in this function if RDP requests it.
+ */
+static void
+radv_instance_init_rdp(struct radv_instance *instance)
+{
+   instance->devdriver = NULL;
+#ifdef RADV_SUPPORT_RDP
+   if (instance->vk.trace_mode & RADV_TRACE_MODE_RDP) {
+      instance->devdriver = ac_devdriver_create();
+      if (instance->devdriver) {
+         simple_mtx_init(&instance->devdriver_mtx, mtx_plain);
+
+         /* Enable RGP trace mode so the SQTT layer is enabled.
+          * This allows sqtt_QueuePresentKHR to intercept frames and handle trace requests.
+          */
+         instance->vk.trace_mode |= RADV_TRACE_MODE_RGP;
+
+         /* Ignore MESA_VK_TRACE_FRAME / _TRIGGER / _PER_SUBMIT vars if 'rdp' mode is
+          * enabled to not produce any .rgp files in the background.
+          */
+         if (instance->vk.trace_frame != 0xFFFFFFFF || instance->vk.trace_trigger_file ||
+             instance->vk.trace_per_submit) {
+            fprintf(stderr, "radv: warning: MESA_VK_TRACE_FRAME / MESA_VK_TRACE_TRIGGER / "
+                            "MESA_VK_TRACE_PER_SUBMIT are ignored under MESA_VK_TRACE=rdp; "
+                            "RDP drives the capture.\n");
+         }
+         instance->vk.trace_frame = 0xFFFFFFFF;
+         instance->vk.trace_trigger_file = NULL;
+         instance->vk.trace_per_submit = false;
+
+         /* Warning to the user in case RADV_THREAD_TRACE_INSTRUCTION_TIMING / _SE_MASK vars are used. */
+         if (os_get_option("RADV_THREAD_TRACE_INSTRUCTION_TIMING") ||
+             os_get_option("RADV_THREAD_TRACE_INSTRUCTION_TIMING_SE_MASK")) {
+            fprintf(stderr, "radv: warning: RADV_THREAD_TRACE_INSTRUCTION_TIMING / "
+                            "RADV_THREAD_TRACE_INSTRUCTION_TIMING_SE_MASK are ignored under "
+                            "MESA_VK_TRACE=rdp; RDP drives the capture.\n");
+         }
+
+         /* Advance init to the next state. If RDP requests platform halt,
+          * this will block until RDP sends StepDriver request.
+          */
+         ac_devdriver_start_early_device_init(instance->devdriver);
+      } else {
+         /* Tool not present - clear the bit so downstream code does not assume RDP is live. */
+         instance->vk.trace_mode &= ~(uint64_t)RADV_TRACE_MODE_RDP;
+      }
+   }
+#endif
+}
+
+static void
+radv_instance_finish_rdp(struct radv_instance *instance)
+{
+#ifdef RADV_SUPPORT_RDP
+   if (instance->devdriver) {
+      ac_devdriver_destroy(instance->devdriver);
+      instance->devdriver = NULL;
+   }
+   simple_mtx_destroy(&instance->devdriver_mtx);
+#endif
+}
+
 VKAPI_ATTR VkResult VKAPI_CALL
 radv_CreateInstance(const VkInstanceCreateInfo *pCreateInfo, const VkAllocationCallbacks *pAllocator,
                     VkInstance *pInstance)
@@ -281,14 +358,14 @@ radv_CreateInstance(const VkInstanceCreateInfo *pCreateInfo, const VkAllocationC
    instance->profile_pstate = radv_parse_pstate(debug_get_option("RADV_PROFILE_PSTATE", "peak"));
    instance->queue_disable_flags = parse_debug_string(os_get_option("RADV_QUEUE_DISABLE"), radv_queue_disable_options);
 
-   const bool has_shader_stage_flags =
-      RADV_DEBUG(instance, DUMP_VS) || RADV_DEBUG(instance, DUMP_TCS) || RADV_DEBUG(instance, DUMP_TES) ||
-      RADV_DEBUG(instance, DUMP_GS) || RADV_DEBUG(instance, DUMP_PS) || RADV_DEBUG(instance, DUMP_TASK) ||
-      RADV_DEBUG(instance, DUMP_MESH) || RADV_DEBUG(instance, DUMP_CS);
+   const bool has_shader_stage_flags = RADV_DEBUG(instance, DUMP_VS) || RADV_DEBUG(instance, DUMP_TCS) ||
+                                       RADV_DEBUG(instance, DUMP_TES) || RADV_DEBUG(instance, DUMP_GS) ||
+                                       RADV_DEBUG(instance, DUMP_PS) || RADV_DEBUG(instance, DUMP_TASK) ||
+                                       RADV_DEBUG(instance, DUMP_MESH) || RADV_DEBUG(instance, DUMP_CS);
 
-   const bool has_compilation_stage_flags =
-      RADV_DEBUG(instance, DUMP_SPIRV) || RADV_DEBUG(instance, DUMP_NIR) || RADV_DEBUG(instance, DUMP_PREOPT_IR) ||
-      RADV_DEBUG(instance, DUMP_BACKEND_IR) || RADV_DEBUG(instance, DUMP_ASM);
+   const bool has_compilation_stage_flags = RADV_DEBUG(instance, DUMP_SPIRV) || RADV_DEBUG(instance, DUMP_NIR) ||
+                                            RADV_DEBUG(instance, DUMP_PREOPT_IR) ||
+                                            RADV_DEBUG(instance, DUMP_BACKEND_IR) || RADV_DEBUG(instance, DUMP_ASM);
 
    if (has_shader_stage_flags && !has_compilation_stage_flags) {
       /* When shader stages are specified but compilation stages aren't:
@@ -325,12 +402,9 @@ radv_CreateInstance(const VkInstanceCreateInfo *pCreateInfo, const VkAllocationC
    if (RADV_DEBUG(instance, STARTUP))
       fprintf(stderr, "radv: info: Created an instance.\n");
 
-   if (RADV_DEBUG(instance, ZERO_VRAM)) {
-      fprintf(stderr, "radv: WARNING: RADV_DEBUG=zerovram is deprecated and it will be removed in"
-                      " future Mesa releases.\n");
-   }
-
    VG(VALGRIND_CREATE_MEMPOOL(instance, 0, false));
+
+   radv_instance_init_rdp(instance);
 
    *pInstance = radv_instance_to_handle(instance);
 
@@ -344,6 +418,8 @@ radv_DestroyInstance(VkInstance _instance, const VkAllocationCallbacks *pAllocat
 
    if (!instance)
       return;
+
+   radv_instance_finish_rdp(instance);
 
    VG(VALGRIND_DESTROY_MEMPOOL(instance));
 

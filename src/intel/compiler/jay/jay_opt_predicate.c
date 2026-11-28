@@ -25,6 +25,9 @@ predicate_block(jay_builder *b,
     * Predicating uniform instructions only works with uniform flags (where we
     * know lane 0 is set correctly and we're not electing another lane).
     * NoMask-forced opcode hit this and are mostly unpredicatable anyway.
+    *
+    * Don't predicate SEND with GATEWAY message. Jay scoreboarding pass insert
+    * sync.bar unconditionally.
     */
    jay_foreach_inst_in_block(block, I) {
       if (jay_uses_implicit_flag(I) ||
@@ -32,6 +35,8 @@ predicate_block(jay_builder *b,
           I->op == JAY_OPCODE_MIN ||
           I->op == JAY_OPCODE_MAX ||
           I->op == JAY_OPCODE_CSEL ||
+          (I->op == JAY_OPCODE_SEND &&
+           jay_send_sfid(I) == GEN_SFID_MESSAGE_GATEWAY) ||
           jay_opcode_infos[I->op].no_mask ||
           (!uniform_condition && I->uniform) ||
           (--limit) < 0)
@@ -47,7 +52,7 @@ predicate_block(jay_builder *b,
       if (I->op != JAY_OPCODE_ENDIF && I->op != JAY_OPCODE_ELSE) {
          I = jay_add_predicate(b, I, condition, jay_null());
 
-         if (I->op == JAY_OPCODE_BREAK) {
+         if (I->op == JAY_OPCODE_BREAK || I->op == JAY_OPCODE_HALT) {
             return false;
          }
 
@@ -97,14 +102,14 @@ predicate_if(jay_function *f, jay_block *if_block, jay_inst *if_)
       jay_remove_instruction(jay_first_inst(else_block));
    }
 
-   /* Optimize "if (f0) { break }" and "if (f0) { break } while", leaving the
-    * control flow graph intact for global data flow analysis.
+   /* Optimize "if (f0) { break/halt }" and "if (f0) { break } while", leaving
+    * the control flow graph intact for global data flow analysis.
     */
    if (!no_then && no_else) {
       jay_inst *brk = jay_first_inst(then_block);
       jay_inst *whl = jay_first_inst(jay_next_block(else_block));
 
-      if (brk && brk->op == JAY_OPCODE_BREAK) {
+      if (brk && (brk->op == JAY_OPCODE_BREAK || brk->op == JAY_OPCODE_HALT)) {
          jay_remove_instruction(if_);
          jay_remove_instruction(endif);
 

@@ -186,13 +186,13 @@ static void si_bind_compute_state(struct pipe_context *ctx, void *state)
    sctx->compute_shaderbuf_sgprs_dirty = true;
    sctx->compute_image_sgprs_dirty = true;
 
-   if (unlikely((sctx->screen->debug_flags & DBG(SQTT)) && sctx->sqtt)) {
+   if (unlikely((sctx->screen->debug_flags & DBG(SQTT)) && sctx->sqtt.data)) {
       uint32_t pipeline_code_hash = _mesa_hash_data_with_seed(
          program->shader.binary.code_buffer,
          program->shader.binary.code_size,
          0);
 
-      if (!si_sqtt_pipeline_is_registered(sctx->sqtt, pipeline_code_hash)) {
+      if (!si_sqtt_pipeline_is_registered(sctx->sqtt.data, pipeline_code_hash)) {
          /* Short lived fake pipeline: we don't need to reupload the compute shaders,
           * as we do for the gfx ones so just create a temp pipeline to be able to
           * call si_sqtt_register_pipeline, and then drop it.
@@ -342,8 +342,11 @@ static bool si_switch_compute_shader(struct si_context *sctx, struct si_compute 
 
       if (!si_setup_compute_scratch_buffer(sctx->screen, shader,
                                            &sctx->compute_scratch_buffer,
-                                           sctx->max_seen_compute_scratch_bytes_per_wave))
+                                           sctx->max_seen_compute_scratch_bytes_per_wave)) {
+         if (!sctx->screen->info.has_scratch_base_registers)
+            simple_mtx_unlock(&shader->selector->mutex);
          return false;
+      }
 
       radeon_add_to_buffer_list(sctx, &sctx->gfx_cs, sctx->compute_scratch_buffer,
                                 RADEON_USAGE_READWRITE | RADEON_PRIO_SCRATCH_BUFFER);
@@ -586,14 +589,14 @@ static void si_emit_dispatch_packets(struct si_context *sctx, const struct pipe_
    struct radeon_cmdbuf *cs = &sctx->gfx_cs;
    bool render_cond_bit = sctx->render_cond_enabled;
    unsigned threads_per_threadgroup = info->block[0] * info->block[1] * info->block[2];
-   unsigned waves_per_threadgroup =
+   unsigned waves_per_workgroup =
       DIV_ROUND_UP(threads_per_threadgroup, sctx->cs_shader_state.program->shader.wave_size);
-   unsigned threadgroups_per_cu = 1;
+   unsigned workgroups_per_cu = 1;
 
-   if (sctx->gfx_level >= GFX10 && waves_per_threadgroup == 1)
-      threadgroups_per_cu = 2;
+   if (sctx->gfx_level >= GFX10 && waves_per_workgroup == 1)
+      workgroups_per_cu = 2;
 
-   if (unlikely(sctx->sqtt_enabled)) {
+   if (unlikely(si_is_sqtt_active(sctx))) {
       if (info->indirect) {
          si_sqtt_write_event_marker(sctx, &sctx->gfx_cs,
                                     EventCmdDispatchIndirect,
@@ -607,9 +610,9 @@ static void si_emit_dispatch_packets(struct si_context *sctx, const struct pipe_
 
    radeon_begin(cs);
    unsigned compute_resource_limits =
-      ac_get_compute_resource_limits(&sscreen->info, waves_per_threadgroup,
+      ac_get_compute_resource_limits(&sscreen->info, waves_per_workgroup,
                                      sctx->cs_max_waves_per_sh,
-                                     threadgroups_per_cu);
+                                     workgroups_per_cu);
 
    if (sctx->gfx_level >= GFX12) {
       gfx12_opt_push_compute_sh_reg(R_00B854_COMPUTE_RESOURCE_LIMITS,
@@ -795,7 +798,7 @@ static void si_emit_dispatch_packets(struct si_context *sctx, const struct pipe_
       radeon_emit(dispatch_initiator);
    }
 
-   if (unlikely(sctx->sqtt_enabled && sctx->gfx_level >= GFX9))
+   if (unlikely(si_is_sqtt_active(sctx) && sctx->gfx_level >= GFX9))
       radeon_event_write(V_028A90_THREAD_TRACE_MARKER);
 
    radeon_end();

@@ -15,7 +15,7 @@ panvk_entrypoints = custom_target(
     '--device-prefix', 'panvk_v9', '--device-prefix', 'panvk_v10',
     '--device-prefix', 'panvk_v11', '--device-prefix', 'panvk_v12',
     '--device-prefix', 'panvk_v13', '--device-prefix', 'panvk_v14',
-    '--beta', with_vulkan_beta.to_string()
+    vulkan_gen_beta_arg,
   ],
   depend_files : vk_entrypoints_gen_depend_files,
 )
@@ -128,6 +128,7 @@ common_per_arch_files = [
   'panvk_vX_cmd_frame_shaders.c',
   'panvk_vX_cmd_meta.c',
   'panvk_vX_cmd_push_constant.c',
+  'panvk_vX_descriptor_buffer.c',
   'panvk_vX_descriptor_set.c',
   'panvk_vX_descriptor_set_layout.c',
   'panvk_vX_device.c',
@@ -174,6 +175,7 @@ foreach arch : [6, 7, 10, 11, 12, 13, 14]
       inc_panfrost,
       inc_panvk_per_arch,
     ],
+    link_with : [libpoly_nir],
     dependencies : [
       idep_nir_headers,
       idep_pan_packers,

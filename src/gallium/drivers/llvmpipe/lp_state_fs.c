@@ -617,8 +617,6 @@ fs_fb_fetch(const struct lp_build_fs_iface *iface,
    }
 
    unsigned block_size = bld->type.length;
-   unsigned block_height = key->resource_1d ? 1 : 2;
-   unsigned block_width = block_size / block_height;
 
    if (key->multisample) {
       LLVMValueRef sample_stride;
@@ -639,36 +637,31 @@ fs_fb_fetch(const struct lp_build_fs_iface *iface,
                               buf_ptr, &sample_offset, 1, "");
    }
 
-   /* fragment shader executes on 4x4 blocks. depending on vector width it can
-    * execute 2 or 4 iterations.  only move to the next row once the top row
-    * has completed 8 wide 1 iteration, 4 wide 2 iterations */
+   /* A 4x4 stamp takes four or two invocations at 4, 8 lanes.
+    * Four-lane invocations advance horizontally after the first quad,
+    * including for 1D resources, before advancing to the next pair of rows.
+    */
    LLVMValueRef x_offset = NULL, y_offset = NULL;
-   if (!key->resource_1d) {
-      LLVMValueRef counter = fs_iface->loop_state->counter;
+   LLVMValueRef counter = fs_iface->loop_state->counter;
 
-      if (block_size == 4) {
-         x_offset = LLVMBuildShl(builder,
-                                 LLVMBuildAnd(builder, fs_iface->loop_state->counter, lp_build_const_int32(gallivm, 1), ""),
-                                 lp_build_const_int32(gallivm, 1), "");
-         counter = LLVMBuildLShr(builder, fs_iface->loop_state->counter, lp_build_const_int32(gallivm, 1), "");
-      }
+   if (block_size == 4) {
+      x_offset = LLVMBuildShl(builder,
+                              LLVMBuildAnd(builder, fs_iface->loop_state->counter, lp_build_const_int32(gallivm, 1), ""),
+                              lp_build_const_int32(gallivm, 1), "");
+      counter = LLVMBuildLShr(builder, fs_iface->loop_state->counter, lp_build_const_int32(gallivm, 1), "");
+   }
+   if (!key->resource_1d) {
       y_offset = LLVMBuildMul(builder, counter, lp_build_const_int32(gallivm, 2), "");
    }
 
    LLVMValueRef offsets[4 * 4];
    for (unsigned i = 0; i < block_size; i++) {
-      unsigned x = i % block_width;
-      unsigned y = i / block_width;
-
-      if (block_size == 8) {
-         /* remap the raw slots into the fragment shader execution mode. */
-         /* this math took me way too long to work out, I'm sure it's
-          * overkill.
-          */
-         x = (i & 1) + ((i >> 2) << 1);
-         if (!key->resource_1d)
-            y = (i & 2) >> 1;
-      }
+      /* Lane bits 0/1 select a pixel in a quad; bits 2/3 select the quad.
+       * For 1D, repeat the top row for helper lanes rather than reading
+       * past the end of the row.
+       */
+      unsigned x = (i & 1) + ((i & 4) >> 1);
+      unsigned y = key->resource_1d ? 0 : ((i & 2) >> 1) + ((i & 8) >> 2);
 
       LLVMValueRef x_val;
       if (x_offset) {
@@ -1129,6 +1122,10 @@ generate_fs_loop(struct gallivm_state *gallivm,
 
    params.type = type;
    params.mask = &mask;
+   /* Based on lp_build_mask_check and lp_build_mask_update calls. */
+   params.mask_may_be_zero =
+      key->multisample ||
+      ((depth_mode & EARLY_DEPTH_TEST) && !key->stencil[0].enabled);
    params.fs_iface = &fs_iface.base;
    params.consts_ptr = consts_ptr;
    params.system_values = &system_values;
@@ -1492,9 +1489,8 @@ generate_fs_loop(struct gallivm_state *gallivm,
  * However in memory pixels are stored in rows
  *  e.g. (0, 0), (1, 0), (2, 0), (3, 0) ; (0, 1) ...
  *
- * @param type            fragment shader type (4x or 8x float)
+ * @param type            fragment shader type (4x or 8x or 16x float)
  * @param num_fs          number of fs_src
- * @param is_1d           whether we're outputting to a 1d resource
  * @param dst_channels    number of output channels
  * @param fs_src          output from fragment shader
  * @param dst             pointer to store result
@@ -1515,7 +1511,7 @@ generate_fs_twiddle(struct gallivm_state *gallivm,
    unsigned src_channels = dst_channels < 3 ? dst_channels : 4;
    unsigned src_count = num_fs * src_channels;
 
-   assert(pixels == 2 || pixels == 1);
+   assert(pixels == 4 || pixels == 2 || pixels == 1);
    assert(num_fs * src_channels <= ARRAY_SIZE(src));
 
    /*
@@ -1532,16 +1528,20 @@ generate_fs_twiddle(struct gallivm_state *gallivm,
    bool swizzle_pad = false;
    bool twiddle = false;
    bool split = false;
+   bool split_twiddled_rows = false;
    unsigned reorder_group = 0;
 
    if (dst_channels == 1) {
       twiddle = true;
-      if (pixels == 2) {
+      if (pixels > 1) {
          split = true;
       }
    } else if (dst_channels == 2) {
       if (pixels == 1) {
          reorder_group = 1;
+      } else if (pixels == 4) {
+         twiddle = true;
+         split_twiddled_rows = true;
       }
    } else if (dst_channels > 2) {
       if (pixels == 1) {
@@ -1555,16 +1555,15 @@ generate_fs_twiddle(struct gallivm_state *gallivm,
       }
    }
 
-   /*
-    * Split the src in half
-    */
    if (split) {
       for (unsigned i = num_fs; i > 0; --i) {
-         src[(i - 1)*2 + 1] = lp_build_extract_range(gallivm, src[i - 1], 4, 4);
-         src[(i - 1)*2 + 0] = lp_build_extract_range(gallivm, src[i - 1], 0, 4);
+         for (unsigned j = pixels; j > 0; --j) {
+            src[(i - 1) * pixels + j - 1] =
+               lp_build_extract_range(gallivm, src[i - 1], (j - 1) * 4, 4);
+         }
       }
 
-      src_count *= 2;
+      src_count *= pixels;
       type.length = 4;
    }
 
@@ -1592,6 +1591,15 @@ generate_fs_twiddle(struct gallivm_state *gallivm,
        * lp_build_conv to reorder (or deal with it ourselves).
        */
       lp_bld_quad_twiddle(gallivm, type, src, src_count, dst);
+
+      if (split_twiddled_rows) {
+         dst[3] = lp_build_extract_range(gallivm, dst[1], 8, 8);
+         dst[2] = lp_build_extract_range(gallivm, dst[1], 0, 8);
+         dst[1] = lp_build_extract_range(gallivm, dst[0], 8, 8);
+         dst[0] = lp_build_extract_range(gallivm, dst[0], 0, 8);
+         src_count *= 2;
+         type.length /= 2;
+      }
    } else {
       /* Do nothing */
       memcpy(dst, src, sizeof(LLVMValueRef) * src_count);
@@ -1803,6 +1811,30 @@ store_unswizzled_block(struct gallivm_state *gallivm,
 
 
 /**
+ * Byte-swap each element of 'width' bits in a block of pixels in the memory
+ * layout of a format.
+ */
+static LLVMValueRef
+bswap_unswizzled_block(struct gallivm_state *gallivm,
+                       LLVMValueRef block,
+                       unsigned width)
+{
+   LLVMBuilderRef builder = gallivm->builder;
+   LLVMTypeRef block_type = LLVMTypeOf(block);
+   LLVMTypeRef int_type = LLVMIntTypeInContext(gallivm->context, width);
+   char intr_str[256];
+
+   if (LLVMGetTypeKind(block_type) == LLVMVectorTypeKind)
+      int_type = LLVMVectorType(int_type, LLVMGetVectorSize(block_type));
+
+   block = LLVMBuildBitCast(builder, block, int_type, "");
+   lp_format_intrinsic(intr_str, sizeof(intr_str), "llvm.bswap", int_type);
+   block = lp_build_intrinsic_unary(builder, intr_str, int_type, block);
+   return LLVMBuildBitCast(builder, block, block_type, "");
+}
+
+
+/**
  * Retrieves the type for a format which is usable in the blending code.
  *
  * e.g. RGBA16F = 4x float, R3G3B2 = 3x byte
@@ -1889,7 +1921,11 @@ scale_bits(struct gallivm_state *gallivm,
 
       if (delta_bits <= dst_bits) {
 
-         if (dst_bits == 4) {
+         /*
+          * Low-bitdepth formats (< 8 bits per channel, e.g., RGB565, RGBA5551, RGBA4444) suffer
+          * from truncation banding, so use float rounding path for them.
+          */
+         if (dst_bits < 8) {
             struct lp_type flt_type =
                lp_type_float_vec(32, src_type.length * 32);
 
@@ -2057,7 +2093,7 @@ convert_to_blend_type(struct gallivm_state *gallivm,
          /* expand 4x16bit values to 4x32bit */
          struct lp_type type32x4 = src_type;
          LLVMTypeRef ltype32x4;
-         unsigned num_fetch = dst_type.length == 8 ? num_srcs / 2 : num_srcs / 4;
+         unsigned num_fetch = num_srcs * dst_type.length / 16;
          type32x4.width = 32;
          ltype32x4 = lp_build_vec_type(gallivm, type32x4);
          for (i = 0; i < num_fetch; i++) {
@@ -2071,7 +2107,15 @@ convert_to_blend_type(struct gallivm_state *gallivm,
       for (i = 0; i < num_srcs / 4; i++) {
          LLVMValueRef tmpsoa[4];
          LLVMValueRef tmps = tmpsrc[i];
-         if (dst_type.length == 8) {
+         if (dst_type.length == 16) {
+            LLVMValueRef shuffles[16];
+            tmps = lp_build_concat(gallivm, &tmpsrc[i * 4], src_type, 4);
+            for (unsigned j = 0; j < 16; j++) {
+               shuffles[j] = lp_build_const_int32(gallivm, (j % 4) * 4 + j / 4);
+            }
+            tmps = LLVMBuildShuffleVector(builder, tmps, tmps,
+                                          LLVMConstVector(shuffles, 16), "");
+         } else if (dst_type.length == 8) {
             LLVMValueRef shuffles[8];
             unsigned j;
             /* fetch was 4 values but need 8-wide output values */
@@ -2231,7 +2275,18 @@ convert_from_blend_type(struct gallivm_state *gallivm,
                                                    src_type, tmpsoa);
          }
 
-         if (src_type.length == 8) {
+         if (src_type.length == 16) {
+            LLVMValueRef shuffles[16];
+            for (unsigned j = 0; j < 16; j++) {
+               shuffles[j] = lp_build_const_int32(gallivm, (j % 4) * 4 + j / 4);
+            }
+            tmpdst = LLVMBuildShuffleVector(builder, tmpdst, tmpdst,
+                                            LLVMConstVector(shuffles, 16), "");
+            for (unsigned j = 0; j < 4; j++) {
+               src[i * 4 + j] = lp_build_extract_range(gallivm, tmpdst,
+                                                        j * 4, 4);
+            }
+         } else if (src_type.length == 8) {
             LLVMValueRef tmpaos, shuffles[8];
             unsigned j;
             /*
@@ -2255,7 +2310,7 @@ convert_from_blend_type(struct gallivm_state *gallivm,
          struct lp_type type16x8 = dst_type;
          struct lp_type type32x4 = dst_type;
          LLVMTypeRef ltype16x4, ltypei64, ltypei128;
-         unsigned num_fetch = src_type.length == 8 ? num_srcs / 2 : num_srcs / 4;
+         unsigned num_fetch = num_srcs * src_type.length / 16;
          type16x8.length = 8;
          type32x4.width = 32;
          ltypei128 = LLVMIntTypeInContext(gallivm->context, 128);
@@ -2291,12 +2346,14 @@ convert_from_blend_type(struct gallivm_state *gallivm,
       is_arith = false;
    }
 
-   /* Remove any padding */
-   if (!is_arith && (src_type.length % mem_type.length)) {
-      src_type.length -= (src_type.length % mem_type.length);
-
+   /* Each blend vector holds 'pixels' pixels, possibly spanning multiple
+    * memory rows. Remove channel padding without truncating those rows;
+    * the caller splits combined vectors into individual rows afterwards.
+    */
+   unsigned mem_length = mem_type.length * pixels;
+   if (!is_arith && src_type.length > mem_length) {
       for (i = 0; i < num_srcs; ++i) {
-         dst[i] = lp_build_extract_range(gallivm, dst[i], 0, src_type.length);
+         dst[i] = lp_build_extract_range(gallivm, dst[i], 0, mem_length);
       }
    }
 
@@ -2512,7 +2569,6 @@ generate_unswizzled_blend(struct gallivm_state *gallivm,
    struct lp_build_mask_context mask_ctx;
 
    unsigned char swizzle[TGSI_NUM_CHANNELS];
-   unsigned src_channels = TGSI_NUM_CHANNELS;
 
    const struct util_format_description *out_format_desc =
       util_format_description(out_format);
@@ -2523,7 +2579,8 @@ generate_unswizzled_blend(struct gallivm_state *gallivm,
       util_blend_state_is_dual(&variant->key.blend, 0);
 
    const bool is_1d = variant->key.resource_1d;
-   const unsigned num_fullblock_fs = is_1d ? 2 * num_fs : num_fs;
+   const unsigned num_fullblock_fs = block_size / fs_type.length;
+   const unsigned num_quads = fs_type.length / 4;
 
    LLVMTypeRef fs_vec_type = lp_build_vec_type(gallivm, fs_type);
 
@@ -2660,22 +2717,12 @@ generate_unswizzled_blend(struct gallivm_state *gallivm,
          fs_src[i][3] = alpha;
       }
 
-      /* We split the row_mask and row_alpha as we want 128bit interleave */
-      if (fs_type.length == 8) {
-         src_mask[i*2 + 0]  = lp_build_extract_range(gallivm, fs_mask[i],
-                                                     0, src_channels);
-         src_mask[i*2 + 1]  = lp_build_extract_range(gallivm, fs_mask[i],
-                                                     src_channels,
-                                                     src_channels);
-
-         src_alpha[i*2 + 0] = lp_build_extract_range(gallivm, alpha,
-                                                     0, src_channels);
-         src_alpha[i*2 + 1] = lp_build_extract_range(gallivm, alpha,
-                                                     src_channels,
-                                                     src_channels);
-      } else {
-         src_mask[i] = fs_mask[i];
-         src_alpha[i] = alpha;
+      /* Mask and alpha twiddling uses one 128-bit vector per quad. */
+      for (unsigned q = 0; q < num_quads; q++) {
+         src_mask[i * num_quads + q] =
+            lp_build_extract_range(gallivm, fs_mask[i], q * 4, 4);
+         src_alpha[i * num_quads + q] =
+            lp_build_extract_range(gallivm, alpha, q * 4, 4);
       }
    }
    if (dual_source_blend) {
@@ -2701,12 +2748,10 @@ generate_unswizzled_blend(struct gallivm_state *gallivm,
          if (dst_channels == 3 && !has_alpha) {
             fs_src1[i][3] = alpha;
          }
-         if (fs_type.length == 8) {
-            src1_alpha[i*2 + 0] = lp_build_extract_range(gallivm, alpha, 0, src_channels);
-            src1_alpha[i*2 + 1] = lp_build_extract_range(gallivm, alpha,
-                                                         src_channels, src_channels);
-         } else {
-            src1_alpha[i] = alpha;
+
+         for (unsigned q = 0; q < num_quads; q++) {
+            src1_alpha[i * num_quads + q] =
+               lp_build_extract_range(gallivm, alpha, q * 4, 4);
          }
       }
    }
@@ -2774,7 +2819,7 @@ generate_unswizzled_blend(struct gallivm_state *gallivm,
       }
    }
 
-   src_channels = dst_channels < 3 ? dst_channels : 4;
+   unsigned src_channels = dst_channels < 3 ? dst_channels : 4;
    if (src_count != num_fullblock_fs * src_channels) {
       unsigned ds = src_count / (num_fullblock_fs * src_channels);
       row_type.length /= ds;
@@ -3083,6 +3128,11 @@ generate_unswizzled_blend(struct gallivm_state *gallivm,
     * It seems some cleanup could be done here (like skipping conversion/blend
     * when not needed).
     */
+   if (out_format_desc->is_byte_swapped) {
+      for (unsigned i = 0; i < src_count; ++i)
+         dst[i] = bswap_unswizzled_block(gallivm, dst[i], dst_type.width);
+   }
+
    convert_to_blend_type(gallivm, block_size, out_format_desc, dst_type,
                          row_type, dst, src_count);
 
@@ -3112,6 +3162,11 @@ generate_unswizzled_blend(struct gallivm_state *gallivm,
 
    convert_from_blend_type(gallivm, block_size, out_format_desc,
                            row_type, dst_type, dst, src_count);
+
+   if (out_format_desc->is_byte_swapped) {
+      for (unsigned i = 0; i < src_count; ++i)
+         dst[i] = bswap_unswizzled_block(gallivm, dst[i], dst_type.width);
+   }
 
    /* Split the blend rows back to memory rows */
    if (dst_count > src_count) {
@@ -3359,7 +3414,7 @@ generate_fragment(struct llvmpipe_context *lp,
    unsigned num_fs = 16 / fs_type.length; /* number of loops per 4x4 stamp */
    /* for 1d resources only run "upper half" of stamp */
    if (key->resource_1d)
-      num_fs /= 2;
+      num_fs = MAX2(num_fs/2, 1);
 
    {
       LLVMValueRef num_loop = lp_build_const_int32(gallivm, num_fs);
@@ -3976,6 +4031,7 @@ generate_variant(struct llvmpipe_context *lp,
          !key->depth.enabled &&
          !key->depth.depth_bounds_test &&
          !nir->info.fs.uses_discard &&
+         !nir->info.fs.uses_fbfetch_output &&
          !key->blend.logicop_enable &&
          (key->cbuf_format[0] == PIPE_FORMAT_B8G8R8A8_UNORM ||
           key->cbuf_format[0] == PIPE_FORMAT_B8G8R8X8_UNORM ||
@@ -4369,7 +4425,7 @@ llvmpipe_set_shader_buffers(struct pipe_context *pipe,
       util_copy_shader_buffer(&llvmpipe->ssbos[shader][i], buffer);
 
       if (buffer && buffer->buffer) {
-         bool read_only = !(writable_bitmask & (1 << idx));
+         bool read_only = !(writable_bitmask & BITFIELD_BIT(idx));
          llvmpipe_flush_resource(pipe, buffer->buffer, 0, read_only, false,
                                  false, "buffer");
       }
@@ -4399,7 +4455,7 @@ llvmpipe_set_shader_buffers(struct pipe_context *pipe,
          llvmpipe->dirty |= LP_NEW_MESH_SSBOS;
          break;
       case MESA_SHADER_FRAGMENT:
-         llvmpipe->fs_ssbo_write_mask &= ~(((1 << count) - 1) << start_slot);
+         llvmpipe->fs_ssbo_write_mask &= ~BITFIELD_RANGE(start_slot, count);
          llvmpipe->fs_ssbo_write_mask |= writable_bitmask << start_slot;
          llvmpipe->dirty |= LP_NEW_FS_SSBOS;
          break;

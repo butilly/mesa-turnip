@@ -311,7 +311,7 @@ setup_color_payload(const brw_builder &bld, brw_reg *dst, brw_reg color,
 
 static void
 lower_fb_write_logical_send(const brw_builder &bld, brw_fb_write_inst *write,
-                            struct brw_fs_prog_data *prog_data,
+                            struct intel_shader_info *info,
                             const brw_fs_prog_key *key,
                             const brw_fs_thread_payload &fs_payload)
 {
@@ -371,7 +371,7 @@ lower_fb_write_logical_send(const brw_builder &bld, brw_fb_write_inst *write,
          g00_bits |= 1 << 11;
 
       /* Set computes stencil to render target */
-      if (prog_data->computed_stencil)
+      if (info->fs.computed_stencil)
          g00_bits |= 1 << 14;
 
       if (g00_bits) {
@@ -386,7 +386,7 @@ lower_fb_write_logical_send(const brw_builder &bld, brw_fb_write_inst *write,
          ubld.group(1, 0).MOV(component(header, 2), brw_imm_ud(target));
       }
 
-      if (prog_data->uses_kill) {
+      if (info->fs.uses_kill) {
          ubld.group(1, 0).MOV(retype(component(header, 15), BRW_TYPE_UW),
                               brw_sample_mask_reg(bld));
       }
@@ -487,8 +487,8 @@ lower_fb_write_logical_send(const brw_builder &bld, brw_fb_write_inst *write,
    send->has_side_effects = true;
 
    if (bld.shader->key->use_efficient_64bit) {
-      uint8_t msg_type = prog_data->dual_src_blend ? GFX35_RENDER_TARGET_DUAL_SOURCE_WRITE :
-                                                     GFX35_RENDER_TARGET_WRITE;
+      uint8_t msg_type = info->fs.dual_src_blend ? GFX35_RENDER_TARGET_DUAL_SOURCE_WRITE :
+                                                  GFX35_RENDER_TARGET_WRITE;
       send->combined_desc = brw_64bit_render_target_msg_desc(devinfo,
                                                              msg_type,
                                                              last_rt,
@@ -503,14 +503,14 @@ lower_fb_write_logical_send(const brw_builder &bld, brw_fb_write_inst *write,
       send->src[SENDG_SRC_IND_1_DESC] = brw_reg();
       send->efficient_64bit = true;
    } else {
-      uint32_t msg_ctl = brw_fb_write_msg_control(send, prog_data);
+      uint32_t msg_ctl = brw_fb_write_msg_control(send, info);
 
       /* XXX - Bit 13 Per-sample PS enable */
       uint32_t desc =
          (send->group / 16) << 11 | /* rt slot group */
          brw_fb_write_desc(devinfo, target, msg_ctl, last_rt,
                            0 /* coarse_rt_write */) |
-         (prog_data->coarse_pixel_dispatch ? (1 << 18) : 0);
+         (info->fs.coarse_pixel_dispatch ? (1 << 18) : 0);
 
       uint32_t ex_desc = 0;
       if (devinfo->ver >= 20) {
@@ -538,7 +538,7 @@ lower_fb_write_logical_send(const brw_builder &bld, brw_fb_write_inst *write,
 
 static void
 lower_fb_read_logical_send(const brw_builder &bld, brw_inst *inst,
-                           const struct brw_fs_prog_data *fs_prog_data)
+                           const struct intel_shader_info *info)
 {
    const intel_device_info *devinfo = bld.shader->devinfo;
    const brw_builder &ubld = bld.exec_all().group(8, 0);
@@ -603,7 +603,7 @@ lower_fb_read_logical_send(const brw_builder &bld, brw_inst *inst,
       (send->group / 16) << 11 | /* rt slot group */
       brw_fb_read_desc(devinfo, target,
                        0 /* msg_control */, send->exec_size,
-                       fs_prog_data->persample_dispatch);
+                       info->fs.persample_dispatch);
 }
 
 static bool
@@ -755,18 +755,20 @@ get_sampler_msg_payload_type_bit_size(const intel_device_info *devinfo,
  * not be written back.
  */
 static uint32_t
-sampler_calc_channel_mask(const intel_device_info *devinfo, brw_tex_inst *tex)
+sampler_calc_channel_mask(const intel_device_info *devinfo, brw_tex_inst *tex,
+                          bool efficient_64bit)
 {
    /* If we're requesting fewer than four channels worth of response,
     * and we have an explicit header, we need to set up the sampler
     * writemask.  It's reversed from normal: 1 means "don't write".
     */
-   unsigned comps_regs =
-      DIV_ROUND_UP(regs_written(tex) - reg_unit(devinfo) * tex->residency,
-                   reg_unit(devinfo));
    unsigned comp_regs =
       DIV_ROUND_UP(tex->dst.component_size(tex->exec_size),
                    reg_unit(devinfo) * REG_SIZE);
+   unsigned residency_regs =
+      tex->residency * (efficient_64bit ? comp_regs : 1);
+   unsigned comps_regs =
+      DIV_ROUND_UP(regs_written(tex), reg_unit(devinfo)) - residency_regs;
    if (comps_regs < 4 * comp_regs) {
       assert(comps_regs % comp_regs == 0);
       return ~((1 << (comps_regs / comp_regs)) - 1) & 0xf;
@@ -796,7 +798,8 @@ lower_sampler_logical_send(const brw_builder &bld, brw_tex_inst *tex)
 
    const bool residency = tex->residency;
    const uint8_t gather_component = tex->gather_component;
-   uint8_t write_channel_mask = sampler_calc_channel_mask(devinfo, tex);
+   const bool eff_64bit = bld.shader->key->use_efficient_64bit;
+   uint8_t write_channel_mask = sampler_calc_channel_mask(devinfo, tex, eff_64bit);
    const bool has_const_offsets = tex->has_const_offsets;
    unsigned r_offset = 0, v_offset = 0, u_offset = 0;
    if (has_const_offsets) {
@@ -819,7 +822,7 @@ lower_sampler_logical_send(const brw_builder &bld, brw_tex_inst *tex)
       brw_type_with_size(BRW_TYPE_UD, payload_type_bit_size);
 
    const bool needs_header =
-      !bld.shader->key->use_efficient_64bit &&
+      !eff_64bit &&
       (sampler_op_needs_header(op, devinfo) ||
        has_const_offsets ||
        packed_offsets.file != BAD_FILE ||
@@ -833,7 +836,7 @@ lower_sampler_logical_send(const brw_builder &bld, brw_tex_inst *tex)
       sources[i] = bld.vgrf((i == 0 && needs_header) ? BRW_TYPE_UD : payload_type);
 
    /* Setup sampler header if needed */
-   if (bld.shader->key->use_efficient_64bit) {
+   if (eff_64bit) {
       /* From 3D Sampler::Message Header/BSpec 56986(r50439):
        *
        *    "Noted that the 64bit efficiency header is use exclusively for
@@ -876,7 +879,7 @@ lower_sampler_logical_send(const brw_builder &bld, brw_tex_inst *tex)
       if (residency)
          g0_2 |= 1 << 23; /* g0.2 bit23 : Pixel Null Mask Enable */
 
-      g0_2 |= sampler_calc_channel_mask(devinfo, tex) << 12;
+      g0_2 |= write_channel_mask << 12;
 
       if (has_const_offsets) {
          g0_2 |= (r_offset << 0) |
@@ -1292,6 +1295,7 @@ lower_lsc_memory_logical_send(const brw_builder &bld, brw_mem_inst *mem)
    const bool has_side_effects = mem->has_side_effects();
    const bool fused_eu_disable = mem->flags & MEMORY_FLAG_FUSED_EU_DISABLE;
    const bool can_reorder = mem->flags & MEMORY_FLAG_CAN_REORDER;
+   const bool non_temporal = mem->flags & MEMORY_FLAG_NON_TEMPORAL;
 
    const uint32_t data_size_B = lsc_data_size_register_bytes(data_size);
    const uint32_t memory_data_size_B = lsc_data_size_memory_bytes(data_size);
@@ -1405,6 +1409,7 @@ lower_lsc_memory_logical_send(const brw_builder &bld, brw_mem_inst *mem)
     * these operations uncached.
     */
    bool bypass_l1 = false;
+   bool streaming_l1 = false;
    bool bypass_l3 = false;
    if (devinfo->ver >= 20 && mesa_shader_stage_is_rt(bld.shader->stage) &&
        send->sfid == GEN_SFID_TGM) {
@@ -1422,13 +1427,23 @@ lower_lsc_memory_logical_send(const brw_builder &bld, brw_mem_inst *mem)
    } else if (coherent_access) {
       /* Skip L1 for coherent accesses. */
       bypass_l1 = true;
+   } else if (non_temporal) {
+      /* Use L1 streaming, L3 bypass when non-temporal is set. This policy
+       * implements the desired behavior of bypassing L3 writes, but also
+       * retains the performance benefit of combined writes by using L1
+       * streaming.
+       */
+      streaming_l1 = true;
+      bypass_l3 = true;
    }
 
    unsigned atomic_cache_mode = LSC_CACHE(devinfo, STORE, L1UC_L3WB);
    unsigned store_cache_mode = LSC_CACHE(devinfo, STORE, L1STATE_L3MOCS);
    unsigned load_cache_mode = LSC_CACHE(devinfo, LOAD, L1STATE_L3MOCS);
    if (bypass_l3) {
-      store_cache_mode = LSC_CACHE(devinfo, STORE, L1UC_L3UC);
+      store_cache_mode = (streaming_l1) ?
+                        LSC_CACHE(devinfo, STORE, L1S_L3UC) :
+                        LSC_CACHE(devinfo, STORE, L1UC_L3UC);
       load_cache_mode = LSC_CACHE(devinfo, LOAD, L1UC_L3UC);
    } else if (bypass_l1) {
        store_cache_mode = LSC_CACHE(devinfo, STORE, L1UC_L3WB);
@@ -1887,8 +1902,7 @@ lower_varying_pull_constant_logical_send(const brw_builder &bld, brw_inst *inst)
 
 static void
 lower_interpolator_logical_send(const brw_builder &bld, brw_inst *inst,
-                                const struct brw_fs_prog_key *fs_prog_key,
-                                const struct brw_fs_prog_data *fs_prog_data)
+                                const struct brw_fs_prog_key *fs_prog_key)
 {
    assert(inst->src[INTERP_SRC_NOPERSPECTIVE].file == IMM);
 
@@ -2025,7 +2039,7 @@ lower_btd_logical_send(const brw_builder &bld, brw_inst *inst)
        *       header starting on Xe3, it doesn't appear to be needed
        *       by the hardware so we don't set it.  If it's ever
        *       needed though we will need some sort of reloc since
-       *       we'll have to initialize it based on the prog_data
+       *       we'll have to initialize it based on the intel_shader_info
        *       structure of the callee.
        */
       break;
@@ -2325,7 +2339,13 @@ lower_lsc_memory_fence_and_interlock(const brw_builder &bld, struct brw_send_ins
       send->src[SENDG_SRC_IND_0_DESC] = brw_reg();
       send->src[SENDG_SRC_IND_1_DESC] = brw_reg();
       send->dst = brw_reg();
+      send->size_written = 0;
       send->efficient_64bit = true;
+
+      /* There is no response register for the scheduling fence to wait on.
+       * Wait for the SENDG completion token instead.
+       */
+      bld.after(send).uniform().SYNC(TGL_SYNC_ALLWR);
    } else {
       send->src[SEND_SRC_DESC]     = brw_imm_ud(0);
       send->src[SEND_SRC_EX_DESC]  = brw_imm_ud(0);
@@ -2397,13 +2417,13 @@ brw_lower_logical_sends(brw_shader &s)
       case FS_OPCODE_FB_WRITE_LOGICAL:
          assert(s.stage == MESA_SHADER_FRAGMENT);
          lower_fb_write_logical_send(ibld, inst->as_fb_write(),
-                                     brw_fs_prog_data(s.prog_data),
+                                     &s.info,
                                      (const brw_fs_prog_key *)s.key,
                                      s.fs_payload());
          break;
 
       case FS_OPCODE_FB_READ_LOGICAL:
-         lower_fb_read_logical_send(ibld, inst, brw_fs_prog_data(s.prog_data));
+         lower_fb_read_logical_send(ibld, inst, &s.info);
          break;
 
       case SHADER_OPCODE_SAMPLER:
@@ -2430,8 +2450,7 @@ brw_lower_logical_sends(brw_shader &s)
       case FS_OPCODE_INTERPOLATE_AT_SHARED_OFFSET:
       case FS_OPCODE_INTERPOLATE_AT_PER_SLOT_OFFSET:
          lower_interpolator_logical_send(ibld, inst,
-                                         (const brw_fs_prog_key *)s.key,
-                                         brw_fs_prog_data(s.prog_data));
+                                         (const brw_fs_prog_key *)s.key);
          break;
 
       case SHADER_OPCODE_BTD_SPAWN_LOGICAL:

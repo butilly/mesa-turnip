@@ -29,14 +29,13 @@
 #define EGLSYNC_INCLUDED
 
 #include "egldisplay.h"
-#include "egltypedefs.h"
 
 /**
  * "Base" class for device driver syncs.
  */
 struct _egl_sync {
    /* A sync is a display resource */
-   _EGLResource Resource;
+   struct _egl_resource Resource;
 
    EGLenum Type;
    EGLenum SyncStatus;
@@ -46,18 +45,18 @@ struct _egl_sync {
 };
 
 extern EGLBoolean
-_eglInitSync(_EGLSync *sync, _EGLDisplay *disp, EGLenum type,
+_eglInitSync(struct _egl_sync *sync, struct _egl_display *disp, EGLenum type,
              const EGLAttrib *attrib_list);
 
 extern EGLBoolean
-_eglGetSyncAttrib(_EGLDisplay *disp, _EGLSync *sync, EGLint attribute,
+_eglGetSyncAttrib(struct _egl_display *disp, struct _egl_sync *sync, EGLint attribute,
                   EGLAttrib *value);
 
 /**
  * Increment reference count for the sync.
  */
-static inline _EGLSync *
-_eglGetSync(_EGLSync *sync)
+static inline struct _egl_sync *
+_eglGetSync(struct _egl_sync *sync)
 {
    if (sync)
       _eglGetResource(&sync->Resource);
@@ -68,7 +67,7 @@ _eglGetSync(_EGLSync *sync)
  * Decrement reference count for the sync.
  */
 static inline EGLBoolean
-_eglPutSync(_EGLSync *sync)
+_eglPutSync(struct _egl_sync *sync)
 {
    return (sync) ? _eglPutResource(&sync->Resource) : EGL_FALSE;
 }
@@ -78,7 +77,7 @@ _eglPutSync(_EGLSync *sync)
  * The handle can be passed to client directly.
  */
 static inline EGLSync
-_eglLinkSync(_EGLSync *sync)
+_eglLinkSync(struct _egl_sync *sync)
 {
    _eglLinkResource(&sync->Resource, _EGL_RESOURCE_SYNC);
    return (EGLSync)sync;
@@ -88,7 +87,7 @@ _eglLinkSync(_EGLSync *sync)
  * Unlink a linked sync from its display.
  */
 static inline void
-_eglUnlinkSync(_EGLSync *sync)
+_eglUnlinkSync(struct _egl_sync *sync)
 {
    _eglUnlinkResource(&sync->Resource, _EGL_RESOURCE_SYNC);
 }
@@ -97,10 +96,10 @@ _eglUnlinkSync(_EGLSync *sync)
  * Lookup a handle to find the linked sync.
  * Return NULL if the handle has no corresponding linked sync.
  */
-static inline _EGLSync *
-_eglLookupSync(EGLSync handle, _EGLDisplay *disp)
+static inline struct _egl_sync *
+_eglLookupSync(EGLSync handle, struct _egl_display *disp)
 {
-   _EGLSync *sync = (_EGLSync *)handle;
+   struct _egl_sync *sync = (struct _egl_sync *)handle;
    if (!disp || !_eglCheckResource((void *)sync, _EGL_RESOURCE_SYNC, disp))
       sync = NULL;
    return sync;
@@ -110,9 +109,9 @@ _eglLookupSync(EGLSync handle, _EGLDisplay *disp)
  * Return the handle of a linked sync, or EGL_NO_SYNC_KHR.
  */
 static inline EGLSync
-_eglGetSyncHandle(_EGLSync *sync)
+_eglGetSyncHandle(struct _egl_sync *sync)
 {
-   _EGLResource *res = (_EGLResource *)sync;
+   struct _egl_resource *res = (struct _egl_resource *)sync;
    return (res && _eglIsResourceLinked(res)) ? (EGLSync)sync : EGL_NO_SYNC_KHR;
 }
 

@@ -145,7 +145,7 @@ struct swapchain_data {
    VkExtent2D imageExtent;
    VkFormat format;
 
-   VkImage image;
+   VkImage *imageList;
    uint32_t imageListSize;
 };
 
@@ -185,30 +185,25 @@ static void unmap_object(uint64_t obj)
    simple_mtx_unlock(&vk_object_to_data_mutex);
 }
 
-void map_images(swapchain_data *data, VkImage *imageList, uint32_t size) {
+void set_swapchain_images(swapchain_data *data, VkImage *imageList, uint32_t size) {
    data->imageListSize = size;
-   VkImage *image;
-   image = (VkImage *)malloc(sizeof(VkImage) * size);
+   data->imageList = ralloc_array(data, VkImage, size);
    for (uint32_t index = 0; index < size; index++) {
-      image[index] = imageList[index];
-      map_object(HKEY(index), &image[index]);
+      data->imageList[index] = imageList[index];
    }
 }
 
-void select_image_from_map(swapchain_data *data, uint32_t index) {
-   data->image = *(FIND(VkImage, index));
+VkImage select_image_from_swapchain(swapchain_data *data, uint32_t index) {
+   if (!data->imageList || index >= data->imageListSize) {
+      LOG(WARN, "Swapchain image index (%u) is out of range (%u images)\n", index, data->imageListSize);
+      return VK_NULL_HANDLE;
+   }
+   return data->imageList[index];
 }
 
-void unmap_images(swapchain_data *data) {
-   VkImage *image, *first;
-   first = nullptr;
-   for (uint32_t index = 0; index < data->imageListSize; index++) {
-      image = FIND(VkImage, index);
-      if (!first)
-         first = image;
-      unmap_object(HKEY(index));
-   }
-   free(first);
+void free_swapchain_images(swapchain_data *data) {
+   ralloc_free(data->imageList);
+   data->imageList = nullptr;
    data->imageListSize = 0;
 }
 
@@ -361,7 +356,7 @@ static struct swapchain_data *new_swapchain_data(VkSwapchainKHR swapchain,
 
 static void destroy_swapchain_data(struct swapchain_data *data)
 {
-   unmap_images(data);
+   free_swapchain_images(data);
    unmap_object(HKEY(data->swapchain));
    ralloc_free(data);
 }
@@ -629,15 +624,12 @@ static VkResult screenshot_GetSwapchainImagesKHR(
    VkResult result = vtable->GetSwapchainImagesKHR(device, swapchain, pCount, pSwapchainImages);
 
    loader_platform_thread_lock_mutex(&globalLock);
-   LOG(DEBUG, "Swapchain size: %d\n", *pCount);
-   if (swapchain_data->imageListSize > 0)
-      unmap_images(swapchain_data);
    if (result == VK_SUCCESS) {
-      // Save the images produced from the swapchain in a hash table
-      if (*pCount > 0) {
-            if(pSwapchainImages){
-               map_images(swapchain_data, pSwapchainImages, *pCount);
-         }
+      LOG(DEBUG, "Swapchain size: %d\n", *pCount);
+      // Save the images produced from the swapchain in the swapchain_data structure
+      if (*pCount > 0 && pSwapchainImages != NULL) {
+         free_swapchain_images(swapchain_data);
+         set_swapchain_images(swapchain_data, pSwapchainImages, *pCount);
       }
    }
    loader_platform_thread_unlock_mutex(&globalLock);
@@ -1252,6 +1244,7 @@ static VkResult screenshot_QueuePresentKHR(
       VkSwapchainKHR swapchain = pPresentInfo->pSwapchains[0];
 
       struct swapchain_data *swapchain_data = FIND(struct swapchain_data, swapchain);
+      VkImage presented_image = select_image_from_swapchain(swapchain_data, pPresentInfo->pImageIndices[0]);
 
       /* Run initial setup with client */
       if (instance_data->params.enabled[SCREENSHOT_PARAM_ENABLED_comms] && instance_data->socket_fd < 0) {
@@ -1293,6 +1286,15 @@ static VkResult screenshot_QueuePresentKHR(
          if (instance_data->params.region.useImageRegion) {
             instance_data->region_enabled = true;
          }
+      }
+      /* Run check on swapchain images to ensure they exist, else abort capture */
+      if (!swapchain_data->imageList || swapchain_data->imageListSize == 0) {
+         LOG(DEBUG, "No swapchain images available. Aborting screenshot capture.\n");
+         instance_data->screenshot_enabled = false;
+      }
+      if (presented_image == VK_NULL_HANDLE) {
+         LOG(DEBUG, "No swapchain image set. Aborting screenshot capture.\n");
+         instance_data->screenshot_enabled = false;
       }
 
       if (instance_data->screenshot_enabled) {
@@ -1337,7 +1339,7 @@ static VkResult screenshot_QueuePresentKHR(
             semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
             device_data->vtable.CreateSemaphore(device_data->device, &semaphoreInfo, nullptr, &semaphoreWaitAfterSubmission);
             if(write_image(full_path,
-                           swapchain_data->image,
+                           presented_image,
                            device_data,
                            instance_data,
                            queue_data,
@@ -1364,32 +1366,6 @@ static VkResult screenshot_QueuePresentKHR(
       device_data->vtable.DestroySemaphore(device_data->device, semaphoreWaitAfterSubmission, nullptr);
       semaphoreWaitAfterSubmission = VK_NULL_HANDLE;
    }
-   return result;
-}
-
-static VkResult screenshot_AcquireNextImageKHR(
-    VkDevice                                    device,
-    VkSwapchainKHR                              swapchain,
-    uint64_t                                    timeout,
-    VkSemaphore                                 semaphore,
-    VkFence                                     fence,
-    uint32_t*                                   pImageIndex)
-{
-   struct swapchain_data *swapchain_data =
-      FIND(struct swapchain_data, swapchain);
-   struct device_data *device_data = swapchain_data->device;
-
-   VkResult result = device_data->vtable.AcquireNextImageKHR(device, swapchain, timeout,
-                                                             semaphore, fence, pImageIndex);
-   loader_platform_thread_lock_mutex(&globalLock);
-
-   if (result == VK_SUCCESS) {
-      // Use the index given by AcquireNextImageKHR() to obtain the image we intend to copy.
-      if(pImageIndex){
-         select_image_from_map(swapchain_data, *pImageIndex);
-      }
-   }
-   loader_platform_thread_unlock_mutex(&globalLock);
    return result;
 }
 
@@ -1514,7 +1490,6 @@ static const struct {
    ADD_HOOK(GetSwapchainImagesKHR),
    ADD_HOOK(DestroySwapchainKHR),
    ADD_HOOK(QueuePresentKHR),
-   ADD_HOOK(AcquireNextImageKHR),
 
    ADD_HOOK(CreateDevice),
    ADD_HOOK(GetDeviceQueue),

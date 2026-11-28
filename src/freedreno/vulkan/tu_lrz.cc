@@ -1086,7 +1086,7 @@ tu_lrz_clear_depth_image(struct tu_cmd_buffer *cmd,
    ));
 
    tu_lrz_clear<CHIP>(cmd, &cmd->cs, image,
-                      (const VkClearValue *) pDepthStencil, fast_clear);
+                      reinterpret_cast<const VkClearValue *>(pDepthStencil), fast_clear);
    tu_emit_event_write<CHIP>(cmd, &cmd->cs, FD_LRZ_FLUSH);
 }
 TU_GENX(tu_lrz_clear_depth_image);
@@ -1208,7 +1208,7 @@ tu_has_potential_stencil_feedback_loop(struct tu_cmd_buffer *cmd, const struct t
    if (stencil_att == MESA_VK_ATTACHMENT_UNUSED)
       return false;
 
-   unsigned stencil_idx = stencil_att == MESA_VK_ATTACHMENT_NO_INDEX ? 0 : stencil_att + 1;
+   unsigned stencil_idx = stencil_att == MESA_VK_ATTACHMENT_NO_INDEX ? 0 : stencil_att + TU_DYN_INPUT_ATT_OFFSET;
    return fs->fs.dynamic_input_attachments_used & (1u << stencil_idx);
 }
 

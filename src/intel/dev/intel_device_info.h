@@ -266,6 +266,43 @@ intel_device_info_max_sbids(const struct intel_device_info *devinfo)
    return devinfo->ver >= 30 ? 32 : 16;
 }
 
+void
+intel_device_info_update_topology(struct intel_device_info *devinfo,
+                                  uint32_t max_slices,
+                                  uint32_t max_subslices,
+                                  uint32_t max_eus_per_subslice,
+                                  uint32_t subslice_stride,
+                                  uint32_t eu_subslice_stride,
+                                  const void *slice_masks,
+                                  const void *subslice_masks,
+                                  const void *eu_masks);
+
+void
+intel_device_info_update_from_masks(struct intel_device_info *devinfo,
+                                    uint32_t slice_mask,
+                                    uint32_t subslice_mask,
+                                    uint32_t n_eus);
+
+static inline bool
+intel_has_vrt(const struct intel_device_info *devinfo)
+{
+   return devinfo->ver >= 30 && !unlikely(INTEL_DEBUG(DEBUG_NO_VRT));
+}
+
+static inline uint32_t
+intel_device_info_memory_urb_size_per_slice(const struct intel_device_info *devinfo)
+{
+   /* Return 1MB when supported */
+   return devinfo->verx10 >= 350 ? 1024 * 1024 : 0;
+}
+
+static inline bool
+intel_device_info_memory_urb_is_allocated_in_stolen(const struct intel_device_info *devinfo)
+{
+   /* Future platforms will support it */
+   return false;
+}
+
 #ifdef __cplusplus
 }
 #endif

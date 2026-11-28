@@ -5,12 +5,14 @@
  */
 
 #include "panvk_buffer.h"
+#include "panvk_cmd_alloc.h"
 #include "panvk_cmd_buffer.h"
 #include "panvk_device_memory.h"
 #include "panvk_entrypoints.h"
 
 #include "pan_desc.h"
 #include "pan_util.h"
+#include "poly/geometry.h"
 
 #include "vk_android.h"
 #include "vk_render_pass.h"
@@ -66,7 +68,7 @@ get_ms2ss_image_view(struct panvk_image_view *iview, uint32_t nr_samples)
    assert(nr_samples >= 2 && nr_samples <= 16);
    assert(iview->pview.nr_samples == 1);
    assert(iview->vk.image->create_flags &
-          VK_IMAGE_CREATE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT);
+          VK_IMAGE_CREATE_2_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT);
 
    /* sample count 2 is at index 0, 4 at 1, .. */
    uint32_t vidx = 0;
@@ -535,12 +537,12 @@ render_state_set_zs_attachments(struct panvk_cmd_buffer *cmdbuf,
       }
 
       if (z_resolve.mode != VK_RESOLVE_MODE_NONE) {
+         render->z_pview.resolve = get_z_pan_image_view(z_resolve.dst_iview);
          const struct pan_image *z_resolve_pimage =
-            pan_image_view_get_zs_plane(&z_resolve.dst_iview->pview).image;
+            pan_image_view_get_zs_plane(&render->z_pview.resolve).image;
 
          if ((z_ms2ss || z_att->storeOp != VK_ATTACHMENT_STORE_OP_STORE) &&
              !avoid_direct_resolve_to(z_resolve_pimage)) {
-            render->z_pview.resolve = get_z_pan_image_view(z_resolve.dst_iview);
             render->fb.resolve.z = (struct pan_fb_resolve_target) {
                .in_bounds = {
                   .resolve = PAN_FB_RESOLVE_Z,
@@ -562,12 +564,12 @@ render_state_set_zs_attachments(struct panvk_cmd_buffer *cmdbuf,
       }
 
       if (s_resolve.mode != VK_RESOLVE_MODE_NONE) {
+         render->s_pview.resolve = get_s_pan_image_view(s_resolve.dst_iview);
          const struct pan_image *s_resolve_pimage =
-            pan_image_view_get_s_plane(&s_resolve.dst_iview->pview).image;
+            pan_image_view_get_s_plane(&render->s_pview.resolve).image;
 
          if ((s_ms2ss || s_att->storeOp != VK_ATTACHMENT_STORE_OP_STORE) &&
              !avoid_direct_resolve_to(s_resolve_pimage)) {
-            render->s_pview.resolve = get_s_pan_image_view(s_resolve.dst_iview);
             render->fb.resolve.s = (struct pan_fb_resolve_target) {
                .in_bounds = {
                   .resolve = PAN_FB_RESOLVE_S,
@@ -961,8 +963,27 @@ panvk_per_arch(cmd_prepare_draw_sysvals)(struct panvk_cmd_buffer *cmdbuf,
    if (dyn_gfx_state_dirty(cmdbuf, INPUT_ATTACHMENT_MAP))
       prepare_iam_sysvals(cmdbuf, dirty_sysvals);
 
-   const struct panvk_shader_variant *vs =
-      panvk_shader_hw_variant(cmdbuf->state.gfx.vs.shader);
+    set_gfx_sysval(cmdbuf, dirty_sysvals, poly.vertex_params,
+                   cmdbuf->state.gfx.poly.vp_addr);
+    set_gfx_sysval(cmdbuf, dirty_sysvals, poly.geometry_params,
+                   cmdbuf->state.gfx.poly.gp_addr);
+
+   if (dyn_gfx_state_dirty(cmdbuf, IA_PRIMITIVE_TOPOLOGY) ||
+       dyn_gfx_state_dirty(cmdbuf, RS_PROVOKING_VERTEX)) {
+      const struct vk_input_assembly_state *ia =
+         &cmdbuf->vk.dynamic_graphics_state.ia;
+      const struct vk_rasterization_state *rs =
+         &cmdbuf->vk.dynamic_graphics_state.rs;
+
+      unsigned provoking;
+      if (rs->provoking_vertex == VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT)
+         provoking = 2;
+      else if (ia->primitive_topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN)
+         provoking = 1;
+      else
+         provoking = 0;
+      set_gfx_sysval(cmdbuf, dirty_sysvals, poly.provoking_vertex, provoking);
+   }
 
 #if PAN_ARCH < 9
    struct panvk_descriptor_state *desc_state = &cmdbuf->state.gfx.desc_state;
@@ -997,9 +1018,30 @@ panvk_per_arch(cmd_prepare_draw_sysvals)(struct panvk_cmd_buffer *cmdbuf,
    /* We mask the dirty sysvals by the shader usage, and only flag
     * the push uniforms dirty if those intersect. */
    BITSET_DECLARE(dirty_shader_sysvals, MAX_SYSVAL_FAUS);
-   BITSET_AND(dirty_shader_sysvals, dirty_sysvals, vs->fau.used_sysvals);
-   if (!BITSET_IS_EMPTY(dirty_shader_sysvals))
-      gfx_state_set_dirty(cmdbuf, VS_PUSH_UNIFORMS);
+
+   panvk_shader_foreach_variant_const(cmdbuf->state.gfx.vs.shader, vs) {
+      BITSET_AND(dirty_shader_sysvals, dirty_sysvals, vs->fau.used_sysvals);
+      if (!BITSET_IS_EMPTY(dirty_shader_sysvals))
+         gfx_state_set_dirty(cmdbuf, VS_PUSH_UNIFORMS);
+   }
+
+   panvk_shader_foreach_variant_const(cmdbuf->state.gfx.tcs.shader, tcs) {
+      BITSET_AND(dirty_shader_sysvals, dirty_sysvals, tcs->fau.used_sysvals);
+      if (!BITSET_IS_EMPTY(dirty_shader_sysvals))
+         gfx_state_set_dirty(cmdbuf, TCS_PUSH_UNIFORMS);
+   }
+
+   panvk_shader_foreach_variant_const(cmdbuf->state.gfx.tes.shader, tes) {
+      BITSET_AND(dirty_shader_sysvals, dirty_sysvals, tes->fau.used_sysvals);
+      if (!BITSET_IS_EMPTY(dirty_shader_sysvals))
+         gfx_state_set_dirty(cmdbuf, TES_PUSH_UNIFORMS);
+   }
+
+   panvk_shader_foreach_variant_const(cmdbuf->state.gfx.gs.shader, gs) {
+      BITSET_AND(dirty_shader_sysvals, dirty_sysvals, gs->fau.used_sysvals);
+      if (!BITSET_IS_EMPTY(dirty_shader_sysvals))
+         gfx_state_set_dirty(cmdbuf, GS_PUSH_UNIFORMS);
+   }
 
    if (fs) {
       BITSET_AND(dirty_shader_sysvals, dirty_sysvals, fs->fau.used_sysvals);

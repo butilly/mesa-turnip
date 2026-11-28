@@ -30,6 +30,7 @@
 
 #include "eglcurrent.h"
 #include "egldriver.h"
+#include "egldisplay.h"
 #include "egllog.h"
 #include "eglsync.h"
 
@@ -37,7 +38,7 @@
  * Parse the list of sync attributes and return the proper error code.
  */
 static EGLint
-_eglParseSyncAttribList(_EGLSync *sync, const EGLAttrib *attrib_list)
+_eglParseSyncAttribList(struct _egl_sync *sync, const EGLAttrib *attrib_list)
 {
    EGLint i;
 
@@ -80,7 +81,7 @@ _eglParseSyncAttribList(_EGLSync *sync, const EGLAttrib *attrib_list)
 }
 
 EGLBoolean
-_eglInitSync(_EGLSync *sync, _EGLDisplay *disp, EGLenum type,
+_eglInitSync(struct _egl_sync *sync, struct _egl_display *disp, EGLenum type,
              const EGLAttrib *attrib_list)
 {
    EGLint err;
@@ -116,7 +117,7 @@ _eglInitSync(_EGLSync *sync, _EGLDisplay *disp, EGLenum type,
 }
 
 EGLBoolean
-_eglGetSyncAttrib(_EGLDisplay *disp, _EGLSync *sync, EGLint attribute,
+_eglGetSyncAttrib(struct _egl_display *disp, struct _egl_sync *sync, EGLint attribute,
                   EGLAttrib *value)
 {
    switch (attribute) {
@@ -130,7 +131,7 @@ _eglGetSyncAttrib(_EGLDisplay *disp, _EGLSync *sync, EGLint attribute,
            sync->Type == EGL_SYNC_CL_EVENT_KHR ||
            sync->Type == EGL_SYNC_REUSABLE_KHR ||
            sync->Type == EGL_SYNC_NATIVE_FENCE_ANDROID))
-         disp->Driver->ClientWaitSyncKHR(disp, sync, 0, 0);
+         Driver.ClientWaitSyncKHR(disp, sync, 0, 0);
 
       *value = sync->SyncStatus;
       break;

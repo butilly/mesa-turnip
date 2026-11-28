@@ -8,8 +8,9 @@
 
 #include "vulkan/vulkan.h"
 
-#include "framework.h"
 #include "nir_builder.h"
+
+#include "framework.h"
 #include <functional>
 
 enum QoShaderDeclType {
@@ -50,7 +51,7 @@ extern aco_shader_info info;
 extern std::unique_ptr<aco::Program> program;
 extern aco::Builder bld;
 extern aco::Temp inputs[16];
-extern nir_builder *nb;
+extern nir_builder* nb;
 
 namespace aco {
 struct ra_test_policy;
@@ -61,9 +62,8 @@ void create_program(enum amd_gfx_level gfx_level, aco::Stage stage, unsigned wav
 bool setup_cs(const char* input_spec, enum amd_gfx_level gfx_level,
               enum radeon_family family = CHIP_UNKNOWN, const char* subvariant = "",
               unsigned wave_size = 64);
-bool
-setup_nir_cs(enum amd_gfx_level gfx_level, mesa_shader_stage stage = MESA_SHADER_COMPUTE,
-             enum radeon_family family = CHIP_UNKNOWN, const char* subvariant = "");
+bool setup_nir_cs(enum amd_gfx_level gfx_level, mesa_shader_stage stage = MESA_SHADER_COMPUTE,
+                  enum radeon_family family = CHIP_UNKNOWN, const char* subvariant = "");
 
 void finish_program(aco::Program* program, bool endpgm = true, bool dominance = false);
 void finish_validator_test();
@@ -74,6 +74,7 @@ void finish_ra_test(aco::ra_test_policy);
 void finish_optimizer_postRA_test();
 void finish_to_hw_instr_test();
 void finish_lower_branches_test();
+void finish_schedule_ilp_test();
 void finish_schedule_vopd_test();
 void finish_waitcnt_test();
 void finish_insert_nops_test(bool endpgm = true);
@@ -102,7 +103,8 @@ aco::Temp ext_sshort(aco::Temp src, unsigned idx, aco::Builder b = bld);
 aco::Temp ext_ubyte(aco::Temp src, unsigned idx, aco::Builder b = bld);
 aco::Temp ext_sbyte(aco::Temp src, unsigned idx, aco::Builder b = bld);
 void emit_divergent_if_else(aco::Program* prog, aco::Builder& b, aco::Operand cond,
-                            std::function<void()> then, std::function<void()> els);
+                            std::function<void()> then, std::function<void()> els,
+                            bool full_exec = false);
 
 /* vulkan helpers */
 VkDevice get_vk_device(enum amd_gfx_level gfx_level);

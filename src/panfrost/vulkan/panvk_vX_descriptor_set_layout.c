@@ -93,18 +93,22 @@ panvk_per_arch(CreateDescriptorSetLayout)(
    const VkAllocationCallbacks *pAllocator, VkDescriptorSetLayout *pSetLayout)
 {
    VK_FROM_HANDLE(panvk_device, device, _device);
-   VkDescriptorSetLayoutBinding *bindings = NULL;
    unsigned num_bindings = 0;
    VkResult result;
-   const VkDescriptorSetLayoutBindingFlagsCreateInfo *binding_flags_info =
-      vk_find_struct_const(pCreateInfo->pNext,
-                           DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO);
-   VkDescriptorBindingFlags *sorted_binding_flags = NULL;
+   struct vk_sorted_bindings *sorted;
+
+   result = vk_create_sorted_bindings(&device->vk, pCreateInfo, pAllocator, &sorted);
+   if (result != VK_SUCCESS)
+      return panvk_error(device, result);
+
+   const VkDescriptorSetLayoutBinding *bindings = sorted->bindings;
+   if (sorted->count) {
+      num_bindings = bindings[sorted->count - 1].binding + 1;
+   }
 
    unsigned immutable_sampler_count = 0;
-   for (uint32_t j = 0; j < pCreateInfo->bindingCount; j++) {
-      const VkDescriptorSetLayoutBinding *binding = &pCreateInfo->pBindings[j];
-      num_bindings = MAX2(num_bindings, binding->binding + 1);
+   for (uint32_t j = 0; j < sorted->count; j++) {
+      const VkDescriptorSetLayoutBinding *binding = &bindings[j];
 
       /* From the Vulkan 1.1.97 spec for VkDescriptorSetLayoutBinding:
        *
@@ -121,17 +125,6 @@ panvk_per_arch(CreateDescriptorSetLayout)(
          immutable_sampler_count += binding->descriptorCount;
    }
 
-   if (pCreateInfo->bindingCount) {
-      result = vk_create_sorted_bindings(pCreateInfo->pBindings,
-                                         pCreateInfo->bindingCount, &bindings,
-                                         binding_flags_info,
-                                         &sorted_binding_flags);
-      if (result != VK_SUCCESS)
-         return panvk_error(device, result);
-
-      num_bindings = bindings[pCreateInfo->bindingCount - 1].binding + 1;
-   }
-
    VK_MULTIALLOC(ma);
    VK_MULTIALLOC_DECL(&ma, struct panvk_descriptor_set_layout, layout, 1);
    VK_MULTIALLOC_DECL(&ma, struct panvk_descriptor_set_binding_layout,
@@ -140,7 +133,7 @@ panvk_per_arch(CreateDescriptorSetLayout)(
                       immutable_sampler_count);
 
    if (!vk_descriptor_set_layout_multizalloc(&device->vk, &ma, pCreateInfo)) {
-      free(bindings);
+      vk_destroy_sorted_bindings(&device->vk, pAllocator, sorted);
       return panvk_error(device, VK_ERROR_OUT_OF_HOST_MEMORY);
    }
 
@@ -151,7 +144,7 @@ panvk_per_arch(CreateDescriptorSetLayout)(
    unsigned desc_idx = 0;
    unsigned dyn_buf_idx = 0;
    uint32_t dyn_ssbos = 0;
-   for (unsigned i = 0; i < pCreateInfo->bindingCount; i++) {
+   for (unsigned i = 0; i < sorted->count; i++) {
       const VkDescriptorSetLayoutBinding *binding = &bindings[i];
       struct panvk_descriptor_set_binding_layout *binding_layout =
          &layout->bindings[binding->binding];
@@ -160,17 +153,9 @@ panvk_per_arch(CreateDescriptorSetLayout)(
          continue;
 
       binding_layout->type = binding->descriptorType;
+      binding_layout->flags = sorted->flags[i];
 
-      if (sorted_binding_flags) {
-         binding_layout->flags = sorted_binding_flags[i];
-      }
-
-      if (binding_layout->type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK) {
-         binding_layout->desc_count =
-            panvk_get_iub_desc_count(binding->descriptorCount);
-      } else {
-         binding_layout->desc_count = binding->descriptorCount;
-      }
+      binding_layout->desc_count = binding->descriptorCount;
 
       if (is_texture(binding_layout->type))
          binding_layout->textures_per_desc = 1;
@@ -195,8 +180,11 @@ panvk_per_arch(CreateDescriptorSetLayout)(
          dyn_buf_idx += binding_layout->desc_count;
       } else {
          binding_layout->desc_idx = desc_idx;
-         desc_idx += panvk_get_desc_stride(binding_layout) *
-                     binding_layout->desc_count;
+         if (binding_layout->type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK)
+            desc_idx += panvk_get_iub_desc_count(binding_layout->desc_count);
+         else
+            desc_idx += panvk_get_desc_stride(binding_layout) *
+                        binding_layout->desc_count;
       }
    }
 
@@ -232,18 +220,20 @@ panvk_per_arch(CreateDescriptorSetLayout)(
                layout->bindings[b].immutable_samplers[i];
 
             /* We zalloc the object, so it's safe to hash the whole thing */
-            if (sampler != NULL && sampler->vk.ycbcr_conversion != NULL)
+            if (sampler != NULL && sampler->vk.ycbcr_conversion != NULL) {
                _mesa_blake3_update(&hash_ctx,
                                    &sampler->vk.ycbcr_conversion->state,
                                    sizeof(sampler->vk.ycbcr_conversion->state));
+               _mesa_blake3_update(&hash_ctx, &sampler->desc_count,
+                                   sizeof(sampler->desc_count));
+            }
          }
       }
    }
 
    _mesa_blake3_final(&hash_ctx, layout->vk.blake3);
 
-   free(bindings);
-   free(sorted_binding_flags);
+   vk_destroy_sorted_bindings(&device->vk, pAllocator, sorted);
    *pSetLayout = panvk_descriptor_set_layout_to_handle(layout);
 
    return VK_SUCCESS;
@@ -290,6 +280,10 @@ panvk_per_arch(GetDescriptorSetLayoutSupport)(
    const VkMutableDescriptorTypeCreateInfoEXT *mut_info = vk_find_struct_const(
       pCreateInfo->pNext, MUTABLE_DESCRIPTOR_TYPE_CREATE_INFO_EXT);
 
+   const bool for_descriptor_buffers =
+      pCreateInfo->flags &
+      VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT;
+
    pSupport->supported = false;
 
    unsigned desc_count = 0, dyn_buf_count = 0, non_variable_count = 0,
@@ -329,8 +323,12 @@ panvk_per_arch(GetDescriptorSetLayoutSupport)(
             const unsigned yuv_tex_count = panvk_image_get_tex_count(
                PAN_ARCH, sampler->vk.ycbcr_conversion->state.format);
             textures_per_desc = MAX2(yuv_tex_count, textures_per_desc);
+            /* with descriptor buffers, samplers_per_desc == textures_per_desc
+             * because of striding rules. */
             samplers_per_desc =
-               MAX2(sampler->desc_count, samplers_per_desc);
+               for_descriptor_buffers
+                  ? textures_per_desc
+                  : MAX2(sampler->desc_count, samplers_per_desc);
          }
       }
 

@@ -30,9 +30,8 @@
 
 #include <stdbool.h>
 
-#include "util/detect_os.h"
-
-#include "egltypedefs.h"
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -48,7 +47,7 @@ extern "C" {
 struct _egl_thread_info {
    bool inited;
    EGLint LastError;
-   _EGLContext *CurrentContext;
+   struct _egl_context *CurrentContext;
    EGLenum CurrentAPI;
    EGLLabelKHR Label;
 
@@ -66,7 +65,7 @@ struct _egl_thread_info {
 static inline EGLBoolean
 _eglIsApiValid(EGLenum api)
 {
-#if HAVE_OPENGL && !DETECT_OS_ANDROID
+#if HAVE_OPENGL && !defined(HAVE_ANDROID_PLATFORM)
    /* OpenGL is not a valid/supported API on Android */
    if (api == EGL_OPENGL_API)
       return true;
@@ -78,13 +77,13 @@ _eglIsApiValid(EGLenum api)
    return false;
 }
 
-extern _EGLThreadInfo *
+extern struct _egl_thread_info *
 _eglGetCurrentThread(void);
 
 extern void
 _eglDestroyCurrentThread(void);
 
-extern _EGLContext *
+extern struct _egl_context *
 _eglGetCurrentContext(void);
 
 extern EGLBoolean

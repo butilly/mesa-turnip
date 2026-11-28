@@ -75,19 +75,19 @@ static struct anv_shader_internal *
 anv_shader_internal_create(struct anv_device *device,
                            mesa_shader_stage stage,
                            const void *key_data, uint32_t key_size,
-                           const void *kernel_data, uint32_t kernel_size,
-                           const struct brw_stage_prog_data *prog_data_in,
-                           uint32_t prog_data_size,
-                           const struct genisa_stats *stats, uint32_t num_stats)
+                           const intel_shader_bin *src_bin)
 {
+   assert(src_bin != NULL);
+   assert(src_bin->info.stage == stage);
+   assert(src_bin->num_stats <= ARRAY_SIZE(src_bin->stats));
+
    VK_MULTIALLOC(ma);
    VK_MULTIALLOC_DECL(&ma, struct anv_shader_internal, shader, 1);
    VK_MULTIALLOC_DECL_SIZE(&ma, void, obj_key_data, key_size);
-   VK_MULTIALLOC_DECL_SIZE(&ma, struct brw_stage_prog_data, prog_data,
-                                prog_data_size);
-   VK_MULTIALLOC_DECL(&ma, struct intel_shader_reloc, prog_data_relocs,
-                           prog_data_in->num_relocs);
-   VK_MULTIALLOC_DECL(&ma, void, code, kernel_size);
+   VK_MULTIALLOC_DECL(&ma, struct intel_shader_reloc, bin_relocs,
+                           src_bin->num_relocs);
+   VK_MULTIALLOC_DECL(&ma, void, code, src_bin->code_size);
+   VK_MULTIALLOC_DECL(&ma, intel_shader_bin, bin, 1);
 
    if (!vk_multialloc_zalloc(&ma, &device->vk.alloc,
                              VK_SYSTEM_ALLOCATION_SCOPE_DEVICE))
@@ -98,22 +98,15 @@ anv_shader_internal_create(struct anv_device *device,
                                  &anv_shader_internal_ops, obj_key_data, key_size);
 
    shader->stage = stage;
-   shader->kernel_size = kernel_size;
-
-   memcpy(prog_data, prog_data_in, prog_data_size);
-   typed_memcpy(prog_data_relocs, prog_data_in->relocs,
-                prog_data_in->num_relocs);
-   prog_data->relocs = prog_data_relocs;
-   shader->prog_data = prog_data;
-   shader->prog_data_size = prog_data_size;
-
-   assert(num_stats <= ARRAY_SIZE(shader->stats));
-   assert((stats != NULL) || (num_stats == 0));
-   typed_memcpy(shader->stats, stats, num_stats);
-   shader->num_stats = num_stats;
 
    shader->code = code;
-   memcpy(shader->code, kernel_data, kernel_size);
+   memcpy(shader->code, src_bin->code, src_bin->code_size);
+
+   shader->bin = bin;
+   *bin = *src_bin;
+   bin->code = code;
+   typed_memcpy(bin_relocs, src_bin->relocs, src_bin->num_relocs);
+   bin->relocs = bin_relocs;
 
    if (anv_needs_printf_buffer()) {
       struct intel_shader_reloc_value reloc_values[3];
@@ -136,12 +129,12 @@ anv_shader_internal_create(struct anv_device *device,
       };
 
       brw_write_shader_relocs(&device->physical->compiler->isa,
-                              shader->code, shader->prog_data,
+                              shader->code, bin,
                               reloc_values, rv_count);
    }
 
    shader->kernel = anv_shader_heap_alloc(&device->shader_heap,
-                                          kernel_size, 64, false, 0);
+                                          bin->code_size, 64, false, 0);
    if (shader->kernel.alloc_size == 0) {
       vk_pipeline_cache_object_finish(&shader->base);
       vk_free(&device->vk.alloc, shader);
@@ -149,7 +142,7 @@ anv_shader_internal_create(struct anv_device *device,
    }
 
    anv_shader_heap_upload(&device->shader_heap, shader->kernel,
-                          shader->code, kernel_size);
+                          shader->code, bin->code_size);
 
    return shader;
 }
@@ -163,24 +156,17 @@ anv_shader_internal_serialize(struct vk_pipeline_cache_object *object,
 
    blob_write_uint32(blob, shader->stage);
 
-   blob_write_uint32(blob, shader->kernel_size);
-   blob_write_bytes(blob, shader->code, shader->kernel_size);
+   blob_write_bytes(blob, &shader->bin->info, sizeof(shader->bin->info));
+   blob_write_uint32(blob, shader->bin->code_size);
+   blob_write_bytes(blob, shader->bin->code, shader->bin->code_size);
 
-   blob_write_uint32(blob, shader->prog_data_size);
+   blob_write_uint32(blob, shader->bin->num_relocs);
+   blob_write_bytes(blob, shader->bin->relocs,
+                    shader->bin->num_relocs * sizeof(shader->bin->relocs[0]));
 
-   union brw_any_prog_data prog_data;
-   assert(shader->prog_data_size <= sizeof(prog_data));
-   memcpy(&prog_data, shader->prog_data, shader->prog_data_size);
-   prog_data.base.relocs = NULL;
-   blob_write_bytes(blob, &prog_data, shader->prog_data_size);
-
-   blob_write_bytes(blob, shader->prog_data->relocs,
-                    shader->prog_data->num_relocs *
-                    sizeof(shader->prog_data->relocs[0]));
-
-   blob_write_uint32(blob, shader->num_stats);
-   blob_write_bytes(blob, shader->stats,
-                    shader->num_stats * sizeof(shader->stats[0]));
+   blob_write_uint32(blob, shader->bin->num_stats);
+   blob_write_bytes(blob, shader->bin->stats,
+                    shader->bin->num_stats * sizeof(shader->bin->stats[0]));
 
    return !blob->out_of_memory;
 }
@@ -195,39 +181,31 @@ anv_shader_internal_deserialize(struct vk_pipeline_cache *cache,
 
    mesa_shader_stage stage = blob_read_uint32(blob);
 
-   uint32_t kernel_size = blob_read_uint32(blob);
-   const void *kernel_data = blob_read_bytes(blob, kernel_size);
+   intel_shader_bin bin = {};
+   blob_copy_bytes(blob, &bin.info, sizeof(bin.info));
 
-   uint32_t prog_data_size = blob_read_uint32(blob);
-   const void *prog_data_bytes = blob_read_bytes(blob, prog_data_size);
-   if (blob->overrun)
-      return NULL;
+   bin.code_size = blob_read_uint32(blob);
+   bin.code = blob_read_bytes(blob, bin.code_size);
 
-   union brw_any_prog_data prog_data;
-   memcpy(&prog_data, prog_data_bytes,
-          MIN2(sizeof(prog_data), prog_data_size));
-   prog_data.base.relocs =
-      blob_read_bytes(blob, prog_data.base.num_relocs *
-                            sizeof(prog_data.base.relocs[0]));
+   bin.num_relocs = blob_read_uint32(blob);
+   bin.relocs = (const struct intel_shader_reloc *)
+      blob_read_bytes(blob, bin.num_relocs * sizeof(bin.relocs[0]));
 
-   void *mem_ctx = ralloc_context(NULL);
    uint32_t num_stats = blob_read_uint32(blob);
    const struct genisa_stats *stats =
       blob_read_bytes(blob, num_stats * sizeof(stats[0]));
 
-   if (blob->overrun) {
-      ralloc_free(mem_ctx);
+   if (bin.info.stage != stage ||
+       num_stats > ARRAY_SIZE(bin.stats) || blob->overrun)
       return NULL;
-   }
+
+   bin.num_stats = num_stats;
+   typed_memcpy(bin.stats, stats, num_stats);
 
    struct anv_shader_internal *shader =
       anv_shader_internal_create(device, stage,
                                  key_data, key_size,
-                                 kernel_data, kernel_size,
-                                 &prog_data.base, prog_data_size,
-                                 stats, num_stats);
-
-   ralloc_free(mem_ctx);
+                                 &bin);
 
    if (shader == NULL)
       return NULL;
@@ -274,12 +252,7 @@ anv_device_upload_kernel(struct anv_device *device,
                                  params->stage,
                                  params->key_data,
                                  params->key_size,
-                                 params->kernel_data,
-                                 params->kernel_size,
-                                 params->prog_data,
-                                 params->prog_data_size,
-                                 params->stats,
-                                 params->num_stats);
+                                 params->bin);
    if (shader == NULL)
       return NULL;
 

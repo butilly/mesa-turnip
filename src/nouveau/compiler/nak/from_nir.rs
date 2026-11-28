@@ -3,8 +3,8 @@
 
 #![allow(non_upper_case_globals)]
 
-use crate::api::GetDebugFlags;
 use crate::api::DEBUG;
+use crate::api::GetDebugFlags;
 use crate::builder::*;
 use crate::ir::*;
 use crate::sph::{OutputTopology, PixelImap};
@@ -15,6 +15,7 @@ use compiler::bindings::*;
 use compiler::cfg::CFGBuilder;
 use compiler::nir::*;
 use compiler::nir_instr_printer::NirInstrPrinter;
+use mesa_util::format::pipe_format::*;
 use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use std::cmp::max;
 use std::ops::Index;
@@ -42,6 +43,16 @@ fn init_info_from_nir(
             point_mode: info_tess.point_mode(),
             ccw: info_tess.ccw(),
         };
+    let uses_ttu = nir.info.ray_queries > 0
+        || matches!(
+            nir.info.stage(),
+            MESA_SHADER_RAYGEN
+                | MESA_SHADER_ANY_HIT
+                | MESA_SHADER_CLOSEST_HIT
+                | MESA_SHADER_MISS
+                | MESA_SHADER_INTERSECTION
+                | MESA_SHADER_CALLABLE
+        );
     ShaderInfo {
         max_warps_per_sm: 0,
         num_gprs: 0,
@@ -58,6 +69,7 @@ fn init_info_from_nir(
         writes_global_mem: false,
         // TODO: handle this.
         uses_fp64: false,
+        uses_ttu,
         stage: match nir.info.stage() {
             MESA_SHADER_COMPUTE => {
                 ShaderStageInfo::Compute(ComputeShaderInfo {
@@ -74,12 +86,20 @@ fn init_info_from_nir(
             }),
             MESA_SHADER_FRAGMENT => {
                 let info_fs = unsafe { &nir.info.__bindgen_anon_1.fs };
+                let (z_min_bounded, z_max_bounded) = match info_fs.depth_layout
+                {
+                    FRAG_DEPTH_LAYOUT_GREATER => (true, false),
+                    FRAG_DEPTH_LAYOUT_LESS => (false, true),
+                    _ => (false, false),
+                };
                 ShaderStageInfo::Fragment(FragmentShaderInfo {
                     uses_kill: false,
-                    does_interlock: false,
+                    reads_interlock_ticket: false,
                     post_depth_coverage: info_fs.post_depth_coverage(),
                     early_fragment_tests: info_fs.early_fragment_tests(),
                     uses_sample_shading: info_fs.uses_sample_shading(),
+                    z_min_bounded,
+                    z_max_bounded,
                 })
             }
             MESA_SHADER_GEOMETRY => {
@@ -1209,6 +1229,8 @@ impl<'a> ShaderFromNir<'a> {
                         srcs: [srcs(0), srcs(1)],
                         min: (alu.op == nir_op_fmin).into(),
                         ftz: self.float_ctl.fp32.ftz,
+                        nan: false,
+                        xorsign: false,
                     });
                 } else if alu.def.bit_size() == 16 {
                     dst = b.alloc_ssa_vec(RegFile::GPR, 1);
@@ -1220,12 +1242,27 @@ impl<'a> ShaderFromNir<'a> {
                         ],
                         min: (alu.op == nir_op_fmin).into(),
                         ftz: self.float_ctl.fp16.ftz,
+                        nan: false,
+                        xorsign: false,
                     });
                 } else {
                     panic!("Unsupported float type: f{}", alu.def.bit_size());
                 }
                 dst
             }
+            nir_op_fclamp_nv => match alu.def.bit_size() {
+                32 => {
+                    b.fclamp(srcs(0), srcs(1), self.float_ctl.fp32.ftz).into()
+                }
+                16 => b
+                    .hclamp2(
+                        restrict_f16v2_src(srcs(0)),
+                        restrict_f16v2_src(srcs(1)),
+                        self.float_ctl.fp16.ftz,
+                    )
+                    .into(),
+                bit_size => panic!("Unsupported float type: f{bit_size}"),
+            },
             nir_op_fmul | nir_op_fmul_rtz => {
                 let ftype = FloatType::from_bits(alu.def.bit_size().into());
                 let dst;
@@ -1571,6 +1608,16 @@ impl<'a> ShaderFromNir<'a> {
             nir_op_imul_2x32_64 | nir_op_umul_2x32_64 => {
                 let signed = alu.op == nir_op_imul_2x32_64;
                 b.imul_2x32_64(srcs(0), srcs(1), signed)
+            }
+            nir_op_umad_2x32_64 => {
+                assert!(self.sm.sm() >= 70);
+                let dst = b.alloc_ssa_vec(RegFile::GPR, 2);
+                b.push_op(OpIMad64 {
+                    dst: dst.clone().into(),
+                    srcs: [srcs(0), srcs(1), srcs(2)],
+                    signed: false,
+                });
+                dst.into()
             }
             nir_op_imul_high | nir_op_umul_high => {
                 let signed = alu.op == nir_op_imul_high;
@@ -2939,8 +2986,12 @@ impl<'a> ShaderFromNir<'a> {
                 let out_of_bounds = self.get_src(&srcs[2]);
 
                 let data = self.get_src(&srcs[3]);
+
+                let comps = intrin.num_components;
+                assert!(srcs[3].bit_size() == 32);
+                assert!(comps == 1 || comps == 2 || comps == 4);
                 let image_access =
-                    ImageAccess::Formatted(ChannelMask::new(0xf));
+                    ImageAccess::Formatted(ChannelMask::for_comps(comps));
 
                 let flags = intrin.flags();
                 let offset_mode = match flags {
@@ -3200,7 +3251,9 @@ impl<'a> ShaderFromNir<'a> {
                     if flags.per_primitive() {
                         let ShaderStageInfo::Mesh(stage) = &mut self.info.stage
                         else {
-                            panic!("isberd_nv per primitive attributes can only be used for mesh shaders");
+                            panic!(
+                                "isberd_nv per primitive attributes can only be used for mesh shaders"
+                            );
                         };
 
                         // Per primitive always imply output
@@ -3261,7 +3314,9 @@ impl<'a> ShaderFromNir<'a> {
                     if flags.per_primitive() {
                         let ShaderStageInfo::Mesh(stage) = &mut self.info.stage
                         else {
-                            panic!("isbewr_nv per primitives attributes can only be used for mesh shaders");
+                            panic!(
+                                "isbewr_nv per primitives attributes can only be used for mesh shaders"
+                            );
                         };
 
                         // Per primitive always imply output
@@ -3502,6 +3557,19 @@ impl<'a> ShaderFromNir<'a> {
             }
             nir_intrinsic_load_sysval_nv => {
                 let idx = u8::try_from(intrin.base()).unwrap();
+
+                if idx == NAK_SV_ORDERING_TICKET {
+                    if let ShaderStageInfo::Fragment(info) =
+                        &mut self.info.stage
+                    {
+                        info.reads_interlock_ticket = true;
+                    } else {
+                        panic!(
+                            "Ordering ticket is only available in fragment shaders"
+                        );
+                    }
+                }
+
                 debug_assert!(intrin.def.num_components == 1);
                 debug_assert!(
                     intrin.def.bit_size == 32 || intrin.def.bit_size == 64
@@ -4137,6 +4205,41 @@ impl<'a> ShaderFromNir<'a> {
                 }
 
                 self.set_dst(&intrin.def, dst);
+            }
+            nir_intrinsic_ttuopen_nv => {
+                let flags = intrin.flags();
+                debug_assert!(flags == 0 || flags == 1);
+
+                b.push_op(OpTtuOpen { dual: flags != 0 });
+            }
+            nir_intrinsic_ttust_nv => {
+                let data_low = self.get_src(&srcs[0]);
+                let data_high = self.get_src(&srcs[1]);
+                let offset = u16::try_from(intrin.base()).unwrap();
+
+                b.push_op(OpTtuSt {
+                    srcs: [data_low, data_high],
+                    offset,
+                });
+            }
+            nir_intrinsic_ttuld_nv => {
+                let dst = b.alloc_ssa_vec(RegFile::GPR, 4);
+                let offset = u16::try_from(intrin.base()).unwrap();
+                let flags = intrin.flags();
+                debug_assert!(flags == 0 || flags == 1);
+
+                b.push_op(OpTtuLd {
+                    dsts: [
+                        SSARef::try_from(&dst[0..2]).unwrap().into(),
+                        SSARef::try_from(&dst[2..4]).unwrap().into(),
+                    ],
+                    offset,
+                    close: flags != 0,
+                });
+                self.set_dst(&intrin.def, dst);
+            }
+            nir_intrinsic_ttugo_nv => {
+                b.push_op(OpTtuGo {});
             }
             _ => panic!(
                 "Unsupported intrinsic instruction: {}",

@@ -349,6 +349,7 @@ virgl_init_screen_caps(struct virgl_screen *vscreen)
       MIN2(vscreen->caps.caps.v1.glsl_level, 140) :
       vscreen->caps.caps.v1.glsl_level;
    caps->glsl_feature_level = vscreen->caps.caps.v1.glsl_level;
+   caps->fs_sample_variables = caps->glsl_feature_level >= 400;
    caps->quads_follow_provoking_vertex_convention = true;
    caps->depth_clip_disable_separate = false;
    caps->compute = vscreen->caps.caps.v2.capability_bits & VIRGL_CAP_COMPUTE_SHADER;
@@ -378,7 +379,6 @@ virgl_init_screen_caps(struct virgl_screen *vscreen)
    caps->max_viewports = vscreen->caps.caps.v1.max_viewports;
    caps->max_texel_buffer_elements = vscreen->caps.caps.v1.max_tbo_size;
    caps->texture_border_color_quirk = 0;
-   caps->endianness = PIPE_ENDIAN_LITTLE;
    caps->query_pipeline_statistics =
       !!(vscreen->caps.caps.v2.capability_bits_v2 & VIRGL_CAP_V2_PIPELINE_STATISTICS_QUERY);
    caps->mixed_framebuffer_sizes = true;

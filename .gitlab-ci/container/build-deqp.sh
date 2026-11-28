@@ -24,7 +24,7 @@ set -x
 # - the GLES release produces `deqp-gles*` and `deqp-egl`
 
 DEQP_MAIN_COMMIT=634a3fc62d82c34de68c3b1add25e6b7f5777524
-DEQP_VK_VERSION=1.4.6.2
+DEQP_VK_VERSION=1.4.7.1
 DEQP_GL_VERSION=4.6.8.1
 DEQP_GLES_VERSION=3.2.14.1
 
@@ -48,14 +48,12 @@ main_cts_patch_files=(
 
 # shellcheck disable=SC2034
 vk_cts_commits_to_backport=(
-  # android: Implement headless WSI fallback using AImageReader
-  6368ee8503dd9ca46eabfa2df293075d9034a214
-  # Check requirements in checkSupport, part 11 (binding_model module)
-  541ed0874565d642069c59fe3b31fc42f495a470
-  # Use -frounding-math by default with GCC
-  ded32883bf36e5bdf7ac6b0512d5314adc0849d4
-  # Check requirements in checkSupport, part 12 (conditional_rendering module)
-  b1a2490aaa2cc0429dca4f8efcce7e0d4a9e619f
+  # Fix missing depth barrier in early_fragment sample count tests
+  4be0860ba5adbdb6aa06a3921a33d3b89a527f09
+  # Ignore padding bits when verifying packed format copies
+  4c48fad37aaae27bbe25d40ce987575991bc1223
+  # Improve run time of reconvergence tests
+  124a7d9e4417da60f7134c097c151377580ed53e
 )
 
 # shellcheck disable=SC2034
@@ -74,6 +72,10 @@ gl_cts_commits_to_backport=(
   bf307df9e5c6c27499c2c799409d17554d39cafc
   # Fix a memory leak with the texture image sample tests
   5d392ccf4fa09d38d06ca66875a2aaac4fde2b11
+  # Update the SHA of gl.xml for GL_map_buffer_client_pointer desktop OpenGL support
+  14906370e647d1a5ad584b800052a46cf4df04ca
+  # Add valid GL_MAP_CLIENT_POINTER_BIT_MESA bit to storageFlags.
+  ae0462f96eb56c295b98372d1780c8608c4970ad
 )
 
 # shellcheck disable=SC2034
@@ -200,13 +202,16 @@ done
 # always goes through ssh or https.
 python3 external/fetch_sources.py --insecure
 
-case "${DEQP_API}" in
-  VK-main)
-    # Video tests rely on external files
-    python3 external/fetch_video_decode_samples.py
-    python3 external/fetch_video_encode_samples.py
-    ;;
-esac
+EXTRA_CMAKE_ARGS="${EXTRA_CMAKE_ARGS:-}"
+
+# Only build Vulkan Video tests for x86_64
+if [ "${DEBIAN_ARCH}" = "amd64" ]; then
+  # Video tests rely on external files
+  python3 external/fetch_video_decode_samples.py
+  python3 external/fetch_video_encode_samples.py
+else
+  EXTRA_CMAKE_ARGS+=" -DDEQP_DISABLE_VK_VIDEO_TESTS=ON"
+fi
 
 if [[ "$DEQP_API" = tools ]]; then
   # Save the testlog stylesheets:

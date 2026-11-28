@@ -29,6 +29,7 @@ struct panvk_cmd_meta_compute_save_ctx {
       uint32_t desc_count;
       bool dirty;
    } push_set0;
+   enum panvk_descriptor_model descriptor_model;
    struct panvk_push_constant_state push_constants;
    bool cond_render_enabled;
    bool cond_render_inherited;
@@ -43,6 +44,7 @@ struct panvk_cmd_meta_graphics_save_ctx {
       uint32_t desc_count;
       bool dirty;
    } push_set0;
+   enum panvk_descriptor_model descriptor_model;
    struct panvk_push_constant_state push_constants;
    struct panvk_attrib_buf vb0;
 
@@ -61,6 +63,21 @@ struct panvk_cmd_meta_graphics_save_ctx {
       const struct panvk_shader *shader;
       struct panvk_shader_desc_state desc;
    } vs;
+
+   struct {
+      const struct panvk_shader *shader;
+      struct panvk_shader_desc_state desc;
+   } gs;
+
+   struct {
+      const struct panvk_shader *shader;
+      struct panvk_shader_desc_state desc;
+   } tes;
+
+   struct {
+      const struct panvk_shader *shader;
+      struct panvk_shader_desc_state desc;
+   } tcs;
 
    struct panvk_occlusion_query_state occlusion_query;
    bool cond_render_enabled;

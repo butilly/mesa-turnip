@@ -1,6 +1,7 @@
 /*
  * Copyright © 2021 Collabora Ltd.
  * Copyright © 2019-2026 Google LLC
+ * Copyright © 2026 Arm Ltd.
  *
  * Also derived from anv_pipeline.c which is
  * Copyright © 2015 Intel Corporation
@@ -26,6 +27,62 @@
 #if PAN_ARCH >= 9
 #define VALHALL_RESOURCE_TABLE_IDX 62
 #endif
+
+struct panvk_subdesc_info {
+   VkDescriptorType type;
+   uint8_t plane;
+};
+
+#define IMPLICIT_SUBDESC_TYPE (VkDescriptorType)-1
+#define NO_SUBDESC (struct panvk_subdesc_info){ \
+   .type = IMPLICIT_SUBDESC_TYPE, \
+}
+#define TEX_SUBDESC(__plane) (struct panvk_subdesc_info){ \
+   .type = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, \
+   .plane = __plane, \
+}
+#define SAMPLER_SUBDESC(__plane) (struct panvk_subdesc_info){ \
+   .type = VK_DESCRIPTOR_TYPE_SAMPLER, \
+   .plane = __plane, \
+}
+
+static inline struct panvk_subdesc_info
+get_tex_subdesc_info(VkDescriptorType type, uint8_t plane)
+{
+   return (type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+      ? TEX_SUBDESC(plane) : NO_SUBDESC;
+}
+
+static inline struct panvk_subdesc_info
+get_sampler_subdesc_info(VkDescriptorType type, uint8_t plane)
+{
+   return (type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+      ? SAMPLER_SUBDESC(plane) : NO_SUBDESC;
+}
+
+static inline uint32_t
+get_subdesc_idx(const struct panvk_descriptor_set_binding_layout *layout,
+                uint32_t element, struct panvk_subdesc_info subdesc)
+{
+   if (layout->type != VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
+      return 0;
+
+   uint32_t subdesc_idx = 0;
+   if (layout->immutable_samplers) {
+      if (subdesc.type == VK_DESCRIPTOR_TYPE_SAMPLER) {
+         const struct panvk_sampler *sampler =
+            layout->immutable_samplers[element];
+         const uint32_t tex_desc_count =
+            panvk_image_get_tex_count(PAN_ARCH, sampler->vk.format);
+         subdesc_idx =
+            tex_desc_count + MIN2(sampler->desc_count - 1, subdesc.plane);
+      } else if (subdesc.type == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)
+         subdesc_idx = MIN2(subdesc.plane, layout->textures_per_desc - 1);
+   } else {
+      subdesc_idx = subdesc.type == VK_DESCRIPTOR_TYPE_SAMPLER;
+   }
+   return subdesc_idx;
+}
 
 struct lower_desc_map {
    /* The index of the map serves as the table offset, the value of the
@@ -133,20 +190,21 @@ desc_type_to_table_type(
 
 static uint32_t
 shader_desc_idx(uint32_t set, uint32_t binding,
-                struct panvk_subdesc_info subdesc,
+                struct panvk_subdesc_info subdesc, uint32_t element,
                 const struct lower_desc_ctx *ctx)
 {
    const struct panvk_descriptor_set_layout *set_layout =
       get_set_layout(set, ctx);
    const struct panvk_descriptor_set_binding_layout *bind_layout =
       &set_layout->bindings[binding];
-   uint32_t subdesc_idx = get_subdesc_idx(bind_layout, subdesc);
 
    /* On Valhall, all non-dynamic descriptors are accessed directly through
     * their set. The vertex attribute table always comes first, so we always
     * offset user sets by one if we're dealing with a vertex shader. */
-   if (PAN_ARCH >= 9 && !vk_descriptor_type_is_dynamic(bind_layout->type))
+   if (PAN_ARCH >= 9 && !vk_descriptor_type_is_dynamic(bind_layout->type)) {
+      uint32_t subdesc_idx = get_subdesc_idx(bind_layout, element, subdesc);
       return pan_res_handle(set + 1, bind_layout->desc_idx + subdesc_idx);
+   }
 
    /* On Bifrost, the SSBO descriptors are read directly from the set. */
    if (PAN_ARCH < 9 && bind_layout->type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
@@ -302,9 +360,13 @@ build_res_index(nir_builder *b, uint32_t set, uint32_t binding,
       get_set_layout(set, ctx);
    const struct panvk_descriptor_set_binding_layout *bind_layout =
       &set_layout->bindings[binding];
-   uint32_t array_size = bind_layout->desc_count;
+   /* note: IUB uses desc_count to represent the size, not arrays. */
+   uint32_t array_size =
+      bind_layout->type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK
+         ? 1
+         : bind_layout->desc_count;
    nir_address_format addr_fmt = addr_format_for_type(bind_layout->type, ctx);
-   uint32_t desc_idx = shader_desc_idx(set, binding, NO_SUBDESC, ctx);
+   uint32_t desc_idx = shader_desc_idx(set, binding, NO_SUBDESC, 0, ctx);
 
    switch (addr_fmt) {
 #if PAN_ARCH < 9
@@ -535,7 +597,7 @@ load_resource_deref_desc(nir_builder *b, nir_deref_instr *deref,
             ? get_sampler_subdesc_info(bind_layout->type, 0)
             : NO_SUBDESC;
 
-   unsigned subdesc_idx = get_subdesc_idx(bind_layout, subdesc);
+   unsigned subdesc_idx = get_subdesc_idx(bind_layout, index_imm, subdesc);
 
    assert(index_ssa == NULL || index_imm == 0);
    if (index_ssa == NULL)
@@ -826,6 +888,17 @@ lower_tex(nir_builder *b, nir_tex_instr *tex, const struct lower_desc_ctx *ctx)
 
    b->cursor = nir_before_instr(&tex->instr);
 
+   /* Remove index for input attachments, since after this pass the index is
+    * reinterpreted to mean the HW handle.
+    */
+   if (tex->input_attachment_index) {
+      tex->texture_index = 0;
+      int offset_src =
+         nir_tex_instr_src_index(tex, nir_tex_src_texture_offset);
+      if (offset_src >= 0)
+         nir_tex_instr_remove_src(tex, offset_src);
+   }
+
    lower_tex_immutable(b, tex, ctx);
 
 #if PAN_ARCH < 9
@@ -882,19 +955,29 @@ lower_tex(nir_builder *b, nir_tex_instr *tex, const struct lower_desc_ctx *ctx)
       struct panvk_subdesc_info subdesc =
          get_sampler_subdesc_info(bind_layout->type, plane);
       uint32_t desc_stride = get_desc_array_stride(bind_layout, subdesc.type);
-      uint32_t sampler_index = shader_desc_idx(set, binding, subdesc, ctx) + index_imm * desc_stride;
+      uint32_t sampler_index =
+         shader_desc_idx(set, binding, subdesc, index_imm, ctx) +
+         index_imm * desc_stride;
 
+#if PAN_ARCH >= 9
+      nir_def *handle = nir_imm_int(b, sampler_index);
+      if (index_ssa != NULL)
+         handle = nir_iadd(b, handle, nir_imul_imm(b, index_ssa, desc_stride));
+      nir_tex_instr_add_src(tex, nir_tex_src_sampler_handle, handle);
+#else
+      tex->sampler_index = sampler_index;
       if (index_ssa != NULL) {
-         nir_def *offset = nir_imul_imm(b, index_ssa, desc_stride);
-         offset = nir_iadd_imm(b, offset, sampler_index);
-         nir_tex_instr_add_src(tex, nir_tex_src_sampler_offset, offset);
-      } else {
-         tex->sampler_index = sampler_index;
+         nir_tex_instr_add_src(tex, nir_tex_src_sampler_offset,
+                               nir_imul_imm(b, index_ssa, desc_stride));
       }
+#endif
       progress = true;
    } else {
 #if PAN_ARCH >= 9
-      tex->sampler_index = ctx->desc_info.dummy_sampler_handle;
+      const uint32_t handle = ctx->desc_info.dummy_sampler_handle;
+      nir_tex_instr_add_src(tex, nir_tex_src_sampler_handle,
+                            nir_imm_int(b, handle));
+      progress = true;
 #endif
    }
 
@@ -915,16 +998,25 @@ lower_tex(nir_builder *b, nir_tex_instr *tex, const struct lower_desc_ctx *ctx)
       struct panvk_subdesc_info subdesc =
          get_tex_subdesc_info(bind_layout->type, plane);
       uint32_t desc_stride = get_desc_array_stride(bind_layout, subdesc.type);
-      uint32_t texture_index = shader_desc_idx(set, binding, subdesc, ctx) + index_imm * desc_stride;
+      uint32_t texture_index =
+         shader_desc_idx(set, binding, subdesc, index_imm, ctx) +
+         index_imm * desc_stride;
 
+#if PAN_ARCH >= 9
+      nir_def *handle = nir_imm_int(b, texture_index);
+      if (index_ssa != NULL)
+         handle = nir_iadd(b, handle, nir_imul_imm(b, index_ssa, desc_stride));
+      nir_tex_instr_add_src(tex, nir_tex_src_texture_handle, handle);
+#else
+      tex->texture_index = texture_index;
       if (index_ssa != NULL) {
-         nir_def *offset = nir_imul_imm(b, index_ssa, desc_stride);
-         offset = nir_iadd_imm(b, offset, texture_index);
-         nir_tex_instr_add_src(tex, nir_tex_src_texture_offset, offset);
-      } else {
-         tex->texture_index = texture_index;
+         nir_tex_instr_add_src(tex, nir_tex_src_texture_offset,
+                               nir_imul_imm(b, index_ssa, desc_stride));
       }
+#endif
       progress = true;
+   } else {
+      UNREACHABLE("nir_op_tex must have a texture deref");
    }
 
    return progress;
@@ -946,7 +1038,8 @@ get_img_index(nir_builder *b, nir_deref_instr *deref,
           bind_layout->type == VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER ||
           bind_layout->type == VK_DESCRIPTOR_TYPE_MUTABLE_EXT);
 
-   unsigned img_offset = shader_desc_idx(set, binding, NO_SUBDESC, ctx);
+   unsigned img_offset =
+      shader_desc_idx(set, binding, NO_SUBDESC, index_imm, ctx);
 
    if (index_ssa == NULL) {
       return nir_imm_int(b, img_offset + index_imm);
@@ -1066,7 +1159,6 @@ record_binding(struct lower_desc_ctx *ctx, unsigned set, unsigned binding,
    const struct panvk_descriptor_set_layout *set_layout = ctx->set_layouts[set];
    const struct panvk_descriptor_set_binding_layout *binding_layout =
       &set_layout->bindings[binding];
-   ASSERTED uint32_t subdesc_idx = get_subdesc_idx(binding_layout, subdesc);
    ASSERTED uint32_t desc_stride = panvk_get_desc_stride(binding_layout);
    ASSERTED uint32_t max_desc_stride = MAX2(
       binding_layout->samplers_per_desc + binding_layout->textures_per_desc, 1);
@@ -1085,8 +1177,6 @@ record_binding(struct lower_desc_ctx *ctx, unsigned set, unsigned binding,
        binding_layout->type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
       return;
 
-   assert(subdesc_idx < desc_stride);
-
    struct desc_id src = {
       .set = set,
       .sampler_subdesc = subdesc.type == VK_DESCRIPTOR_TYPE_SAMPLER,
@@ -1094,8 +1184,13 @@ record_binding(struct lower_desc_ctx *ctx, unsigned set, unsigned binding,
    };
    uint32_t *entry = _mesa_hash_table_u64_search(ctx->ht, src.ht_key);
    uint32_t old_desc_count = (uintptr_t)entry;
+   /* with an IUB, we only need to copy the buffer descriptor. */
+   const uint32_t binding_desc_count =
+      binding_layout->type == VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK
+         ? 1
+         : binding_layout->desc_count;
    uint32_t new_desc_count =
-      max_idx == UINT32_MAX ? binding_layout->desc_count : max_idx + 1;
+      max_idx == UINT32_MAX ? binding_desc_count : max_idx + 1;
 
    assert(new_desc_count <= binding_layout->desc_count);
 
@@ -1137,12 +1232,16 @@ fill_copy_descs_for_binding(struct lower_desc_ctx *ctx, unsigned set,
    const struct panvk_descriptor_set_binding_layout *binding_layout =
       &set_layout->bindings[binding];
    uint32_t desc_stride = panvk_get_desc_stride(binding_layout);
-   uint32_t subdesc_offset = sampler_subdesc ? binding_layout->textures_per_desc : 0;
    uint32_t *first_entry = NULL;
+   struct panvk_subdesc_info subdesc_info =
+      sampler_subdesc ? get_sampler_subdesc_info(binding_layout->type, 0)
+                      : NO_SUBDESC;
 
    assert(desc_count <= binding_layout->desc_count);
 
    for (uint32_t i = 0; i < desc_count; i++) {
+      const uint32_t subdesc_offset =
+         get_subdesc_idx(binding_layout, i, subdesc_info);
       uint32_t src_idx =
          binding_layout->desc_idx + (i * desc_stride) + subdesc_offset;
       struct lower_desc_map *map;
@@ -1194,6 +1293,12 @@ create_copy_table(nir_shader *nir, struct lower_desc_ctx *ctx)
    case MESA_SHADER_VERTEX:
       /* Dummy sampler comes after the vertex attributes. */
       dummy_sampler_idx = 16;
+      break;
+   case MESA_SHADER_TESS_CTRL:
+   case MESA_SHADER_TESS_EVAL:
+   case MESA_SHADER_GEOMETRY:
+      /* Dummy sampler comes first. */
+      dummy_sampler_idx = 0;
       break;
    case MESA_SHADER_FRAGMENT:
       /* Dummy sampler comes after the varyings. */
@@ -1381,24 +1486,67 @@ upload_shader_desc_info(struct panvk_device *dev,
    assert(lower_info->dyn_ubos.count <=
           ARRAY_SIZE(desc_info->dyn_ubos.map));
    desc_info->dyn_ubos.count = lower_info->dyn_ubos.count;
-   memcpy(desc_info->dyn_ubos.map, lower_info->dyn_ubos.map,
-          lower_info->dyn_ubos.count * sizeof(*desc_info->dyn_ubos.map));
+   if (lower_info->dyn_ubos.count != 0)
+      memcpy(desc_info->dyn_ubos.map, lower_info->dyn_ubos.map,
+             lower_info->dyn_ubos.count * sizeof(*desc_info->dyn_ubos.map));
    assert(lower_info->dyn_ssbos.count <=
           ARRAY_SIZE(desc_info->dyn_ssbos.map));
    desc_info->dyn_ssbos.count = lower_info->dyn_ssbos.count;
-   memcpy(
-      desc_info->dyn_ssbos.map, lower_info->dyn_ssbos.map,
-      lower_info->dyn_ssbos.count * sizeof(*desc_info->dyn_ssbos.map));
+   if (lower_info->dyn_ssbos.count != 0)
+      memcpy(
+         desc_info->dyn_ssbos.map, lower_info->dyn_ssbos.map,
+         lower_info->dyn_ssbos.count * sizeof(*desc_info->dyn_ssbos.map));
 #else
    assert(lower_info->dyn_bufs.count <=
           ARRAY_SIZE(desc_info->dyn_bufs.map));
    desc_info->dyn_bufs.count = lower_info->dyn_bufs.count;
-   memcpy(desc_info->dyn_bufs.map, lower_info->dyn_bufs.map,
-          lower_info->dyn_bufs.count * sizeof(*desc_info->dyn_bufs.map));
+   if (lower_info->dyn_bufs.count != 0)
+      memcpy(desc_info->dyn_bufs.map, lower_info->dyn_bufs.map,
+             lower_info->dyn_bufs.count * sizeof(*desc_info->dyn_bufs.map));
 #endif
 
    desc_info->used_set_mask = lower_info->used_set_mask;
 }
+
+#if PAN_ARCH >= 9
+static bool
+lower_iubs_to_ubo_loads(nir_builder *b, nir_intrinsic_instr *intrin, void *data)
+{
+   const struct lower_desc_ctx *ctx = data;
+
+   if (intrin->intrinsic != nir_intrinsic_load_vulkan_descriptor)
+      return false;
+
+   /* attempt to resolve the index src, potentially through a reindex chain. */
+   nir_intrinsic_instr *index = nir_src_as_intrinsic(intrin->src[0]);
+   while (index != NULL &&
+          index->intrinsic == nir_intrinsic_vulkan_resource_reindex)
+      index = nir_src_as_intrinsic(index->src[0]);
+
+   if (index == NULL || index->intrinsic != nir_intrinsic_vulkan_resource_index)
+      return false;
+
+   /* IUBs are UBOs in shaders, so we should always reach a set+binding */
+   const uint32_t set = nir_intrinsic_desc_set(index);
+   const uint32_t binding = nir_intrinsic_binding(index);
+   const struct panvk_descriptor_set_binding_layout *layout =
+      get_binding_layout(set, binding, ctx);
+   if (layout->type != VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK)
+      return false;
+
+   /* redirect the UBO set/binding to set + offset in table 62 */
+   b->cursor = nir_before_instr(&intrin->instr);
+
+   nir_def *iub_table_idx = nir_vec3(
+      /* user sets start from index 1 */
+      b, pan_nir_res_handle(b, VALHALL_RESOURCE_TABLE_IDX, set + 1, NULL),
+      nir_imm_int(b, 0),
+      nir_imm_int(b, layout->desc_idx * PANVK_DESCRIPTOR_SIZE));
+
+   nir_def_replace(&intrin->def, iub_table_idx);
+   return true;
+}
+#endif
 
 void
 panvk_per_arch(nir_lower_descriptors)(
@@ -1443,6 +1591,9 @@ panvk_per_arch(nir_lower_descriptors)(
       goto out;
 
 #if PAN_ARCH >= 9
+   NIR_PASS(progress, nir, nir_shader_intrinsics_pass, lower_iubs_to_ubo_loads,
+            nir_metadata_control_flow, &ctx);
+
    ctx.desc_info.num_varying_attr_descs = 0;
    /* We require Attribute Descriptors if we cannot use LD_VAR_BUF[_IMM] for
     * varyings. */

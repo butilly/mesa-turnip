@@ -238,6 +238,7 @@ lower_cmat_load_store(nir_builder *b, nir_intrinsic_instr *intrin,
    nir_deref_instr *slice = nir_src_as_deref(intrin->src[mat_src]);
    const slice_info *info = get_slice_info(state, slice);
    const struct glsl_cmat_description desc = info->desc;
+   const enum gl_access_qualifier access = nir_intrinsic_access(intrin);
 
    nir_def *results[NIR_MAX_VEC_COMPONENTS];
    const unsigned num_components = glsl_get_vector_elements(slice->type);
@@ -333,10 +334,10 @@ lower_cmat_load_store(nir_builder *b, nir_intrinsic_instr *intrin,
                                                   pointer->def.bit_size));
 
          if (load) {
-            results[i] = nir_load_deref(b, memory_deref);
+            results[i] = nir_load_deref_with_access(b, memory_deref, access);
          } else {
             nir_def *src = nir_channel(b, nir_load_deref(b, slice), i);
-            nir_store_deref(b, memory_deref, src, 0x1);
+            nir_store_deref_with_access(b, memory_deref, src, 0x1, access);
          }
       }
    } else {
@@ -363,14 +364,14 @@ lower_cmat_load_store(nir_builder *b, nir_intrinsic_instr *intrin,
                                                      pointer->def.bit_size));
 
             if (load) {
-               v[j] = nir_load_deref(b, memory_deref);
+               v[j] = nir_load_deref_with_access(b, memory_deref, access);
             } else {
                nir_def *src = nir_channel(b, nir_load_deref(b, slice), i);
 
                nir_def *v =
                   nir_channel(b, nir_unpack_bits(b, src, element_bits), j);
 
-               nir_store_deref(b, memory_deref, v, 0x1);
+               nir_store_deref_with_access(b, memory_deref, v, 0x1, access);
             }
          }
 
@@ -481,12 +482,23 @@ lower_cmat_convert(nir_builder *b, nir_intrinsic_instr *intrin,
    const unsigned dst_components = glsl_get_vector_elements(dst_info->type);
    const unsigned dst_bits = glsl_base_type_bit_size(dst_info->desc.element_type);
 
+   /* Apply signedness information from convert operation. */
+   const nir_cmat_signed signed_mask = nir_intrinsic_cmat_signed_mask(intrin);
+   struct glsl_cmat_description dst_desc = dst_info->desc;
+   struct glsl_cmat_description src_desc = src_info->desc;
+   dst_desc.element_type =
+      glsl_apply_signedness_to_base_type(
+         (enum glsl_base_type)dst_desc.element_type, signed_mask & NIR_CMAT_RESULT_SIGNED);
+   src_desc.element_type =
+      glsl_apply_signedness_to_base_type(
+         (enum glsl_base_type)src_desc.element_type, signed_mask & NIR_CMAT_A_SIGNED);
+
    nir_def *result = nir_convert_cmat_intel(b,
                                             dst_components,
                                             dst_info->packing_factor * dst_bits,
                                             src,
-                                            .dst_cmat_desc = dst_info->desc,
-                                            .src_cmat_desc = src_info->desc);
+                                            .dst_cmat_desc = dst_desc,
+                                            .src_cmat_desc = src_desc);
 
    nir_store_deref(b, dst_slice, result, nir_component_mask(result->num_components));
    b->fp_math_ctrl = nir_fp_fast_math;

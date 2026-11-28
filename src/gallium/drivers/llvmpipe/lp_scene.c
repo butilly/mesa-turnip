@@ -28,7 +28,6 @@
 #include "util/u_framebuffer.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
-#include "util/reallocarray.h"
 #include "util/u_inlines.h"
 #include "util/format/u_format.h"
 #include "lp_scene.h"
@@ -234,6 +233,7 @@ lp_scene_end_rasterization(struct lp_scene *scene)
    /* Reset all command lists:
     */
    memset(scene->tiles, 0, sizeof(struct cmd_bin) * scene->num_alloced_tiles);
+   scene->num_timestamp_queries = 0;
 
    /* Decrement texture ref counts
     */
@@ -581,8 +581,9 @@ lp_scene_begin_binning(struct lp_scene *scene,
 
    unsigned num_required_tiles = scene->tiles_x * scene->tiles_y;
    if (scene->num_alloced_tiles < num_required_tiles) {
-      scene->tiles = reallocarray(scene->tiles, num_required_tiles,
-                                  sizeof(struct cmd_bin));
+      /* Max size is TILES_X * TILES_Y (65,536 tiles, ~1.5 MiB), so cannot overflow. */
+      scene->tiles = realloc(scene->tiles,
+                             sizeof(struct cmd_bin) * num_required_tiles);
       if (!scene->tiles)
          return;
       memset(scene->tiles, 0, sizeof(struct cmd_bin) * num_required_tiles);

@@ -42,11 +42,15 @@ each directory.
 
    -  **imagination** - Imagination-specific sources
 
+      -  **ci** - Mesa CI configuration files
       -  **common** - common utility sources and hardware information
       -  **csbgen** - code generator for pack/unpack functions used by
          Control Stream Builder
+      -  **drm-shim** - dummy DRM kernel driver userspace library
+      -  **ds** - data sources for u_trace support
       -  **include** - common header files
       -  **pco** - shader compiler for PowerVR Rogue and newer
+      -  **pdsc** - PDS compiler for PowerVR Rogue and newer
       -  **vulkan** - Vulkan implementation for PowerVR Rogue and newer
 
    -  **intel** - Intel-specific sources
@@ -139,7 +143,6 @@ each directory.
          device drivers
 
          -  **dri** - Meta frontend for DRI drivers, see mesa/state_tracker
-         -  **glx** - Meta frontend for GLX
          -  **hgl** - Haiku OpenGL
          -  **lavapipe** - Vulkan frontend, software Vulkan rasterizer using LLVMpipe.
          -  **va** - VA-API frontend
@@ -152,7 +155,6 @@ each directory.
 
          -  **drm** - Direct Rendering Manager on Linux
          -  **gdi** - Windows
-         -  **xlib** - indirect rendering on X Window System
          -  XXX more
 
    -  **targets** - These control how the Gallium code is compiled into

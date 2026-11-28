@@ -113,6 +113,21 @@ get_tiler_oom_handler_idx(bool has_zs_ext, uint32_t rt_count)
 }
 
 static inline uint32_t
+get_fbd_tag(bool has_zs_ext, uint32_t rt_count)
+{
+#if PAN_ARCH >= 14
+   return 0;
+#else
+   struct mali_framebuffer_pointer_packed tag;
+   pan_pack(&tag, FRAMEBUFFER_POINTER, cfg) {
+      cfg.zs_crc_extension_present = has_zs_ext;
+      cfg.render_target_count = rt_count;
+   }
+   return tag.opaque[0];
+#endif
+}
+
+static inline uint32_t
 get_fbd_size(bool has_zs_ext, uint32_t rt_count)
 {
    assert(rt_count >= 1 && rt_count <= MAX_RTS);
@@ -177,8 +192,10 @@ struct panvk_cs_subqueue_context {
       uint32_t counter;
       /* Base pointer to regular FBD for layer 0 */
       uint64_t layer_fbd_ptr;
-      /* Pointer to scratch FBD used in the event of IR */
+      /* Pointer to scratch FBD used for FIRST|MIDDLE IR. */
       uint64_t ir_scratch_fbd_ptr;
+      /* Base of the LAST pass FBD array. */
+      uint64_t ir_final_fbds;
       /* FBD+DBD+RTDs IR descs to be copied to the scratch FBD when
        * IR is triggered.
        */
@@ -251,7 +268,7 @@ enum panvk_sb_ids {
    PANVK_SB_DEFERRED_SYNC = 1,
    PANVK_SB_DEFERRED_FLUSH = 2,
    PANVK_SB_ITER_START = 3,
-   PANVK_SB_ITER_COUNT = 5,
+   PANVK_SB_ITER_COUNT = CS_MAX_SB_COUNT - PANVK_SB_ITER_START,
 };
 
 #define SB_IMM_MASK     0
@@ -563,9 +580,11 @@ struct panvk_cmd_buffer {
       struct panvk_cmd_graphics_state gfx;
       struct panvk_cmd_compute_state compute;
       struct panvk_push_constant_state push_constants;
+      uint64_t descriptor_buffers[MAX_SETS];
       struct panvk_cs_state cs[PANVK_SUBQUEUE_COUNT];
       struct panvk_tls_state tls;
       bool contains_timestamp_queries;
+      bool uses_poly_heap;
 
       struct panvk_cond_render_state cond_render;
    } state;
@@ -924,15 +943,32 @@ void panvk_per_arch(cmd_dispatch_shader)(
    const struct panvk_dispatch_info *info);
 
 static VkPipelineStageFlags2
-panvk_get_subqueue_stages(enum panvk_subqueue_id subqueue)
+panvk_get_subqueue_stages(struct panvk_device *dev,
+                          enum panvk_subqueue_id subqueue)
 {
+   /* If future draws include a compute VS, then the compute subqueue is
+    * used by several stages that would otherwise be VT-only. Including these
+    * results in oversynchronization if compute VS is not used, so we gate
+    * them on whether it is possible for compute VS to be used at all in this
+    * device.
+    *
+    * TODO: We can do better than this, by emitting barriers without the
+    * compute subqueue and then retroactively adding the compute subqueue
+    * synchronization if we emit a compute VS draw later (with cs_maybe, or
+    * with just emitting a VT -> compute barrier). We should consider this
+    * before advertising GS/XFB unconditionally, to avoid performance
+    * regressions.
+    */
+   bool may_compute_vs = dev->vk.enabled_features.geometryShader;
+
    switch (subqueue) {
    case PANVK_SUBQUEUE_VERTEX_TILER:
       return VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT |
              VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT |
              VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT |
              VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
-             VK_PIPELINE_STAGE_2_CONDITIONAL_RENDERING_BIT_EXT;
+             VK_PIPELINE_STAGE_2_CONDITIONAL_RENDERING_BIT_EXT |
+             VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT;
    case PANVK_SUBQUEUE_FRAGMENT:
       return VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
              VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
@@ -941,11 +977,20 @@ panvk_get_subqueue_stages(enum panvk_subqueue_id subqueue)
              VK_PIPELINE_STAGE_2_COPY_BIT | VK_PIPELINE_STAGE_2_RESOLVE_BIT |
              VK_PIPELINE_STAGE_2_BLIT_BIT | VK_PIPELINE_STAGE_2_CLEAR_BIT |
              VK_PIPELINE_STAGE_2_CONDITIONAL_RENDERING_BIT_EXT;
-   case PANVK_SUBQUEUE_COMPUTE:
-      return VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
-             VK_PIPELINE_STAGE_2_COPY_BIT |
-             VK_PIPELINE_STAGE_2_COPY_INDIRECT_BIT_KHR |
-             VK_PIPELINE_STAGE_2_CONDITIONAL_RENDERING_BIT_EXT;
+   case PANVK_SUBQUEUE_COMPUTE: {
+      VkPipelineStageFlags2 stages =
+         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+         VK_PIPELINE_STAGE_2_COPY_BIT |
+         VK_PIPELINE_STAGE_2_COPY_INDIRECT_BIT_KHR |
+         VK_PIPELINE_STAGE_2_CONDITIONAL_RENDERING_BIT_EXT |
+         VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT;
+      if (may_compute_vs)
+         stages |= VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT |
+                   VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT |
+                   VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT |
+                   VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
+      return stages;
+   }
    default:
       UNREACHABLE("Invalid subqueue id");
    }
@@ -966,7 +1011,8 @@ enum sync_scope {
 };
 
 static uint32_t
-vk_stages_to_subqueue_mask(VkPipelineStageFlags2 vk_stages,
+vk_stages_to_subqueue_mask(struct panvk_device *dev,
+                           VkPipelineStageFlags2 vk_stages,
                            enum sync_scope scope)
 {
    /* Handle other compound stages by expanding. */
@@ -983,7 +1029,7 @@ vk_stages_to_subqueue_mask(VkPipelineStageFlags2 vk_stages,
 
    VkPipelineStageFlags2 flags[PANVK_SUBQUEUE_COUNT];
    for (uint32_t sq = 0; sq < PANVK_SUBQUEUE_COUNT; ++sq)
-      flags[sq] = panvk_get_subqueue_stages(sq);
+      flags[sq] = panvk_get_subqueue_stages(dev, sq);
 
    uint32_t result = 0;
    if (flags[PANVK_SUBQUEUE_VERTEX_TILER] & vk_stages)
@@ -1000,6 +1046,8 @@ vk_stages_to_subqueue_mask(VkPipelineStageFlags2 vk_stages,
 
 void panvk_per_arch(emit_barrier)(struct panvk_cmd_buffer *cmdbuf,
                                   struct panvk_cs_deps deps);
+
+VkResult panvk_per_arch(cmd_init_poly_heap)(struct panvk_cmd_buffer *cmdbuf);
 
 #if PAN_ARCH >= 14
 static inline void
@@ -1026,7 +1074,8 @@ cs_emit_layer_fragment_state(struct cs_builder *b, struct cs_index fbd_ptr)
 }
 #endif /* PAN_ARCH >= 14 */
 
-void panvk_per_arch(collect_crc_invalidation_deps)(const VkDependencyInfo *info,
+void panvk_per_arch(collect_crc_invalidation_deps)(struct panvk_device *dev,
+                                                   const VkDependencyInfo *info,
                                                    struct panvk_cs_deps *deps,
                                                    uint64_t *crc_addrs);
 void panvk_per_arch(cmd_invalidate_crc)(struct cs_builder *b,

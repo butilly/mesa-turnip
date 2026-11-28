@@ -440,7 +440,7 @@ blorp_exec_on_render(struct blorp_batch *batch,
       BITSET_SET(hw_state->emit_dirty, ANV_GFX_STATE_MESH_CONTROL);
       BITSET_SET(hw_state->emit_dirty, ANV_GFX_STATE_TASK_CONTROL);
    }
-   if (params->fs_prog_data) {
+   if (params->fs_info) {
       BITSET_SET(hw_state->emit_dirty, ANV_GFX_STATE_CC_STATE);
       BITSET_SET(hw_state->emit_dirty, ANV_GFX_STATE_PS_BLEND);
    }
@@ -549,7 +549,8 @@ get_color_aux_op(const struct blorp_params *params)
    case BLORP_OP_LINEAR_SURFACE_CLEAR:
    case BLORP_OP_SLOW_COLOR_CLEAR:
    case BLORP_OP_BLIT:
-   case BLORP_OP_COPY:
+   case BLORP_OP_BLIT_COPY:
+   case BLORP_OP_MEM_COPY:
    case BLORP_OP_COPY_INDIRECT:
    case BLORP_OP_COPY_IMAGE_INDIRECT:
       assert(params->fast_clear_op == ISL_AUX_OP_NONE);

@@ -38,7 +38,8 @@ class VulkanMarshalingCodegen(VulkanTypeIterator):
                  handleMapOverwrites = False,
                  doFiltering = True,
                  action = None,
-                 variant = "host"):
+                 variant = "host",
+                 api = None):
         self.cgen = cgen
         self.direction = direction
         self.processSimple = "write" if self.direction == "write" else "read"
@@ -65,6 +66,65 @@ class VulkanMarshalingCodegen(VulkanTypeIterator):
         self.doFiltering = doFiltering
         self.action = action
         self.variant = variant
+        self.api = api
+
+    def getCreateCallArgs(self, typeName, handleExpr):
+        instanceOwnedTypes = {
+            "VkPhysicalDevice",
+            "VkSurfaceKHR",
+            "VkDisplayKHR",
+            "VkDisplayModeKHR",
+            "VkDebugReportCallbackEXT",
+            "VkDebugUtilsMessengerEXT",
+        }
+        allocExpr = "nullptr"
+        if self.api is not None:
+            for p in self.api.parameters:
+                if p.typeName == "VkAllocationCallbacks":
+                    allocExpr = p.paramName
+                    break
+        if typeName == "VkInstance":
+            return "(%s, %s)" % (allocExpr, handleExpr)
+        if typeName == "VkDevice":
+            return "(%s, %s, %s)" % (self.api.parameters[0].paramName, allocExpr, handleExpr)
+        if typeName in instanceOwnedTypes:
+            parentParam = self.api.parameters[0]
+            if parentParam.typeName == "VkPhysicalDevice":
+                parentExpr = "gfxstream_vk_instance_to_handle(gfxstream_vk_physical_device_from_handle(%s)->instance)" % parentParam.paramName
+            else:
+                parentExpr = parentParam.paramName
+            return "(%s, %s, %s)" % (parentExpr, allocExpr, handleExpr)
+        if typeName == "VkCommandBuffer":
+            allocExpr = "&gfxstream_vk_command_pool_from_handle(pAllocateInfo->commandPool)->base.alloc"
+        return "(%s, %s, %s)" % (self.api.parameters[0].paramName, allocExpr, handleExpr)
+
+    def getDeleteCallArgs(self, typeName, elemExpr):
+        instanceOwnedTypes = {
+            "VkPhysicalDevice",
+            "VkSurfaceKHR",
+            "VkDisplayKHR",
+            "VkDisplayModeKHR",
+            "VkDebugReportCallbackEXT",
+            "VkDebugUtilsMessengerEXT",
+        }
+        allocExpr = "nullptr"
+        if self.api is not None:
+            for p in self.api.parameters:
+                if p.typeName == "VkAllocationCallbacks":
+                    allocExpr = p.paramName
+                    break
+        if typeName in ("VkInstance", "VkDevice"):
+            return "(%s, %s)" % (elemExpr, allocExpr)
+        if typeName in instanceOwnedTypes:
+            parentParam = self.api.parameters[0]
+            if parentParam.typeName == "VkPhysicalDevice":
+                parentExpr = "gfxstream_vk_instance_to_handle(gfxstream_vk_physical_device_from_handle(%s)->instance)" % parentParam.paramName
+            else:
+                parentExpr = parentParam.paramName
+            return "(%s, %s, %s)" % (parentExpr, elemExpr, allocExpr)
+        if typeName == "VkCommandBuffer":
+            allocExpr = "&gfxstream_vk_command_pool_from_handle(pAllocateInfo->commandPool)->base.alloc"
+        return "(%s, %s, %s)" % (self.api.parameters[0].paramName, elemExpr, allocExpr)
 
     def getTypeForStreaming(self, vulkanType):
         res = copy(vulkanType)
@@ -87,7 +147,10 @@ class VulkanMarshalingCodegen(VulkanTypeIterator):
     def genStreamCall(self, vulkanType, toStreamExpr, sizeExpr):
         varname = self.streamVarName
         func = self.processSimple
-        cast = self.makeCastExpr(self.getTypeForStreaming(vulkanType))
+        if self.variant == "guest" and (func == "write" or not vulkanType.isConst):
+            cast = ""
+        else:
+            cast = self.makeCastExpr(self.getTypeForStreaming(vulkanType))
 
         self.cgen.stmt(
             "%s->%s(%s%s, %s)" % (varname, func, cast, toStreamExpr, sizeExpr))
@@ -104,7 +167,7 @@ class VulkanMarshalingCodegen(VulkanTypeIterator):
 
     def genHandleMappingCall(self, vulkanType, access, lenAccess):
 
-        if lenAccess is None:
+        if lenAccess is None or lenAccess == "1":
             lenAccess = "1"
             handle64Bytes = "8"
         else:
@@ -156,13 +219,32 @@ class VulkanMarshalingCodegen(VulkanTypeIterator):
             if self.action == "create":
                 gfxstreamType = "gfxstream_" + re.sub(r'(?<!^)(?=[A-Z][a-z]|(?<=[a-z])[A-Z])', '_', vulkanType.typeName).lower()
                 if lenAccess == "1":
-                    self.cgen.stmt("*%s = create_%s(%s)" % (access, gfxstreamType, handle64Var))
-                    self.cgen.stmt("sResourceTracker->register_%s(*%s)" % (vulkanType.typeName, access))
+                    createArgs = self.getCreateCallArgs(vulkanType.typeName, handle64Var)
+                    self.cgen.stmt("*%s = %s ? create_%s%s : VK_NULL_HANDLE" % (access, handle64Var, gfxstreamType, createArgs))
+                    if self.api is not None and self.api.getRetTypeExpr() == "VkResult":
+                        self.cgen.beginIf("%s && !(*%s)" % (handle64Var, access))
+                        self.cgen.stmt("guestCreateAllocFailed = true")
+                        self.cgen.endIf()
                 else:
                     self.cgen.beginFor("uint32_t k = 0", "k < %s" % lenAccess, "++k")
-                    self.cgen.stmt("%s[k] = create_%s(%s[k])" % (access, gfxstreamType, handle64Var))
-                    self.cgen.stmt("sResourceTracker->register_%s(%s[k])" % (vulkanType.typeName, access))
+                    elemVar = "%s[k]" % handle64Var
+                    createArgs = self.getCreateCallArgs(vulkanType.typeName, elemVar)
+                    self.cgen.stmt("%s[k] = %s ? create_%s%s : VK_NULL_HANDLE" % (access, elemVar, gfxstreamType, createArgs))
+                    if self.api is not None:
+                        self.cgen.beginIf("%s && !(%s[k])" % (elemVar, access))
+                        self.cgen.stmt("guestCreateAllocFailed = true")
+                        self.cgen.endIf()
                     self.cgen.endFor()
+                    if self.api is not None:
+                        self.cgen.beginIf("guestCreateAllocFailed")
+                        self.cgen.beginFor("uint32_t k = 0", "k < %s" % lenAccess, "++k")
+                        self.cgen.beginIf("%s[k]" % access)
+                        deleteArgs = self.getDeleteCallArgs(vulkanType.typeName, "%s[k]" % access)
+                        self.cgen.stmt("delete_%s%s" % (gfxstreamType, deleteArgs))
+                        self.cgen.stmt("%s[k] = VK_NULL_HANDLE" % access)
+                        self.cgen.endIf()
+                        self.cgen.endFor()
+                        self.cgen.endIf()
             elif self.variant == "guest":
                 if lenAccess == "1":
                     self.cgen.stmt("*(%s%s) = (%s)(uintptr_t)%s" % (
@@ -218,22 +300,23 @@ class VulkanMarshalingCodegen(VulkanTypeIterator):
 
         access = self.exprAccessor(vulkanType)
 
-        needConsistencyCheck = False
+        if not self.dynAlloc and self.direction == "read":
+            if featureExpr is not None:
+                self.cgen.beginIf(featureExpr)
+                self.cgen.stmt("(void)%s->getBe64()" % self.streamVarName)
+                self.cgen.endIf()
+                self.cgen.beginIf("(!(%s) || %s)" % (featureExpr, access))
+            else:
+                checkName = "check_%s" % vulkanType.paramName
+                self.cgen.stmt("uint64_t %s = %s->getBe64()" % (checkName, self.streamVarName))
+                self.cgen.beginIf(access)
+                self.cgen.beginIf("!(%s)" % checkName)
+                self.cgen.stmt(
+                    "GFXSTREAM_ERROR(\"fatal: %s inconsistent between guest and host\")" % (access))
+                self.cgen.endIf()
+            return
 
-        self.cgen.line("// WARNING PTR CHECK")
-        if (self.dynAlloc and self.direction == "read") or self.direction == "write":
-            checkAccess = self.exprAccessor(vulkanType)
-            addrExpr = "&" + checkAccess
-            sizeExpr = self.cgen.sizeofExpr(vulkanType)
-        else:
-            checkName = "check_%s" % vulkanType.paramName
-            self.cgen.stmt("%s %s" % (
-                self.cgen.makeCTypeDecl(vulkanType, useParamName = False), checkName))
-            self.cgen.stmt("(void)%s" % checkName)
-            checkAccess = checkName
-            addrExpr = "&" + checkAccess
-            sizeExpr = self.cgen.sizeofExpr(vulkanType)
-            needConsistencyCheck = True
+        checkAccess = self.exprAccessor(vulkanType)
 
         if featureExpr is not None:
             self.cgen.beginIf(featureExpr)
@@ -249,12 +332,6 @@ class VulkanMarshalingCodegen(VulkanTypeIterator):
             self.cgen.beginIf("(!(%s) || %s)" % (featureExpr, access))
         else:
             self.cgen.beginIf(access)
-
-        if needConsistencyCheck and featureExpr is None:
-            self.cgen.beginIf("!(%s)" % checkName)
-            self.cgen.stmt(
-                "GFXSTREAM_ERROR(\"fatal: %s inconsistent between guest and host\")" % (access))
-            self.cgen.endIf()
 
 
     def onCheckWithNullOptionalStringFeature(self, vulkanType):
@@ -648,6 +725,12 @@ class VulkanMarshaling(VulkanWrapperGenerator):
         self.currentFeature = None
         self.apiOpcodes = {}
         self.dynAlloc = self.variant != "guest"
+        # Each side only needs one VulkanStream-based direction: the guest
+        # writes with reservedmarshal_* and reads replies with unmarshal_*,
+        # while the host reads with reservedunmarshal_* and writes replies
+        # with marshal_*.
+        self.emitMarshal = self.variant != "guest"
+        self.emitUnmarshal = self.variant == "guest"
 
         if self.variant == "guest":
             self.marshalingParams = PARAMETERS_MARSHALING_GUEST
@@ -701,9 +784,10 @@ class VulkanMarshaling(VulkanWrapperGenerator):
 
     def onBegin(self,):
         VulkanWrapperGenerator.onBegin(self)
-        if self.variant != "guest":
+        if self.emitMarshal:
             self.module.appendImpl(self.cgenImpl.makeFuncDecl(self.extensionMarshalPrototype))
-        self.module.appendImpl(self.cgenImpl.makeFuncDecl(self.extensionUnmarshalPrototype))
+        if self.emitUnmarshal:
+            self.module.appendImpl(self.cgenImpl.makeFuncDecl(self.extensionUnmarshalPrototype))
 
     def onBeginFeature(self, featureName, featureType):
         VulkanWrapperGenerator.onBeginFeature(self, featureName, featureType)
@@ -718,14 +802,14 @@ class VulkanMarshaling(VulkanWrapperGenerator):
         category = self.typeInfo.categoryOf(name)
 
         if category in ["struct", "union"] and alias:
-            # Guest only uses reservedmarshal.
-            if self.variant != "guest":
+            if self.emitMarshal:
                 self.module.appendHeader(
                     self.cgenHeader.makeFuncAlias(API_PREFIX_MARSHAL + name,
                                                   API_PREFIX_MARSHAL + alias))
-            self.module.appendHeader(
-                self.cgenHeader.makeFuncAlias(API_PREFIX_UNMARSHAL + name,
-                                              API_PREFIX_UNMARSHAL + alias))
+            if self.emitUnmarshal:
+                self.module.appendHeader(
+                    self.cgenHeader.makeFuncAlias(API_PREFIX_UNMARSHAL + name,
+                                                  API_PREFIX_UNMARSHAL + alias))
 
         if category in ["struct", "union"] and not alias:
 
@@ -772,7 +856,7 @@ class VulkanMarshaling(VulkanWrapperGenerator):
             def structMarshalingDef(cgen):
                 self.writeCodegen.cgen = cgen
                 self.writeCodegen.currentStructInfo = structInfo
-                self.writeCodegen.cgen.stmt("(void)%s" % ROOT_TYPE_VAR_NAME)
+                prefixCode = cgen.swapCode()
 
                 if category == "struct":
                     # marshal 'let' parameters first
@@ -784,11 +868,17 @@ class VulkanMarshaling(VulkanWrapperGenerator):
                 if category == "union":
                     iterateVulkanType(self.typeInfo, structInfo.members[0], self.writeCodegen)
 
+                bodyCode = cgen.swapCode()
+                cgen.code = prefixCode
+                if not re.search(r'(?<![.>])\b' + re.escape(ROOT_TYPE_VAR_NAME) + r'\b', bodyCode):
+                    cgen.stmt("(void)%s" % ROOT_TYPE_VAR_NAME)
+                cgen.code += bodyCode
+
             def structMarshalingDefNoFilter(cgen):
                 self.writeCodegen.cgen = cgen
                 self.writeCodegen.currentStructInfo = structInfo
                 self.writeCodegen.doFiltering = False
-                self.writeCodegen.cgen.stmt("(void)%s" % ROOT_TYPE_VAR_NAME)
+                prefixCode = cgen.swapCode()
 
                 if category == "struct":
                     # marshal 'let' parameters first
@@ -801,7 +891,13 @@ class VulkanMarshaling(VulkanWrapperGenerator):
                     iterateVulkanType(self.typeInfo, structInfo.members[0], self.writeCodegen)
                 self.writeCodegen.doFiltering = True
 
-            if self.variant != "guest":
+                bodyCode = cgen.swapCode()
+                cgen.code = prefixCode
+                if not re.search(r'(?<![.>])\b' + re.escape(ROOT_TYPE_VAR_NAME) + r'\b', bodyCode):
+                    cgen.stmt("(void)%s" % ROOT_TYPE_VAR_NAME)
+                cgen.code += bodyCode
+
+            if self.emitMarshal:
                 self.module.appendHeader(
                     self.cgenHeader.makeFuncDecl(marshalPrototype))
 
@@ -849,7 +945,7 @@ class VulkanMarshaling(VulkanWrapperGenerator):
             def structUnmarshalingDef(cgen):
                 self.readCodegen.cgen = cgen
                 self.readCodegen.currentStructInfo = structInfo
-                self.readCodegen.cgen.stmt("(void)%s" % ROOT_TYPE_VAR_NAME)
+                prefixCode = cgen.swapCode()
 
                 if category == "struct":
                     # unmarshal 'let' parameters first
@@ -861,11 +957,17 @@ class VulkanMarshaling(VulkanWrapperGenerator):
                 if category == "union":
                     iterateVulkanType(self.typeInfo, structInfo.members[0], self.readCodegen)
 
+                bodyCode = cgen.swapCode()
+                cgen.code = prefixCode
+                if not re.search(r'(?<![.>])\b' + re.escape(ROOT_TYPE_VAR_NAME) + r'\b', bodyCode):
+                    cgen.stmt("(void)%s" % ROOT_TYPE_VAR_NAME)
+                cgen.code += bodyCode
+
             def structUnmarshalingDefNoFilter(cgen):
                 self.readCodegen.cgen = cgen
                 self.readCodegen.currentStructInfo = structInfo
                 self.readCodegen.doFiltering = False
-                self.readCodegen.cgen.stmt("(void)%s" % ROOT_TYPE_VAR_NAME)
+                prefixCode = cgen.swapCode()
 
                 if category == "struct":
                     # unmarshal 'let' parameters first
@@ -877,24 +979,31 @@ class VulkanMarshaling(VulkanWrapperGenerator):
                     iterateVulkanType(self.typeInfo, structInfo.members[0], self.readCodegen)
                 self.readCodegen.doFiltering = True
 
-            self.module.appendHeader(
-                self.cgenHeader.makeFuncDecl(unmarshalPrototype))
+                bodyCode = cgen.swapCode()
+                cgen.code = prefixCode
+                if not re.search(r'(?<![.>])\b' + re.escape(ROOT_TYPE_VAR_NAME) + r'\b', bodyCode):
+                    cgen.stmt("(void)%s" % ROOT_TYPE_VAR_NAME)
+                cgen.code += bodyCode
 
-            if name in CUSTOM_MARSHAL_TYPES and CUSTOM_MARSHAL_TYPES[name].get("unmarshaling"):
-                self.module.appendImpl(
-                    self.cgenImpl.makeFuncImpl(
-                        unmarshalPrototype, structUnmarshalingCustom))
-            else:
-                self.module.appendImpl(
-                    self.cgenImpl.makeFuncImpl(
-                        unmarshalPrototype, structUnmarshalingDef))
-
-            if freeParams != []:
+            if self.emitUnmarshal:
                 self.module.appendHeader(
-                    self.cgenHeader.makeFuncDecl(unmarshalPrototypeNoFilter))
-                self.module.appendImpl(
-                    self.cgenImpl.makeFuncImpl(
-                        unmarshalPrototypeNoFilter, structUnmarshalingDefNoFilter))
+                    self.cgenHeader.makeFuncDecl(unmarshalPrototype))
+
+                if name in CUSTOM_MARSHAL_TYPES and CUSTOM_MARSHAL_TYPES[name].get("unmarshaling"):
+                    self.module.appendImpl(
+                        self.cgenImpl.makeFuncImpl(
+                            unmarshalPrototype, structUnmarshalingCustom))
+                else:
+                    self.module.appendImpl(
+                        self.cgenImpl.makeFuncImpl(
+                            unmarshalPrototype, structUnmarshalingDef))
+
+                if freeParams != []:
+                    self.module.appendHeader(
+                        self.cgenHeader.makeFuncDecl(unmarshalPrototypeNoFilter))
+                    self.module.appendImpl(
+                        self.cgenImpl.makeFuncImpl(
+                            unmarshalPrototypeNoFilter, structUnmarshalingDefNoFilter))
 
     def onGenCmd(self, cmdinfo, name, alias):
         VulkanWrapperGenerator.onGenCmd(self, cmdinfo, name, alias)
@@ -941,13 +1050,21 @@ class VulkanMarshaling(VulkanWrapperGenerator):
 
         if direction == "write":
             cgen.stmt("vkStream->putBe32(%s)" % sizeVar)
+            cgen.beginIf("!%s" % (sizeVar))
+            cgen.line("// exit if this was a null extension struct (size == 0 in this branch)")
+            cgen.stmt("return")
+            cgen.endIf()
         elif not self.dynAlloc:
-            cgen.stmt("vkStream->getBe32()");
-
-        cgen.beginIf("!%s" % (sizeVar))
-        cgen.line("// exit if this was a null extension struct (size == 0 in this branch)")
-        cgen.stmt("return")
-        cgen.endIf()
+            cgen.stmt("uint32_t hostExtSize = vkStream->getBe32()")
+            cgen.beginIf("!%s || !hostExtSize" % (sizeVar))
+            cgen.line("// exit if this was a null extension struct (size == 0 in this branch)")
+            cgen.stmt("return")
+            cgen.endIf()
+        else:
+            cgen.beginIf("!%s" % (sizeVar))
+            cgen.line("// exit if this was a null extension struct (size == 0 in this branch)")
+            cgen.stmt("return")
+            cgen.endIf()
 
         cgen.endIf()
 
@@ -955,10 +1072,17 @@ class VulkanMarshaling(VulkanWrapperGenerator):
         if direction == "write":
             cgen.stmt("vkStream->write(%s, sizeof(VkStructureType))" % extParam.paramName)
         elif not self.dynAlloc:
-            cgen.stmt("uint64_t pNext_placeholder")
+            cgen.stmt("uint64_t pNext_placeholder = 0")
             placeholderAccess = "(&pNext_placeholder)"
             cgen.stmt("vkStream->read((void*)(&pNext_placeholder), sizeof(VkStructureType))")
             cgen.stmt("(void)pNext_placeholder")
+            cgen.line("// Find the struct corresponding to the next struct returned from the host")
+            cgen.line("// passing over any structs that were skipped by the host (e.g. due to being unknown).")
+            cgen.beginWhile("%s && goldfish_vk_struct_type(%s) != goldfish_vk_struct_type(%s)" % (
+                extParam.paramName, extParam.paramName, placeholderAccess))
+            cgen.stmt("%s = (void*)((VkBaseInStructure*)%s)->pNext" % (
+                extParam.paramName, extParam.paramName))
+            cgen.endWhile()
 
         def fatalDefault(cgen):
             cgen.line("// fatal; the switch is only taken if the extension struct is known")
@@ -987,7 +1111,7 @@ class VulkanMarshaling(VulkanWrapperGenerator):
             cgen.funcCall(None, API_PREFIX_UNMARSHAL + ext.name,
                           [VULKAN_STREAM_VAR_NAME, ROOT_TYPE_VAR_NAME, castedAccess])
 
-        if self.variant != "guest":
+        if self.emitMarshal:
             self.module.appendImpl(
                 self.cgenImpl.makeFuncImpl(
                     self.extensionMarshalPrototype,
@@ -999,16 +1123,17 @@ class VulkanMarshaling(VulkanWrapperGenerator):
                         self.extensionMarshalPrototype,
                         "write")))
 
-        self.module.appendImpl(
-            self.cgenImpl.makeFuncImpl(
-                self.extensionUnmarshalPrototype,
-                lambda cgen: self.doExtensionStructMarshalingCodegen(
-                    cgen,
-                    STREAM_RET_TYPE,
-                    STRUCT_EXTENSION_PARAM_FOR_WRITE,
-                    forEachExtensionUnmarshal,
+        if self.emitUnmarshal:
+            self.module.appendImpl(
+                self.cgenImpl.makeFuncImpl(
                     self.extensionUnmarshalPrototype,
-                    "read")))
+                    lambda cgen: self.doExtensionStructMarshalingCodegen(
+                        cgen,
+                        STREAM_RET_TYPE,
+                        STRUCT_EXTENSION_PARAM_FOR_WRITE,
+                        forEachExtensionUnmarshal,
+                        self.extensionUnmarshalPrototype,
+                        "read")))
 
         opcode2stringPrototype = \
             VulkanAPI("api_opcode_to_string",
@@ -1024,7 +1149,7 @@ class VulkanMarshaling(VulkanWrapperGenerator):
 
             currFeature = None
 
-            for (name, (opcodeNum, feature)) in sorted(apiOpcodes.items(), key = lambda x : x[1][0]):
+            for (name, (opcodeNum, feature)) in sorted(apiOpcodes.items(), key = lambda x : (x[1][1] or "", x[1][0])):
                 if not currFeature:
                     cgen.leftline("#ifdef %s" % feature)
                     currFeature = feature
@@ -1034,18 +1159,12 @@ class VulkanMarshaling(VulkanWrapperGenerator):
                     cgen.leftline("#ifdef %s" % feature)
                     currFeature = feature
 
-                cgen.line("case OP_%s:" % name)
-                cgen.beginBlock()
-                cgen.stmt("return \"OP_%s\"" % name)
-                cgen.endBlock()
+                cgen.stmt("case OP_%s: return \"OP_%s\"" % (name, name))
 
             if currFeature:
                 cgen.leftline("#endif")
 
-            cgen.line("default:")
-            cgen.beginBlock()
-            cgen.stmt("return \"OP_UNKNOWN_API_CALL\"")
-            cgen.endBlock()
+            cgen.stmt("default: return \"OP_UNKNOWN_API_CALL\"")
 
             cgen.endBlock()
 

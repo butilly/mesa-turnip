@@ -54,14 +54,13 @@ if typing.TYPE_CHECKING:
         series: str
         count: int
 
-
     CalendarRowType = typing.Tuple[typing.Optional[str], str, str, str, typing.Optional[str]]
 
 
 _ROOT = pathlib.Path(__file__).parent.parent
 CALENDAR_CSV = _ROOT / 'docs' / 'release-calendar.csv'
 VERSION = _ROOT / 'VERSION'
-LAST_RELEASE = 'This is the last planned release of the {}.x series.'
+LAST_RELEASE = 'Last planned {}.x release.'
 OR_FINAL = 'Or {}.0 final.'
 
 
@@ -74,7 +73,6 @@ def read_calendar() -> typing.List[CalendarRowType]:
 def commit(message: str) -> None:
     """Commit the changes the the release-calendar.csv file."""
     subprocess.run(['git', 'commit', str(CALENDAR_CSV), '--message', message])
-
 
 
 def _calculate_release_start(major: str, minor: str) -> datetime.date:
@@ -228,7 +226,17 @@ def extend(args: ExtendArguments) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    sub = parser.add_subparsers()
+    sub = parser.add_subparsers(required=True)
+
+    def parse_maj_min(value: str) -> str:
+        try:
+            maj, min = value.split('.')
+            int(maj), int(min)
+            return value
+        # Either because the split has the wrong number of components, or
+        # because the int() cast fails.
+        except ValueError:
+            raise argparse.ArgumentTypeError("value must be in the form YY.N")
 
     rc = sub.add_parser('release-candidate', aliases=['rc'], help='Generate calendar entries for a release candidate.')
     rc.add_argument('manager', help="the name of the person managing the release.")
@@ -236,12 +244,12 @@ def main() -> None:
 
     fr = sub.add_parser('release', help='Generate calendar entries for a final release.')
     fr.add_argument('manager', help="the name of the person managing the release.")
-    fr.add_argument('series', help='The series to extend, such as "29.3" or "30.0".')
+    fr.add_argument('series', help='The series to extend, such as "29.3" or "30.0".', type=parse_maj_min)
     fr.add_argument('--zero-released', action='store_true', help='The .0 release was today, the next release is .1')
     fr.set_defaults(func=final_release)
 
     ex = sub.add_parser('extend', help='Generate additional entries for a release.')
-    ex.add_argument('series', help='The series to extend, such as "29.3" or "30.0".')
+    ex.add_argument('series', help='The series to extend, such as "29.3" or "30.0".', type=parse_maj_min)
     ex.add_argument('count', type=int, help='The number of new entries to add.')
     ex.set_defaults(func=extend)
 

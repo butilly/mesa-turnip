@@ -15,9 +15,12 @@
 #include "radv_shader.h"
 #include "vk_semaphore.h"
 
+#include "util/u_memory.h"
 #include "ac_rgp.h"
 #include "ac_sqtt.h"
-#include "util/u_memory.h"
+#ifdef RADV_SUPPORT_RDP
+#include "ac_devdriver.h"
+#endif
 
 void
 radv_sqtt_emit_relocated_shaders(struct radv_cmd_buffer *cmd_buffer, struct radv_graphics_pipeline *pipeline)
@@ -126,7 +129,7 @@ radv_sqtt_reloc_graphics_shaders(struct radv_device *device, struct radv_graphic
       else
          dest_ptr = slab_ptr + offset;
 
-      memcpy(dest_ptr, shader->code, shader->code_size);
+      radv_shader_get_code(device, shader, dest_ptr);
 
       offset += align(shader->code_size, RADV_SHADER_ALLOC_ALIGNMENT);
    }
@@ -345,7 +348,7 @@ radv_gfx12_write_draw_marker(struct radv_cmd_buffer *cmd_buffer, const struct ra
 }
 
 void
-radv_describe_draw(struct radv_cmd_buffer *cmd_buffer, const struct radv_draw_info *draw_info, bool use_gang_cs)
+radv_describe_draw(struct radv_cmd_buffer *cmd_buffer, const struct radv_draw_info draw_info, bool use_gang_cs)
 {
    const struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
    const struct radv_physical_device *pdev = radv_device_physical(device);
@@ -356,7 +359,7 @@ radv_describe_draw(struct radv_cmd_buffer *cmd_buffer, const struct radv_draw_in
                            RADV_SQTT_USERDATA_MAIN_CS | (use_gang_cs ? RADV_SQTT_USERDATA_GANG_CS : 0));
 
    if (pdev->info.gfx_level >= GFX12)
-      radv_gfx12_write_draw_marker(cmd_buffer, draw_info);
+      radv_gfx12_write_draw_marker(cmd_buffer, &draw_info);
 }
 
 void
@@ -585,6 +588,7 @@ radv_describe_queue_submit(struct radv_queue *queue, struct radv_cmd_buffer *cmd
    record->gpu_timestamps[1] = post_gpu_timestamp_ptr;
    record->queue_info_index = queue->vk.queue_family_index;
    record->submit_sub_index = cmdbuf_idx;
+   record->sqtt_cb_id = cmd_buffer->sqtt_cb_id;
 
    radv_describe_queue_event(queue, record);
 
@@ -611,6 +615,41 @@ radv_describe_queue_semaphore(struct radv_queue *queue, struct vk_semaphore *syn
    return VK_SUCCESS;
 }
 
+/* Check if RDP requested a trace via UberTrace RPC and the target frame was reached. */
+static bool
+radv_handle_rdp_trace_request(struct radv_device *device)
+{
+   bool trigger_trace = false;
+
+#ifdef RADV_SUPPORT_RDP
+   if (device->devdriver && !device->sqtt_enabled && !device->sqtt.capture_cancelled) {
+      if (ac_devdriver_ubertrace_is_trace_requested(device->devdriver)) {
+         uint32_t target_frame = ac_devdriver_ubertrace_get_target_capture_frame(device->devdriver);
+         /* target_frame == 0: capture immediately (default / "capture now" in GUI).
+          * target_frame > 0: wait until current_frame passes the target.
+          *   current_frame is incremented at the start of each present (Nth present -> N),
+          *   target_frame is 0-indexed, so > is used for correct alignment. */
+         if (target_frame == 0 || device->vk.current_frame > target_frame) {
+            fprintf(stderr, "radv/rdp: Starting capture at frame %u\n", device->vk.current_frame);
+            trigger_trace = true;
+         }
+      }
+   }
+#endif
+
+   return trigger_trace;
+}
+
+/* Call DevDriver DriverTick() to process state machine transitions (e.g. Halted -> Running). */
+static void
+radv_rdp_tick(struct radv_device *device)
+{
+#ifdef RADV_SUPPORT_RDP
+   if (device->devdriver)
+      ac_devdriver_driver_tick(device->devdriver);
+#endif
+}
+
 static void
 radv_handle_sqtt(VkQueue _queue)
 {
@@ -618,6 +657,9 @@ radv_handle_sqtt(VkQueue _queue)
    struct radv_device *device = radv_queue_device(queue);
    bool trigger = device->sqtt_triggered;
    device->sqtt_triggered = false;
+
+   if (radv_handle_rdp_trace_request(device))
+      trigger = true;
 
    if (device->sqtt_enabled) {
       if (!radv_sqtt_stop_capturing(queue)) {
@@ -638,6 +680,8 @@ sqtt_QueuePresentKHR(VkQueue _queue, const VkPresentInfoKHR *pPresentInfo)
    VK_FROM_HANDLE(radv_queue, queue, _queue);
    struct radv_device *device = radv_queue_device(queue);
    VkResult result;
+
+   radv_rdp_tick(device);
 
    queue->sqtt_present = true;
 
@@ -726,7 +770,6 @@ radv_sqtt_wsi_submit(VkQueue _queue, uint32_t submitCount, const VkSubmitInfo2 *
 
       FREE(new_cmdbufs);
    }
-
 
    return result;
 
@@ -1465,7 +1508,8 @@ radv_fill_code_object_record(struct radv_device *device, struct rgp_shader_data 
    shader_data->hash[1] = (uint64_t)(uintptr_t)shader >> 32;
    shader_data->code_size =
       shader->exec_size; /* Only include executable size so RGP doesn't try to disassemble constant data. */
-   shader_data->code = shader->code;
+   shader_data->code = malloc(shader->code_size);
+   radv_shader_get_code(device, shader, shader_data->code);
    shader_data->vgpr_count = shader->config.num_vgprs;
    shader_data->sgpr_count = shader->config.num_sgprs;
    shader_data->scratch_memory_size = shader->config.scratch_bytes_per_wave;
@@ -1601,8 +1645,8 @@ radv_register_rt_stage(struct radv_device *device, struct radv_ray_tracing_pipel
    result = ac_sqtt_add_code_object_loader_event(&device->sqtt, *(uint64_t *)blake3, shader->va);
    if (!result)
       return VK_ERROR_OUT_OF_HOST_MEMORY;
-   result =
-      radv_add_rt_record(device, &device->sqtt.rgp_code_object, pipeline, shader, stack_size, index, *(uint64_t *)blake3);
+   result = radv_add_rt_record(device, &device->sqtt.rgp_code_object, pipeline, shader, stack_size, index,
+                               *(uint64_t *)blake3);
    return result;
 }
 
@@ -1716,6 +1760,8 @@ radv_unregister_records(struct radv_device *device, uint64_t hash)
       if (record->pipeline_hash[0] == hash) {
          code_object->record_count--;
          list_del(&record->list);
+         u_foreach_bit (i, record->shader_stages_mask)
+            free(record->shader_data[i].code);
          free(record);
          break;
       }

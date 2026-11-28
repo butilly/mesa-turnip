@@ -5,7 +5,7 @@ use crate::builder::*;
 use crate::ir::*;
 use crate::ops::*;
 use crate::ssa_value::AllocSSA;
-use compiler::bitset::BitSet;
+use mesa_util::bitset::BitSet;
 use std::ops::Range;
 
 const MAX_COPY_SIZE_LOG2: u32 = 3; // COPY.i64 is the maximum
@@ -35,74 +35,101 @@ fn imm_u8(b: &mut impl Builder, shift: u8) -> Src {
     panic!("Failed to find small constant for shift: {shift}");
 }
 
-fn xor_regs(b: &mut impl Builder, dst_b: Range<u16>, src_b: Range<u16>) {
-    let bytes = dst_b.end - dst_b.start;
-    debug_assert_eq!(src_b.end - src_b.start, bytes);
-    debug_assert!(bytes <= u16::from(MAX_COPY_SIZE));
-    let bytes = u8::try_from(bytes).unwrap();
+fn xor_bytes(b: &mut impl Builder, dst_b: Range<u16>, src_b: Range<u16>) {
+    // XOR is used only on 1 byte register swaps
+    debug_assert!(dst_b.len() == 1 && src_b.len() == 1);
 
-    if bytes == 1 {
-        // For this, we're going to write the whole destination register
-        let dst_byte = u8::try_from(dst_b.start % 4).unwrap();
-        let mut dst = RegRef::from_byte_range(dst_b).unwrap();
-        dst.range = RegRange::Regs(1);
+    // For this, we're going to write the whole destination register
+    let dst_byte = u8::try_from(dst_b.start % 4).unwrap();
+    let mut dst = RegRef::from_byte_range(dst_b).unwrap();
+    dst.range = RegRange::Regs(1);
 
-        // For src0, we take the src byte and widen it to 32 bits.  This leaves
-        // us with the src byte in the bottom 8 byts and zeros in the top 24
-        // bits.  We can do this because we know the widen operations on
-        // OpShiftLop sources are unsigned (and we have tests for this).
-        let src = RegRef::from_byte_range(src_b).unwrap();
-        let src0 = Src::from(src).swizzle(Swizzle::widen_u8(0));
+    // For src0, we take the src byte and widen it to 32 bits.  This leaves
+    // us with the src byte in the bottom 8 bits and zeros in the top 24
+    // bits.  We can do this because we know the widen operations on
+    // OpShiftLop sources are unsigned (and we have tests for this).
+    let src = RegRef::from_byte_range(src_b).unwrap();
+    let src0 = Src::from(src).swizzle(Swizzle::widen_u8(0));
 
-        // Then we shift the src up to match dst.  Now the src byte is in the
-        // same position as the dst byte with all other bits in the word zero.
-        // The resulting XOR will leave everything in the destination alone
-        // except the one byte we wish to modify, even though we do a full
-        // 32-bit XOR.
-        let shift = imm_u8(b, dst_byte * 8);
+    // Then we shift the src up to match dst.  Now the src byte is in the
+    // same position as the dst byte with all other bits in the word zero.
+    // The resulting XOR will leave everything in the destination alone
+    // except the one byte we wish to modify, even though we do a full
+    // 32-bit XOR.
+    let shift = imm_u8(b, dst_byte * 8);
 
-        b.push_op(OpShiftLop {
-            dst: dst.into(),
-            dst_type: DataType::U32,
-            shift_op: ShiftOp::LShift,
-            logic_op: LogicOp::Xor,
-            not_result: false,
-            src0,
-            shift,
-            src2: dst.into(),
-        });
-    } else {
-        let comps = if bytes == 2 { 2 } else { 1 };
-        let dst_type = DataType::v(comps, DataType::u(bytes * 8));
+    b.push_op(OpShiftLop {
+        dst: dst.into(),
+        dst_type: DataType::U32,
+        shift_op: ShiftOp::LShift,
+        logic_op: LogicOp::Xor,
+        not_result: false,
+        src0,
+        shift,
+        src2: dst.into(),
+    });
+}
 
-        let dst = RegRef::from_byte_range(dst_b).unwrap();
-        let src = RegRef::from_byte_range(src_b).unwrap();
+#[derive(Clone, Copy)]
+enum AddSubOp {
+    Add,
+    Sub,
+}
 
-        // src2 isn't allowed to have a swizzle so we need to expand it out to
-        // a full register.  It lines up with dst so the mask will take care of
-        // selecting the right half
-        let mut src2 = dst;
-        if bytes < 4 {
-            src2.range = RegRange::Regs(1);
+fn iadd_regs(
+    b: &mut impl Builder,
+    dst_b: Range<u16>,
+    src1_b: Range<u16>,
+    src2_b: Range<u16>,
+    op: AddSubOp,
+) {
+    let bytes = u8::try_from(dst_b.len()).unwrap();
+    // IADD is used on 2/4/8 bytes register swaps.
+    debug_assert!(bytes > 1);
+    debug_assert!(src1_b.len() == bytes.into() && src2_b.len() == bytes.into());
+
+    let comps = if bytes == 2 { 2 } else { 1 };
+    let dst_type = DataType::v(comps, DataType::u(bytes * 8));
+
+    let dst = RegRef::from_byte_range(dst_b).unwrap();
+    let src1 = RegRef::from_byte_range(src1_b).unwrap();
+    let src2 = RegRef::from_byte_range(src2_b).unwrap();
+
+    match op {
+        AddSubOp::Add => {
+            b.push_op(OpIAdd {
+                dst: dst.into(),
+                dst_type,
+                saturate: false,
+                srcs: [src1.into(), src2.into()],
+            });
         }
-
-        b.push_op(OpShiftLop {
-            dst: dst.into(),
-            dst_type,
-            shift_op: ShiftOp::None,
-            logic_op: LogicOp::Xor,
-            not_result: false,
-            src0: src.into(),
-            shift: 0_u8.into(),
-            src2: src2.into(),
-        });
+        AddSubOp::Sub => {
+            b.push_op(OpISub {
+                dst: dst.into(),
+                dst_type,
+                saturate: false,
+                srcs: [src1.into(), src2.into()],
+            });
+        }
     }
 }
 
 fn swap_regs(b: &mut impl Builder, dst_b: Range<u16>, src_b: Range<u16>) {
-    xor_regs(b, dst_b.clone(), src_b.clone());
-    xor_regs(b, src_b.clone(), dst_b.clone());
-    xor_regs(b, dst_b.clone(), src_b.clone());
+    let bytes = dst_b.end - dst_b.start;
+    debug_assert_eq!(src_b.end - src_b.start, bytes);
+    debug_assert!(bytes <= u16::from(MAX_COPY_SIZE));
+
+    if bytes == 1 {
+        xor_bytes(b, dst_b.clone(), src_b.clone());
+        xor_bytes(b, src_b.clone(), dst_b.clone());
+        xor_bytes(b, dst_b.clone(), src_b.clone());
+    } else {
+        use AddSubOp::*;
+        iadd_regs(b, dst_b.clone(), dst_b.clone(), src_b.clone(), Add);
+        iadd_regs(b, src_b.clone(), dst_b.clone(), src_b.clone(), Sub);
+        iadd_regs(b, dst_b.clone(), dst_b.clone(), src_b.clone(), Sub);
+    }
 }
 
 fn copy_mem<A: AllocSSA>(
@@ -146,8 +173,8 @@ fn swap_mem<A: AllocSSA>(
     let x = ssa_alloc.alloc_ref((bytes * 8).into());
     let y = ssa_alloc.alloc_ref((bytes * 8).into());
 
-    b.copy_to(x.clone().into(), data_type, src.clone().into());
-    b.copy_to(y.clone().into(), data_type, dst.clone().into());
+    b.copy_to(x.clone().into(), data_type, src.into());
+    b.copy_to(y.clone().into(), data_type, dst.into());
     b.copy_to(dst.into(), data_type, x.into());
     b.copy_to(src.into(), data_type, y.into());
 }
@@ -177,10 +204,7 @@ impl ByteCopy {
     fn iter(&self) -> impl Iterator<Item = (u16, u16)> + use<> {
         debug_assert!(self.dst_b.len() == self.src_b.len());
         // TODO: Use Range::iter() when we update to Rust 1.96
-        self.dst_b
-            .clone()
-            .into_iter()
-            .zip(self.src_b.clone().into_iter())
+        self.dst_b.clone().into_iter().zip(self.src_b.clone())
     }
 
     fn try_add_copy(&mut self, other: ByteCopy) -> bool {
@@ -342,14 +366,11 @@ impl ParallelCopy<'_> {
         mut ssa_alloc: Option<&mut A>,
     ) -> impl Iterator<Item = Instr> + use<A> {
         if self.copies.is_empty() {
-            return MappedInstrs::new()
-                .into_iter()
-                .chain(self.const_copies.into_iter());
+            return MappedInstrs::new().into_iter().chain(self.const_copies);
         }
 
         // Sort by destination register so we can detect duplicates/overlaps
-        self.copies
-            .sort_by(|a, b| a.dst_b.start.cmp(&b.dst_b.start));
+        self.copies.sort_by_key(|x| x.dst_b.start);
 
         let mut bytes = ByteArr::new(self.max_b);
 
@@ -408,27 +429,49 @@ impl ParallelCopy<'_> {
         let mut b = InstrBuilder::new(self.model);
 
         let mut copy_size = MAX_COPY_SIZE;
+        // Do not allow copy splits on the first iteration.
+        let mut allow_copy_split = false;
         loop {
             let mut progress = false;
             let mut start = 0;
-            loop {
-                let Some(dst_b) = ready.find_aligned_set_range(
-                    start,
-                    copy_size.into(),
-                    copy_size.into(),
-                    0,
-                ) else {
-                    break;
-                };
-                start += usize::from(copy_size);
+            while let Some(dst_b) = ready.find_aligned_set_range(
+                start,
+                copy_size.into(),
+                copy_size.into(),
+                0,
+            ) {
+                start = dst_b + usize::from(copy_size);
 
                 let mut dst_b = u16::try_from(dst_b).unwrap();
                 let ready_range = dst_b..(dst_b + u16::from(copy_size));
 
                 while dst_b < ready_range.end {
                     let dst_byte = &bytes[dst_b];
-                    let src_b = dst_byte.src_byte;
 
+                    // Check if this copy is a subset of a larger copy and only add it
+                    // once we have established that the larger copy was not unblocked
+                    // by a smaller, stand-alone copy.
+                    if !allow_copy_split {
+                        let mut next_copy_size = copy_size * 2;
+                        while next_copy_size <= MAX_COPY_SIZE {
+                            let aligned_dst_b =
+                                dst_b & !(next_copy_size as u16 - 1);
+                            let aligned_max_size =
+                                bytes[aligned_dst_b].max_copy_size;
+                            if aligned_max_size >= next_copy_size {
+                                break;
+                            }
+                            next_copy_size *= 2;
+                        }
+
+                        if next_copy_size <= MAX_COPY_SIZE {
+                            // This copy is part of a larger copy, skip it this round
+                            dst_b += u16::from(copy_size);
+                            continue;
+                        }
+                    }
+
+                    let src_b = dst_byte.src_byte;
                     let copy_size = copy_size.min(dst_byte.max_copy_size);
                     let dst = dst_b..(dst_b + u16::from(copy_size));
                     let src = src_b..(src_b + u16::from(copy_size));
@@ -462,6 +505,12 @@ impl ParallelCopy<'_> {
                 // If we couldn't make progress, drop the copy size
                 copy_size /= 2;
                 continue;
+            } else if !allow_copy_split && !ready.is_empty() {
+                // If we reached the end with still more copies to do,
+                // allow us to split larger copies
+                allow_copy_split = true;
+                copy_size = MAX_COPY_SIZE;
+                continue;
             } else {
                 // If we couldn't make progress with byte copies, we're done.
                 break;
@@ -475,17 +524,11 @@ impl ParallelCopy<'_> {
         }
 
         if needed.is_empty() {
-            return b
-                .into_mapped()
-                .into_iter()
-                .chain(self.const_copies.into_iter());
+            return b.into_mapped().into_iter().chain(self.const_copies);
         }
 
         let mut start = 0;
-        loop {
-            let Some(start_b) = needed.next_set(usize::from(start)) else {
-                break;
-            };
+        while let Some(start_b) = needed.next_set(usize::from(start)) {
             let start_b = u16::try_from(start_b).unwrap();
 
             // Walk the cycle and figure out the copy size
@@ -526,8 +569,120 @@ impl ParallelCopy<'_> {
             start = start_b + copy_size;
         }
 
-        b.into_mapped()
-            .into_iter()
-            .chain(self.const_copies.into_iter())
+        b.into_mapped().into_iter().chain(self.const_copies)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{model::model_for_gpu_id, ssa_value::SSAValueAllocator};
+
+    fn run_copy(
+        copies: &[(Range<u16>, Range<u16>)],
+    ) -> impl Iterator<Item = Instr> + use<> {
+        let model = model_for_gpu_id(0xd8000000, 4).unwrap();
+        let mut pcopy = ParallelCopy::new(&*model, false);
+
+        for (dst_range, src_range) in copies {
+            let dst = RegRef::from_byte_range(dst_range.clone()).unwrap();
+            let src = RegRef::from_byte_range(src_range.clone()).unwrap();
+            pcopy.add_copy(dst.into(), src.into());
+        }
+        pcopy.into_instrs::<SSAValueAllocator>(None)
+    }
+
+    #[derive(Default, PartialEq, Eq, Debug)]
+    struct CopyLenHistogram {
+        c64: usize,
+        c32: usize,
+        c16: usize,
+        c8: usize,
+    }
+
+    fn count_copy_len(copies: &[(Range<u16>, Range<u16>)]) -> CopyLenHistogram {
+        let mut histo = CopyLenHistogram::default();
+
+        for instr in run_copy(copies) {
+            match instr.dst_types().next().unwrap().total_bits() {
+                64 => histo.c64 += 1,
+                32 => histo.c32 += 1,
+                16 => histo.c16 += 1,
+                8 => histo.c8 += 1,
+                _ => unreachable!("Invalid copy size"),
+            }
+        }
+
+        histo
+    }
+
+    #[test]
+    fn test_sanity() {
+        let r = |i: u16| i * 4..i * 4 + 4;
+
+        let copies = [(r(1), r(0))];
+        let histogram = count_copy_len(&copies);
+        let expected = CopyLenHistogram {
+            c64: 0,
+            c32: 1,
+            c16: 0,
+            c8: 0,
+        };
+        assert_eq!(histogram, expected);
+    }
+
+    #[test]
+    fn test_large_copy() {
+        let copies = [(0..64, 64..128)];
+        let histogram = count_copy_len(&copies);
+        // We cannot copy 64 bytes at once, we need to split it up into 8 64-bit
+        // copies
+        let expected = CopyLenHistogram {
+            c64: 8,
+            c32: 0,
+            c16: 0,
+            c8: 0,
+        };
+        assert_eq!(histogram, expected);
+    }
+
+    #[test]
+    fn test_partial_copies() {
+        let r = |i: u16| i * 4..i * 4 + 4;
+        let h = |i: u16, h: u16| i * 4 + h * 2..i * 4 + h * 2 + 2;
+
+        let copies = [
+            (h(4, 0), h(3, 0)), // r4.h0 <- r3.h0 (16-bit)
+            (r(3), r(2)),       // r3    <- r2    (32-bit)
+            (r(2), r(1)),       // r2    <- r1    (32-bit)
+            (r(1), r(0)),       // r1    <- r0    (32-bit)
+        ];
+        let histogram = count_copy_len(&copies);
+        let expected = CopyLenHistogram {
+            c64: 0,
+            c32: 3,
+            c16: 1,
+            c8: 0,
+        };
+        assert_eq!(histogram, expected);
+    }
+
+    #[test]
+    fn test_mkvec_missed() {
+        let h = |i: u16, h: u16| i * 4 + h * 2..i * 4 + h * 2 + 2;
+
+        let copies = [
+            (h(0, 0), h(1, 0)), // r0.h0 <- r1.h0
+            (h(0, 1), h(2, 0)), // r0.h1 <- r2.h0
+        ];
+        let histogram = count_copy_len(&copies);
+        // TODO: this could be done with a single MKVEC.v2u16 (Issue 16908)
+        let expected = CopyLenHistogram {
+            c64: 0,
+            c32: 0,
+            c16: 2,
+            c8: 0,
+        };
+        assert_eq!(histogram, expected);
     }
 }

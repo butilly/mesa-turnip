@@ -628,26 +628,27 @@ panfrost_init_compute_caps(struct panfrost_screen *screen)
    caps->max_grid_size[1] =
    caps->max_grid_size[2] = 65535;
 
-   /* Unpredictable behaviour at larger sizes. Mali-G52 advertises
-    * 384x384x384.
-    *
-    * On Midgard, we don't allow more than 128 threads in each
-    * direction to match pipe_compute_caps.max_threads_per_block.
-    * That still exceeds the minimum-maximum.
-    */
-   caps->max_block_size[0] =
-   caps->max_block_size[1] =
-   caps->max_block_size[2] = dev->arch >= 6 ? 256 : 128;
-
-   /* On Bifrost and newer, all GPUs can support at least 256 threads
-    * regardless of register usage, so we report 256.
+   /* The maximum work-group size is the hardware thread_max_workgroup_size
+    * (THREAD_MAX_BARRIER_SIZE), queried from the kernel. On Bifrost and newer
+    * the work-group size is decoupled from register usage: a high-register
+    * kernel simply lowers occupancy (threads are scheduled in batches) without
+    * affecting correctness, so we can advertise the real hardware limit.
     *
     * On Midgard, with maximum register usage, the maximum
     * thread count is only 64. We would like to report 64 here, but
     * the GLES3.1 spec minimum is 128, so we report 128 and limit
     * the register allocation of affected compute kernels.
     */
-   caps->max_threads_per_block = dev->arch >= 6 ? 256 : 128;
+   unsigned max_wg_size = dev->kmod.dev->props.max_threads_per_wg;
+
+   if (dev->arch < 6)
+      max_wg_size = 128;
+
+   caps->max_block_size[0] =
+   caps->max_block_size[1] =
+   caps->max_block_size[2] = max_wg_size;
+
+   caps->max_threads_per_block = max_wg_size;
 
    const uint64_t available_ram =
       os_get_gpu_heap_size(screen->heap_memory_percent, NULL);
@@ -780,6 +781,7 @@ panfrost_init_screen_caps(struct panfrost_screen *screen)
    caps->glsl_feature_level =
    caps->glsl_feature_level_compatibility = is_gl3 ? 330 : 140;
    caps->essl_feature_level = dev->arch >= 6 ? 320 : 310;
+   caps->fs_sample_variables = dev->arch >= 6;
 
    caps->constant_buffer_offset_alignment = 16;
 
@@ -1064,8 +1066,8 @@ panfrost_create_screen(int fd, const struct pipe_screen_config *config,
 
    unsigned core_count = pan_query_core_count(&dev->kmod.dev->props);
 
-   snprintf(screen->renderer_string, sizeof(screen->renderer_string),
-            "%s MC%u (Panfrost)", dev->model->name, core_count);
+   pan_model_device_name(screen->renderer_string, sizeof(screen->renderer_string),
+                         dev->model, core_count, " (Panfrost)");
 
    screen->heap_memory_percent =
       driQueryOptionf(config->options, "heap_memory_percent");

@@ -2,7 +2,7 @@
 // Copyright © 2026 Collabora, Ltd.
 // SPDX-License-Identifier: MIT
 
-use compiler::dataflow::ForwardDataflow;
+use compiler::dataflow::{BackwardDataflow, ForwardDataflow};
 
 use crate::flow::FlowWaitBit;
 use crate::ir::*;
@@ -115,8 +115,8 @@ impl WaitSlots {
     }
 }
 
-fn dce_flow(shader: &mut Shader) {
-    let cfg = &shader.blocks;
+fn dce_flow(f: &mut Function, shader_info: &ShaderInfo) {
+    let cfg = &f.blocks;
     // First pass: gather waits per-block
     let block_usage: Vec<_> = cfg
         .iter()
@@ -134,7 +134,8 @@ fn dce_flow(shader: &mut Shader) {
     let mut reg_in = vec![WaitSlots::unknown(); cfg.len()];
     let mut reg_out = vec![WaitSlots::unknown(); cfg.len()];
     reg_in[0] = WaitSlots::signaled();
-    if shader.info.is_blend {
+
+    if shader_info.stage == ShaderStage::Blend {
         // blend shaders come from a BLEND call, those require a zs + barrier
         // wait, so we can clear those slots
         reg_in[0].wait_bit(FlowWaitBit::Barrier);
@@ -156,7 +157,7 @@ fn dce_flow(shader: &mut Shader) {
     .solve();
 
     // Third pass: Remove useless waits
-    for (bi, block) in shader.blocks.iter_mut().enumerate() {
+    for (bi, block) in f.blocks.iter_mut().enumerate() {
         let mut state = reg_in[bi];
         for instr in &mut block.instrs {
             state.issue(instr);
@@ -172,8 +173,8 @@ fn dce_flow(shader: &mut Shader) {
     }
 }
 
-fn merge_waits(shader: &mut Shader) {
-    for block in &mut shader.blocks {
+fn merge_waits(f: &mut Function) {
+    for block in &mut f.blocks {
         for i in (1..block.instrs.len()).rev() {
             if !matches!(block.instrs[i].op, Op::Nop(_)) {
                 continue;
@@ -207,6 +208,133 @@ fn merge_waits(shader: &mut Shader) {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BlockHelpersUsage {
+    /// Block does not use helper threads at all
+    None,
+    /// Block uses helper threads and the last instruction using them is at
+    /// index .0
+    LastUseAt(usize),
+    /// Block needs helpers as they'll be used by a successor
+    Successor,
+}
+
+impl BlockHelpersUsage {
+    fn merge(&mut self, successor: Self) {
+        match successor {
+            BlockHelpersUsage::None => (),
+            BlockHelpersUsage::Successor | BlockHelpersUsage::LastUseAt(_) => {
+                *self = BlockHelpersUsage::Successor;
+            }
+        }
+    }
+}
+
+// TODO: we probably want to insert NOP.discard before messaging instructions,
+// so that helper threads don't send useless messages.  This needs serious
+// consideration as to where, doing it before LD_VAR will regress every shader
+// that doesn't need helpers at all.
+fn insert_shader_discards(f: &mut Function) {
+    // First pass: gather last instr using helper lanes
+    let mut last_in = vec![BlockHelpersUsage::None; f.blocks.len()];
+    let mut last_out = Vec::with_capacity(f.blocks.len());
+
+    for block in f.blocks.iter() {
+        let mut helper_usage = BlockHelpersUsage::None;
+        for (ip, instr) in block.instrs.iter().enumerate().rev() {
+            if instr.needs_discarded_threads() {
+                helper_usage = BlockHelpersUsage::LastUseAt(ip);
+                break;
+            }
+        }
+        last_out.push(helper_usage);
+    }
+    debug_assert_eq!(last_in.len(), last_out.len());
+
+    // Propagate helpers usage backwards (we don't really need the second
+    // vector but let's keep it to make BackwardDataflow happy)
+    BackwardDataflow {
+        cfg: &f.blocks,
+        block_in: &mut last_in,
+        block_out: &mut last_out,
+        transfer: |_, _, block_in, block_out| {
+            let changed = *block_in != *block_out;
+            *block_in = *block_out;
+            changed
+        },
+        join: |block_out, succ_block_in| {
+            block_out.merge(*succ_block_in);
+        },
+    }
+    .solve();
+
+    // Walk on all instructions, keeping track of when a discard needs to be
+    // placed, and place it on the first free instruction found.
+    for block_idx in 0..f.blocks.len() {
+        let block_usage = last_out[block_idx];
+        let (start_discard, start_ip) = match block_usage {
+            BlockHelpersUsage::None => {
+                // Shaders that start with no helpers needed get a free starting
+                // discard as a treat
+                let start_unused = block_idx == 0;
+                // If any of the incoming edges kill discards, kill them now
+                let killed_edge = f
+                    .blocks
+                    .pred_indices(block_idx)
+                    .iter()
+                    .any(|x| last_out[*x] == BlockHelpersUsage::Successor);
+
+                (start_unused || killed_edge, 0)
+            }
+            BlockHelpersUsage::LastUseAt(ip) => (true, ip),
+            BlockHelpersUsage::Successor => {
+                // If a successor needs helpers, we can't discard them in this
+                // block.
+                continue;
+            }
+        };
+
+        let mut pending_discard = start_discard;
+        let block = &mut f.blocks[block_idx];
+        // Iterate from the last instruction needing helpers (skip start_ip)
+        for instr in block.instrs.iter_mut().skip(start_ip) {
+            // .discard should not be present before this pass
+            debug_assert!(!instr.flow.get_discard());
+
+            // If this instruction can create new unneeded helpers, push a
+            // pending discard.
+            pending_discard |=
+                matches!(instr.op, Op::Discard(_) | Op::ATest(_));
+            if !pending_discard {
+                continue;
+            }
+
+            // If a pending discard reaches the end of the shader we can just
+            // drop it, the shader is going to end soon regardless
+            let clears_discard = instr.flow.get_end_shader()
+                || matches!(instr.op, Op::BlendCall(_));
+            if clears_discard {
+                pending_discard = false;
+                continue;
+            }
+
+            // We can only insert .discard in the current instruction if the
+            // wait slot is free, so if it has no .wait* nor a .reconverge
+            if instr.flow.wait == 0 && !instr.flow.get_reconverge() {
+                instr.flow.set_discard();
+                pending_discard = false;
+            }
+        }
+
+        // We finished the block with a pending discard, let's blame the next
+        // block.  This doesn't work if the next block is behind us, but that
+        // is fine as that's only for loops and helpers can't be killed in loops
+        if pending_discard {
+            last_out[block_idx] = BlockHelpersUsage::Successor;
+        }
+    }
+}
+
 fn has_nop_end(block: &BasicBlock) -> bool {
     block
         .instrs
@@ -217,8 +345,17 @@ fn has_nop_end(block: &BasicBlock) -> bool {
 /// This pass will remove NOP.end instructions if the .end modifier can
 /// be encoded on the instruction before. Barriers at the end of shaders
 /// are also safe to remove.
-fn merge_end(shader: &mut Shader) {
-    for block in &mut shader.blocks {
+fn merge_end(f: &mut Function) {
+    if !f.is_entrypoint {
+        if cfg!(debug_assertions) {
+            for block in &f.blocks {
+                debug_assert!(!has_nop_end(block));
+            }
+        }
+        return;
+    }
+
+    for block in &mut f.blocks {
         if !has_nop_end(block) || block.instrs.len() == 0 {
             continue;
         }
@@ -246,15 +383,27 @@ fn merge_end(shader: &mut Shader) {
     }
 }
 
-impl Shader<'_> {
+impl Function {
     /// This pass optimizes and merges flow wait bits.
     ///
     /// 1. Performs data-flow analysis to remove waits on already waited slots
     /// 2. Merges NOP waits into previous instructions where possible
     /// 3. Merges NOP.end with the previous instructions
-    pub fn opt_flow(&mut self) {
-        dce_flow(self);
+    /// 4. Insert .discard where helper threads aren't needed
+    pub fn opt_flow(&mut self, shader_info: &ShaderInfo) {
+        dce_flow(self, shader_info);
         merge_waits(self);
         merge_end(self);
+        if shader_info.stage == ShaderStage::Fragment {
+            insert_shader_discards(self);
+        }
+    }
+}
+
+impl Shader<'_> {
+    pub fn opt_flow(&mut self) {
+        for f in self.functions.iter_mut() {
+            f.opt_flow(&self.info);
+        }
     }
 }

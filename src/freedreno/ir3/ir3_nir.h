@@ -20,6 +20,7 @@ BEGINC;
 bool ir3_nir_apply_trig_workarounds(nir_shader *shader);
 bool ir3_nir_lower_imul(nir_shader *shader);
 bool ir3_nir_lower_io_offsets(nir_shader *shader, struct ir3_compiler *c);
+bool ir3_nir_lower_fb_read_offset(nir_shader *shader);
 bool ir3_nir_lower_load_sample_pos(nir_shader *shader);
 bool ir3_nir_lower_load_barycentric_at_offset(nir_shader *shader);
 bool ir3_nir_lower_push_consts_to_preamble(nir_shader *nir,
@@ -96,8 +97,7 @@ void ir3_const_alloc_all_reserved_space(struct ir3_const_allocations *const_allo
 
 uint32_t ir3_nir_scan_driver_consts(struct ir3_compiler *compiler,
                                     nir_shader *shader,
-                                    const struct ir3_shader_key *key,
-                                    struct ir3_const_image_dims *image_dims);
+                                    const struct ir3_shader_key *key);
 void ir3_alloc_driver_params(struct ir3_const_allocations *const_alloc,
                              uint32_t *num_driver_params,
                              struct ir3_compiler *compiler,

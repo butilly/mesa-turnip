@@ -61,7 +61,7 @@ libgallium_dri = shared_library(
     driver_kmsro, driver_v3d, driver_vc4, driver_freedreno, driver_etnaviv,
     driver_tegra, driver_i915, driver_svga, driver_virgl,
     driver_panfrost, driver_iris, driver_lima, driver_zink, driver_d3d12,
-    driver_asahi, driver_crocus, driver_rocket, driver_ethosu
+    driver_asahi, driver_crocus, driver_rocket, driver_ethosu, driver_earthqaic
   ],
   install : true,
   name_suffix : libname_suffix,
@@ -75,7 +75,8 @@ if with_gallium_va
               [with_gallium_radeonsi, 'radeonsi'],
               [with_gallium_nouveau, 'nouveau'],
               [with_gallium_virgl, 'virtio_gpu'],
-              [with_gallium_d3d12_video, 'd3d12']]
+              [with_gallium_d3d12_video, 'd3d12'],
+              [with_gallium_zink, 'zink']]
     if d[0]
       name = '@0@_drv_video.@1@'.format(d[1], libname_suffix)
       va_drivers += name

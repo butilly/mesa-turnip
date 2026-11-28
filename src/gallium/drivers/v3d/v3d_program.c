@@ -29,6 +29,7 @@
 #include "util/ralloc.h"
 #include "util/hash_table.h"
 #include "util/u_upload_mgr.h"
+#include "util/u_dual_blend.h"
 #include "tgsi/tgsi_dump.h"
 #include "compiler/nir/nir.h"
 #include "compiler/nir/nir_builder.h"
@@ -458,6 +459,23 @@ struct v3d_cache_key {
         unsigned char blake3[BLAKE3_KEY_LEN];
 };
 
+/* Shaders are suballocated from the state uploader, so one can end exactly
+ * at the end of the upload buffer: leave room for the QPU prefetch.
+ */
+void
+v3d_upload_shader_code(struct v3d_context *v3d,
+                       struct v3d_compiled_shader *shader,
+                       const uint64_t *qpu_insts, uint32_t qpu_size)
+{
+        void *map = NULL;
+
+        u_upload_alloc_ref(v3d->state_uploader, 0,
+                           qpu_size + V3D_QPU_PREFETCH_PAD, 8,
+                           &shader->offset, &shader->resource, &map);
+        if (map)
+                memcpy(map, qpu_insts, qpu_size);
+}
+
 struct v3d_compiled_shader *
 v3d_get_compiled_shader(struct v3d_context *v3d,
                         struct v3d_key *key,
@@ -472,6 +490,9 @@ v3d_get_compiled_shader(struct v3d_context *v3d,
         struct hash_entry *entry = _mesa_hash_table_search(ht, &cache_key);
         if (entry)
                 return entry->data;
+
+        if (key->sampler_buffer_rgb32)
+                perf_debug("Sampling from RGB32 texture buffer");
 
         int variant_id =
                 p_atomic_inc_return(&uncompiled->compiled_variant_count);
@@ -504,8 +525,8 @@ v3d_get_compiled_shader(struct v3d_context *v3d,
                 ralloc_steal(shader, shader->prog_data.base);
 
                 if (shader->qpu_size) {
-                        u_upload_data_ref(v3d->state_uploader, 0, shader->qpu_size, 8,
-                                      qpu_insts, &shader->offset, &shader->resource);
+                        v3d_upload_shader_code(v3d, shader, qpu_insts,
+                                               shader->qpu_size);
                 }
 
 #ifdef ENABLE_SHADER_CACHE
@@ -572,6 +593,11 @@ v3d_setup_shared_key(struct v3d_context *v3d, struct v3d_key *key,
 
                 if (return_size == 32)
                         key->sampler_is_32b |= (1 << i);
+
+                if (sampler->target == PIPE_BUFFER &&
+                    v3d_format_is_rgb32(sampler->format)) {
+                        key->sampler_buffer_rgb32 |= (1 << i);
+                }
         }
 
         key->robust_uniform_access = v3d->robust_buffer;
@@ -663,6 +689,10 @@ v3d_update_compiled_fs(struct v3d_context *v3d, enum mesa_prim prim_mode)
                 !(v3d->active_queries && v3d->current_oq);
 
         key->software_blend = v3d->framebuffer_soft_blend || v3d->blend->use_software;
+        key->force_dual_color_blend =
+                v3d->screen->dual_color_blend_by_location &&
+                v3d->blend->base.rt[0].blend_enable &&
+                util_blend_state_is_dual(&v3d->blend->base, 0);
 
         for (int i = 0; i < v3d->framebuffer.nr_cbufs; i++) {
                 const struct pipe_surface *cbuf = &v3d->framebuffer.cbufs[i];
@@ -978,12 +1008,12 @@ v3d_update_compiled_shaders(struct v3d_context *v3d, enum mesa_prim prim_mode)
 }
 
 void
-v3d_update_compiled_cs(struct v3d_context *v3d)
+v3d_update_compiled_compute(struct v3d_context *v3d)
 {
         struct v3d_key local_key;
         struct v3d_key *key = &local_key;
 
-        if (!(v3d->dirty & (V3D_DIRTY_UNCOMPILED_CS |
+        if (!(v3d->dirty & (V3D_DIRTY_UNCOMPILED_COMPUTE |
                             V3D_DIRTY_COMPTEX))) {
                 return;
         }
@@ -991,13 +1021,11 @@ v3d_update_compiled_cs(struct v3d_context *v3d)
         memset(key, 0, sizeof(*key));
         v3d_setup_shared_key(v3d, key, &v3d->tex[MESA_SHADER_COMPUTE]);
 
-        struct v3d_compiled_shader *cs =
+        v3d->prog.compute =
                 v3d_get_compiled_shader(v3d, key, sizeof(*key),
                                         v3d->prog.bind_compute);
-        if (cs != v3d->prog.compute) {
-                v3d->prog.compute = cs;
-                v3d->dirty |= V3D_DIRTY_COMPILED_CS; /* XXX */
-        }
+
+        v3d->dirty &= ~(V3D_DIRTY_UNCOMPILED_COMPUTE | V3D_DIRTY_COMPTEX);
 }
 
 static inline uint32_t
@@ -1135,7 +1163,7 @@ v3d_compute_state_bind(struct pipe_context *pctx, void *state)
         struct v3d_context *v3d = v3d_context(pctx);
 
         v3d->prog.bind_compute = state;
-        v3d->dirty |= V3D_DIRTY_UNCOMPILED_CS;
+        v3d->dirty |= V3D_DIRTY_UNCOMPILED_COMPUTE;
 }
 
 static void *
@@ -1155,7 +1183,7 @@ v3d_get_compute_state_info(struct pipe_context *pctx,
 
         /* this API requires compiled shaders */
         v3d_compute_state_bind(pctx, cso);
-        v3d_update_compiled_cs(v3d);
+        v3d_update_compiled_compute(v3d);
 
         info->max_threads = V3D_CHANNELS * v3d->prog.compute->prog_data.base->threads;
         info->preferred_simd_size = V3D_CHANNELS;

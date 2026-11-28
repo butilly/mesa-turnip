@@ -1025,17 +1025,22 @@ lp_setup_is_resource_referenced(const struct lp_setup_context *setup,
    }
 
    /* check resources referenced by active scenes */
+   unsigned referenced = LP_UNREFERENCED;
    for (unsigned i = 0; i < setup->num_active_scenes; i++) {
       struct lp_scene *scene = setup->scenes[i];
 
       mtx_lock(&scene->mutex);
       unsigned ref = lp_scene_is_resource_referenced(scene, texture);
       mtx_unlock(&scene->mutex);
-      if (ref)
-         return ref;
+      /*
+       * Note we can't exit early on a match, since we might get a read
+       * (or potentially write) only flag.
+       * Could potentially still exit early when we found both read/write
+       * flags.
+       */
+      referenced |= ref;
    }
-
-   return LP_UNREFERENCED;
+   return referenced;
 }
 
 
@@ -1530,6 +1535,22 @@ lp_setup_end_query(struct lp_setup_context *setup, struct llvmpipe_query *pq)
              * hence no rast task is ever run. So fill in something here instead.
              */
             pq->end[0] = os_time_get_nano();
+         }
+
+         if (pq->type == PIPE_QUERY_TIMESTAMP &&
+             setup->scene->num_timestamp_queries < LP_MAX_SCENE_TIMESTAMP_QUERIES) {
+            /*
+             * The timestamp is when all prior rendering is done: let each
+             * rasterizer thread record it once after its last bin (see
+             * rasterize_scene()) rather than reading the clock in every bin,
+             * which also made every bin non-empty. End the scene here so that
+             * no later rendering is included.
+             */
+            struct lp_scene *scene = setup->scene;
+            scene->timestamp_queries[scene->num_timestamp_queries++] = pq;
+            scene->had_queries = true;
+            lp_setup_flush(setup, "timestamp query");
+            return;
          }
 
          if (!lp_scene_bin_everywhere(setup->scene,

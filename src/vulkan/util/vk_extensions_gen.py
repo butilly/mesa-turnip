@@ -25,12 +25,13 @@ COPYRIGHT = """\
 """
 
 import argparse
+from xml.etree import ElementTree
 
 from mako.template import Template
 
 # Mesa-local imports must be declared in meson variable
 # '{file_without_suffix}_depend_files'.
-from vk_extensions import get_all_exts_from_xml, init_exts_from_xml
+from vk_extensions import get_all_exts_from_xml
 
 _TEMPLATE_H = Template(COPYRIGHT + """
 
@@ -83,13 +84,13 @@ _TEMPLATE_C = Template(COPYRIGHT + """
 
 const VkExtensionProperties vk_instance_extensions[VK_INSTANCE_EXTENSION_COUNT] = {
 %for ext in instance_extensions:
-   {"${ext.name}", ${ext.ext_version}},
+   {"${ext.name}", ${ext.version}},
 %endfor
 };
 
 const VkExtensionProperties vk_device_extensions[VK_DEVICE_EXTENSION_COUNT] = {
 %for ext in device_extensions:
-   {"${ext.name}", ${ext.ext_version}},
+   {"${ext.name}", ${ext.version}},
 %endfor
 };
 
@@ -109,9 +110,12 @@ const struct vk_device_extension_table vk_android_allowed_device_extensions = {
 """)
 
 def gen_extensions(xml_files, extensions, out_c, out_h):
-    platform_defines = []
+    # KHR_display is missing from the list.
+    platform_defines = ['VK_USE_PLATFORM_DISPLAY_KHR']
     for filename in xml_files:
-        init_exts_from_xml(filename, extensions, platform_defines)
+        xml = ElementTree.parse(filename)
+        for platform in xml.findall('./platforms/platform'):
+            platform_defines.append(platform.attrib['protect'])
 
     for ext in extensions:
         assert ext.type in {'instance', 'device'}
@@ -135,6 +139,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--out-c', help='Output C file.')
     parser.add_argument('--out-h', help='Output H file.')
+    parser.add_argument('--beta', action='store_true',
+                        help='Enable beta extensions.')
     parser.add_argument('--xml',
                         help='Vulkan API XML file.',
                         required=True,
@@ -144,7 +150,7 @@ def main():
 
     extensions = []
     for filename in args.xml_files:
-        extensions += get_all_exts_from_xml(filename)
+        extensions += get_all_exts_from_xml(filename, args.beta)
 
     gen_extensions(args.xml_files, extensions, args.out_c, args.out_h)
 

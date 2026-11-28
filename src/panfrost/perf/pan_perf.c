@@ -20,27 +20,11 @@
 
 int64_t
 pan_perf_counter_read(const struct pan_perf *perf,
-                      const struct mali_perf_counter *counter, uint8_t blk_idx)
+                      const struct mali_perf_counter *counter)
 {
-   return counter->get_value(&perf->session->mali_perf_backend, blk_idx,
+   return counter->get_value(&perf->session->mali_perf_backend,
+                             MALI_PERF_HW_COUNTER_ID_BLOCK_INDEX_ALL,
                              &perf->constants, &perf->dump_info);
-}
-
-int64_t
-pan_perf_counter_read_sum(const struct pan_perf *perf,
-                          const struct mali_perf_counter *counter)
-{
-   /* If counter belongs to shader core, sum values for all cores. */
-   uint8_t blk_cnt =
-      mali_perf_block_count(counter->block, &perf->constants);
-   int64_t ret = 0;
-
-   for (uint8_t blk_idx = 0; blk_idx < blk_cnt; blk_idx++) {
-      ret += pan_perf_counter_read(perf, counter, blk_idx);
-      assert(ret >= 0 && "counter sum should not overflow");
-   }
-
-   return ret;
 }
 
 void
@@ -81,12 +65,13 @@ pan_perf_create(int fd)
 
    struct pan_kmod_dev_props props = perf->dev->props;
 
-   perf->constants.ext_bus_byte_size = pan_query_bus_width(&props);
+   perf->constants.ext_bus_byte_size = pan_query_bus_width(&props) / 8;
    perf->constants.l2_cache_count = pan_query_l2_slices(&props);
    perf->constants.shader_core_count = pan_query_core_count(&props);
 
    const struct pan_model *model =
-      pan_get_model(props.gpu_id, props.gpu_variant);
+      pan_get_model(props.gpu_id, props.gpu_variant,
+                    perf->constants.shader_core_count, props.gpu_features);
    if (model == NULL) {
       mesa_loge("GPU not supported");
       goto err_destroy_perf;

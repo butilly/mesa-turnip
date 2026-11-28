@@ -87,6 +87,12 @@ struct kk_per_draw_data {
 
    uint64_t base_vertex_addr;
    uint64_t base_instance_addr;
+
+   /* Address of geometry param buffer if a GS is used, else 0 */
+   uint64_t geometry_params;
+
+   /* Whether the last vertex of a primitive is its provoking vertex */
+   uint32_t provoking_last;
 };
 
 struct kk_attachment {
@@ -181,6 +187,13 @@ struct kk_graphics_state {
       enum mesa_prim prim;
    } tess;
 
+   /* Rasterization draw of the GS output */
+   struct {
+      struct kk_addr_range index;
+      uint32_t index_count;
+      uint32_t instance_count;
+   } gs;
+
    /* Needed by vk_command_buffer::dynamic_graphics_state */
    struct vk_vertex_input_state _dynamic_vi;
    struct vk_sample_locations_state _dynamic_sl;
@@ -266,6 +279,15 @@ struct kk_cmd_buffer {
    /* Metal command buffers are single-shot: a resubmission must re-record
     * by replaying the enqueued commands (see rerecord_cmd_buffer). */
    bool submitted;
+
+   struct {
+      struct {
+         enum mtl_stages before;
+         enum mtl_stages after;
+      } pending;
+      enum mtl_stages needs_consumer_barrier[10];
+      enum mtl_stages chained_stages[10];
+   } barrier;
 };
 
 VK_DEFINE_HANDLE_CASTS(kk_cmd_buffer, vk.base, VkCommandBuffer,
@@ -305,6 +327,56 @@ mtl_compute_encoder *cs_get_compute(struct kk_cmd_buffer *cmd);
 void cs_end(struct kk_cmd_buffer *cmd);
 void kk_cmd_bind_root_to_argument_table(struct kk_cmd_buffer *cmd,
                                         uint64_t addr);
+
+/**
+ * Emits a simple pipeline barrier with Metal stage flags
+ * It takes care of Metal barrier types and works both with or without an active
+ * compute encoder. It must not be called with an active render encoder (inside
+ * a render pass). It also does not follow the rules for Vulkan execution
+ * dependency chains.
+ */
+void kk_cmd_barrier(struct kk_cmd_buffer *cmd, enum mtl_stages after_stages,
+                    enum mtl_stages before_stages);
+
+/**
+ * Turns a single MTLStage into an index.
+ */
+static inline uint
+mtl_stage_to_index(enum mtl_stages stage)
+{
+   assert(__builtin_popcount(stage) == 1u);
+   uint index = ffs(stage) - 1u;
+   /* The MTLStage bit mask has a large gap. MTL_STAGE_RESOURCE_STATE is bit 27
+    * and there are no entries for bits 5-26. So subtract those 21 bits. */
+   if (index >= 26u)
+      index -= 21;
+   return index;
+}
+
+/**
+ * There has been work for the given Metal stage.
+ * Clear the mask of stages we'd otherwise have to wait for in the next barrier.
+ */
+static inline void
+kk_cmd_barrier_chain_clear_stage(struct kk_cmd_buffer *cmd,
+                                 enum mtl_stages stage)
+{
+   /* We have seen work for the given stage.
+    * Clear the mask of stages which we'd have to wait for otherwise. */
+   uint index = mtl_stage_to_index(stage);
+   cmd->barrier.chained_stages[index] = 0u;
+}
+
+/**
+ * Add `after_stages` to the mask of stages a future barrier, that waits for
+ * `before_stages` will also need to wait for.
+ * Also returns the mask of additional stages the current barrier
+ * (`after_stages` -> `before_stages`) also needs to wait for.
+ */
+enum mtl_stages
+kk_cmd_add_chained_barrier_stages(struct kk_cmd_buffer *cmd,
+                                  enum mtl_stages after_stages,
+                                  enum mtl_stages before_stages);
 
 static void
 kk_cmd_buffer_dirty_all_gfx(struct kk_cmd_buffer *cmd)
@@ -352,6 +424,8 @@ bool kk_attachment_do_renderpass_resolve(const struct kk_attachment *attachment,
 enum kk_grid_mode {
    KK_GRID_DIRECT = 0u,
    KK_GRID_INDIRECT,
+   /* Thread counts, then threadgroup size, like poly's grids */
+   KK_GRID_INDIRECT_LOCAL,
 };
 struct kk_grid {
    enum kk_grid_mode mode;
@@ -391,10 +465,19 @@ kk_grid_indirect(uint64_t addr)
    };
 }
 
+static struct kk_grid
+kk_grid_indirect_local(uint64_t addr)
+{
+   return (struct kk_grid){
+      .mode = KK_GRID_INDIRECT_LOCAL,
+      .addr = addr,
+   };
+}
+
 static bool
 kk_grid_is_indirect(struct kk_grid grid)
 {
-   return grid.mode == KK_GRID_INDIRECT;
+   return grid.mode != KK_GRID_DIRECT;
 }
 
 void kk_dispatch_precomp(struct kk_cmd_buffer *cmd, struct kk_grid grid,

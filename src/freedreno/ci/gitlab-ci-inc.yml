@@ -29,9 +29,6 @@
         - src/freedreno/ci/$GPU_VERSION-slow-skips.txt
         - src/freedreno/ci/$PIGLIT_TRACES_FILE
         - src/freedreno/ci/$REPLAY_CONFIG
-        - src/freedreno/ci/$GPU_VERSION-vkd3d-fails.txt
-        - src/freedreno/ci/$GPU_VERSION-vkd3d-flakes.txt
-        - src/freedreno/ci/$GPU_VERSION-vkd3d-skips.txt
         - src/freedreno/common/**/*
         - src/freedreno/drm/**/*
         - src/freedreno/fdl/**/*
@@ -400,7 +397,7 @@
     RUNNER_TAG: mesa-ci-x86-64-lava-qcom-rb1
     VISIBILITY_GROUP: "mesa-ci"
     LAVA_FIRMWARE: qcom-lava
-    FLASHER_BASE_PATH: s.lava.infra.foundries.io
+    FLASHER_BASE_PATH: qli-prod-artifacts.qualcomm.com/qli-prd-foundri-lava-gh-artifacts/health-check
     FLASHER_IMAGE: rb1/rb1-image-fastboot.tar.gz
     DRIVER_NAME: freedreno-a6xx
     VK_DRIVER: freedreno
@@ -446,6 +443,7 @@
     GPU_VERSION: freedreno-a750
     DRIVER_NAME: freedreno-a6xx
     VK_DRIVER: freedreno
+    FLAKES_CHANNEL: "#freedreno-ci"
 
 
 # 6 devices (2025-09-28)

@@ -6,8 +6,16 @@
 
 #include <vulkan/vulkan.h>
 
+#include <atomic>
+#include <mutex>
+#include <optional>
+#include <unordered_map>
 #include <unordered_set>
+#include <variant>
 #include <vector>
+
+#include "gfxstream_vk_private.h"
+#include "util/simple_mtx.h"
 
 namespace gfxstream {
 namespace vk {
@@ -17,28 +25,53 @@ enum DescriptorWriteType {
     ImageInfo = 1,
     BufferInfo = 2,
     BufferView = 3,
-    InlineUniformBlock = 4,
-    AccelerationStructure = 5,
+    AccelerationStructure = 4,
 };
 
-struct DescriptorWrite {
-    DescriptorWriteType type;
-    VkDescriptorType descriptorType;
-
-    uint32_t dstArrayElement;  // Only used for inlineUniformBlock and accelerationStructure.
+struct DescriptorBindingElementWrite {
+    DescriptorWriteType type = DescriptorWriteType::Empty;
+    bool pendingWrite = false;
+    uint32_t dstArrayElement = 0;  // Only used for accelerationStructure.
 
     union {
         VkDescriptorImageInfo imageInfo;
         VkDescriptorBufferInfo bufferInfo;
         VkBufferView bufferView;
-        VkWriteDescriptorSetInlineUniformBlockEXT inlineUniformBlock;
         VkWriteDescriptorSetAccelerationStructureKHR accelerationStructure;
     };
 
-    std::vector<uint8_t> inlineUniformBlockBuffer;
+    AliveTokenRef alive;
+    AliveTokenRef samplerAlive;
 };
 
-using DescriptorWriteTable = std::vector<std::vector<DescriptorWrite>>;
+struct DescriptorBindingSparseWrite {
+    uint32_t descriptorCount = 0;
+    std::unordered_map<uint32_t, DescriptorBindingElementWrite> elements;
+    std::vector<uint32_t> dirtyIndices;
+};
+
+struct DescriptorInlineUniformBlockWrite {
+    bool pendingWrite = false;
+    std::vector<uint8_t> bytes;
+    VkWriteDescriptorSetInlineUniformBlock writeInfo;
+};
+
+struct DescriptorBindingWrite {
+    VkDescriptorType descriptorType = VK_DESCRIPTOR_TYPE_MAX_ENUM;
+    std::variant<
+        // Unused / unconfigured binding.
+        std::monostate,
+        // The writes of non-inline uniform descriptors.
+        DescriptorBindingSparseWrite,
+        // The writes of inline uniform descriptors.
+        DescriptorInlineUniformBlockWrite>
+        elements;
+};
+
+// All of the writes for a given descriptor.
+struct DescriptorWriteTable {
+    std::vector<DescriptorBindingWrite> bindings;
+};
 
 struct DescriptorWriteArrayRange {
     uint32_t begin;
@@ -48,10 +81,13 @@ struct DescriptorWriteArrayRange {
 using DescriptorWriteDstArrayRangeTable = std::vector<std::vector<DescriptorWriteArrayRange>>;
 
 struct ReifiedDescriptorSet {
+    mutable std::recursive_mutex lock;
     VkDescriptorPool pool;
     VkDescriptorSetLayout setLayout;
     uint64_t poolId;
-    bool allocationPending;
+    std::atomic<bool> allocationPending{false};
+    bool allocatedFromPoolIds = false;
+    std::atomic<bool> hasPendingWrites{false};
 
     // Indexed first by binding number
     DescriptorWriteTable allWrites;
@@ -67,15 +103,21 @@ struct ReifiedDescriptorSet {
 };
 
 struct DescriptorPoolAllocationInfo {
-    VkDevice device;
-    VkDescriptorPoolCreateFlags createFlags;
+    DescriptorPoolAllocationInfo() { simple_mtx_init(&poolLock, mtx_plain); }
+    ~DescriptorPoolAllocationInfo() { simple_mtx_destroy(&poolLock); }
+    DescriptorPoolAllocationInfo(const DescriptorPoolAllocationInfo&) = delete;
+    DescriptorPoolAllocationInfo& operator=(const DescriptorPoolAllocationInfo&) = delete;
+
+    simple_mtx_t poolLock;
+    VkDevice device = VK_NULL_HANDLE;
+    VkDescriptorPoolCreateFlags createFlags = 0;
 
     // TODO: This should be in a single fancy data structure of some kind.
     std::vector<uint64_t> freePoolIds;
-    std::unordered_set<uint32_t> allocedPoolIds;
+    std::unordered_set<uint64_t> allocedPoolIds;
     std::unordered_set<VkDescriptorSet> allocedSets;
-    uint32_t maxSets;
-    uint32_t usedSets;
+    uint32_t maxSets = 0;
+    uint32_t usedSets = 0;
 
     // Fine-grained tracking of descriptor counts in individual pools
     struct DescriptorCountInfo {
@@ -88,7 +130,9 @@ struct DescriptorPoolAllocationInfo {
 
 struct DescriptorSetLayoutInfo {
     std::vector<VkDescriptorSetLayoutBinding> bindings;
-    uint32_t refcount;
+    std::vector<VkDescriptorBindingFlags> bindingFlags;
+    std::optional<VkAllocationCallbacks> destroyAllocator;
+    std::atomic<uint32_t> refcount{0};
 };
 
 void clearReifiedDescriptorSet(ReifiedDescriptorSet* set);
@@ -126,11 +170,15 @@ void doEmulatedDescriptorInlineUniformBlockFromTemplate(VkDescriptorType descTyp
                                                         const void* pData,
                                                         ReifiedDescriptorSet* set);
 
-void applyDescriptorSetAllocation(VkDescriptorPool pool, VkDescriptorSetLayout setLayout);
-void fillDescriptorSetInfoForPool(VkDescriptorPool pool, VkDescriptorSetLayout setLayout,
-                                  VkDescriptorSet set);
+bool hasVariableDescriptorCountLayout(const VkDescriptorSetAllocateInfo* pAllocateInfo);
+VkResult validateDescriptorSetAllocation(const VkDescriptorSetAllocateInfo* pAllocateInfo);
+void applyDescriptorSetAllocation(VkDescriptorPool pool, VkDescriptorSetLayout setLayout,
+                                  const uint32_t* variableDescriptorCount = nullptr);
+bool fillDescriptorSetInfoForPool(VkDescriptorPool pool, VkDescriptorSetLayout setLayout,
+                                  VkDescriptorSet set, bool allocatedFromPoolIds = true,
+                                  const uint32_t* variableDescriptorCount = nullptr);
 VkResult validateAndApplyVirtualDescriptorSetAllocation(
-    const VkDescriptorSetAllocateInfo* pAllocateInfo, VkDescriptorSet* pSets);
+    VkDevice device, const VkDescriptorSetAllocateInfo* pAllocateInfo, VkDescriptorSet* pSets);
 
 // Returns false if set wasn't found in its pool.
 bool removeDescriptorSetFromPool(VkDescriptorSet set, bool usePoolIds);

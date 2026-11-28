@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: MIT
 
 from mako.template import Template
+import re
 import sys
 import argparse
 import yaml
@@ -17,6 +18,7 @@ parser.add_argument('-p', '--import-path', required=True)
 parser.add_argument('--nvtop', action='store_true')
 parser.add_argument('-q', '--quirks', action='store_true',
                     help='List quirks applied to specified GPU (chip-id or name)')
+parser.add_argument('--drm-shim-targets', action='store_true')
 args = parser.parse_args()
 sys.path.insert(0, args.import_path)
 
@@ -41,12 +43,15 @@ class CCUColorCacheFraction(Enum):
 
 quirk_names = {
     "QCTDD06363318": "movs_half",
+    "QCTDD08049535": "numnonposvar_alignment",
     "QCTDD08407086": "cs_lock_unlock",
     "QCTDD08517960": "fs_constlen",
     "QCTDD08901551": "stsc_ss",
     "QCTDD09112208": "cmdbuf_start_cs",
     "QCTDD10204462": "flat_ei",
+    "QCTDD10497382": "rt_workaround",
     "QCTDD10789828": "no_a0_ep",
+    "QCTDD10982019": "double_pvtmem_size",
     "QCTDD11147232": "alias_mova",
     "QCTDD11183148": "alias_pred",
     "QCTDD12766770": "r8g8_fc_alignment",
@@ -73,6 +78,14 @@ class State(object):
         raise Error("invalid info")
 
 s = State()
+
+def id_wildcards(id):
+    wildcards = 0
+    if (id.chip_id & 0xff) == 0xff:
+        wildcards += 1
+    if ((id.chip_id >> 32) & 0xffff) == 0xffff:
+        wildcards += 1
+    return wildcards
 
 def add_gpus(ids, info):
     for id in ids:
@@ -122,7 +135,7 @@ class GPUInfo(Struct):
                  cs_shared_mem_size, num_sp_cores, wave_granularity, fibers_per_sp,
                  highest_bank_bit = 0, ubwc_swizzle = 0x7, macrotile_mode = 0,
                  threadsize_base = 64, max_waves = 16, compute_lb_size = 0,
-                 reg_size_vec4 = 0):
+                 reg_size_vec4 = 0, gmem_size = 0):
         self.chip          = chip.value
         self.props = Struct()
         self.props.reg_size_vec4 = reg_size_vec4
@@ -142,8 +155,88 @@ class GPUInfo(Struct):
         self.highest_bank_bit = highest_bank_bit
         self.ubwc_swizzle = ubwc_swizzle
         self.macrotile_mode = macrotile_mode
+        self.gmem_size = gmem_size
 
         s.gpu_infos.append(self)
+
+
+# a2xx is really two sub-generations, a20x and a22x, but we don't currently
+# capture that in the device-info tables
+class A2xxGPUInfo(GPUInfo):
+    def __init__(self, gmem_size):
+        super().__init__(
+            CHIP.A2XX,
+            gmem_align_w = 32,  gmem_align_h = 32,
+            tile_align_w = 32,  tile_align_h = 32,
+            tile_max_w   = 512,
+            tile_max_h   = ~0, # TODO
+            num_vsc_pipes = 8,
+            cs_shared_mem_size = 0,
+            num_sp_cores = 0, # TODO
+            wave_granularity = 2,
+            fibers_per_sp = 0, # TODO
+            threadsize_base = 8, # TODO: Confirm this
+            gmem_size = gmem_size,
+        )
+
+class A3xxGPUInfo(GPUInfo):
+    def __init__(self, gmem_size):
+        super().__init__(
+            CHIP.A3XX,
+            gmem_align_w = 32,  gmem_align_h = 32,
+            tile_align_w = 32,  tile_align_h = 32,
+            tile_max_w   = 992, # max_bitfield_val(4, 0, 5)
+            tile_max_h   = max_bitfield_val(9, 5, 5),
+            num_vsc_pipes = 8,
+            cs_shared_mem_size = 32 * 1024,
+            num_sp_cores = 0, # TODO
+            wave_granularity = 2,
+            fibers_per_sp = 0, # TODO
+            threadsize_base = 8,
+            reg_size_vec4 = 96, # TODO: confirm this
+            gmem_size = gmem_size,
+        )
+
+class A4xxGPUInfo(GPUInfo):
+    def __init__(self, gmem_size):
+        super().__init__(
+            CHIP.A4XX,
+            gmem_align_w = 32,  gmem_align_h = 32,
+            tile_align_w = 32,  tile_align_h = 32,
+            tile_max_w   = 1024, # max_bitfield_val(4, 0, 5)
+            tile_max_h   = max_bitfield_val(9, 5, 5),
+            num_vsc_pipes = 8,
+            cs_shared_mem_size = 32 * 1024,
+            num_sp_cores = 0, # TODO
+            wave_granularity = 2,
+            fibers_per_sp = 0, # TODO
+            threadsize_base = 32, # TODO: Confirm this
+            reg_size_vec4 = 48, # not measured the way a5xx was
+            gmem_size = gmem_size,
+        )
+
+class A5xxGPUInfo(GPUInfo):
+    """The a5xx parts differ in GMEM size, in how many SP cores they
+       have, in the size of their register file and how waves are
+       allocated from it, and in where their SoC interleaves memory."""
+    def __init__(self, gmem_size, num_sp_cores, highest_bank_bit,
+                 reg_size_vec4, wave_granularity):
+        super().__init__(
+            CHIP.A5XX,
+            gmem_align_w = 64,  gmem_align_h = 32,
+            tile_align_w = 64,  tile_align_h = 32,
+            tile_max_w   = 1024, # max_bitfield_val(7, 0, 5)
+            tile_max_h   = 1024, # bins of 2048 rows and up render wrong with hw binning
+            num_vsc_pipes = 16,
+            cs_shared_mem_size = 32 * 1024,
+            wave_granularity = wave_granularity,
+            fibers_per_sp = 64 * 16, # Lowest number that didn't fault on spillall fs-varying-array-mat4-col-row-rd.
+            threadsize_base = 32,
+            reg_size_vec4 = reg_size_vec4,
+            gmem_size = gmem_size,
+            num_sp_cores = num_sp_cores,
+            highest_bank_bit = highest_bank_bit,
+        )
 
 
 class A6xxGPUInfo(GPUInfo):
@@ -156,7 +249,8 @@ class A6xxGPUInfo(GPUInfo):
                  cs_shared_mem_size, wave_granularity, fibers_per_sp,
                  raw_magic_regs = None, highest_bank_bit = 15,
                  ubwc_swizzle = 0x6, macrotile_mode = 1,
-                 threadsize_base = 64, max_waves = 16, num_slices = 0):
+                 threadsize_base = 64, max_waves = 16, num_slices = 0,
+                 gmem_size = 0):
         if chip == CHIP.A6XX:
             compute_lb_size = 0
         else:
@@ -179,7 +273,8 @@ class A6xxGPUInfo(GPUInfo):
                          macrotile_mode = macrotile_mode,
                          threadsize_base    = threadsize_base,
                          max_waves    = max_waves,
-                         compute_lb_size = compute_lb_size)
+                         compute_lb_size = compute_lb_size,
+                         gmem_size = gmem_size)
 
         self.num_ccu = num_ccu
         self.num_slices = num_slices
@@ -322,8 +417,41 @@ def print_quirk_report():
         quirk_report.append(get_quirks(id, info))
     print(yaml.dump(quirk_report))
 
+shim_targets_template = """\
+# Generated by freedreno_devices.py, read by bin/drm-shim.py
+
+TARGETS = {
+%for name, gpu_id in targets.items():
+    "${name}": "${gpu_id}",
+%endfor
+}
+"""
+
+# drm/msm numbers the a306 307: a305c is already revn 306
+shim_target_names = {
+    307: "a306",
+}
+
+def shim_targets():
+    targets = {}
+    for id, info in s.gpus.items():
+        if not info.gmem_size:
+            continue
+        gpu_id = id.gpu_id
+        if not gpu_id:
+            m = re.fullmatch(r"(?:FD|Adreno \(TM\) )(\d+)", id.name)
+            if not m:
+                continue
+            gpu_id = int(m.group(1))
+        targets.setdefault(shim_target_names.get(gpu_id, "a%d" % gpu_id), gpu_id)
+    return dict(sorted(targets.items(), key=lambda target: target[1]))
+
 def main():
-    if args.nvtop:
+    s.gpus = dict(sorted(s.gpus.items(), key=lambda gpu: id_wildcards(gpu[0])))
+
+    if args.drm_shim_targets:
+        print(Template(shim_targets_template).render(targets=shim_targets()))
+    elif args.nvtop:
         print(Template(nvtop_template).render(s=s, unique_props=GPUProps.unique_props))
     elif args.quirks:
         print_quirk_report()

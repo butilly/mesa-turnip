@@ -76,7 +76,7 @@ prepare_tex_descs(struct panvk_image_view *view)
       container_of(view->vk.image, struct panvk_image, vk);
    struct panvk_device *dev = to_panvk_device(view->vk.base.device);
 #if PAN_ARCH >= 9
-   bool has_storage = (view->vk.usage & VK_IMAGE_USAGE_STORAGE_BIT) &&
+   bool has_storage = (view->vk.usage & VK_IMAGE_USAGE_2_STORAGE_BIT_KHR) &&
                       !vk_format_is_compressed(view->vk.format);
 #endif
 
@@ -123,7 +123,8 @@ prepare_tex_descs(struct panvk_image_view *view)
    uint32_t storage_payload_size = 0;
    if (has_storage) {
       /* We'll need a second set of Texture Descriptors for storage use. */
-      storage_payload_size = tex_payload_size * tex_desc_count;
+      assert(tex_desc_count == 1);
+      storage_payload_size = tex_payload_size;
       alloc_info.size += storage_payload_size;
    }
 #endif
@@ -160,15 +161,6 @@ prepare_tex_descs(struct panvk_image_view *view)
 
             GENX(pan_sampled_texture_emit)(&pview, &view->descs.tex[plane],
                                            &ptr);
-#if PAN_ARCH >= 9
-            if (has_storage) {
-               struct pan_image_view spview = panvk_storage_pview(view, &pview);
-               GENX(pan_storage_texture_emit)(
-                  &spview, &view->descs.storage_tex[plane], &storage_ptr);
-               storage_ptr = pan_ptr_offset(storage_ptr, tex_payload_size);
-            }
-#endif
-
             ptr = pan_ptr_offset(ptr, tex_payload_size);
          }
       } else {
@@ -176,7 +168,7 @@ prepare_tex_descs(struct panvk_image_view *view)
 #if PAN_ARCH >= 9
          if (has_storage) {
             struct pan_image_view spview = panvk_storage_pview(view, &pview);
-            GENX(pan_storage_texture_emit)(&spview, &view->descs.storage_tex[0],
+            GENX(pan_storage_texture_emit)(&spview, &view->descs.storage_tex,
                                            &storage_ptr);
          }
 #endif
@@ -307,7 +299,7 @@ create_ms_views(struct panvk_device *dev, struct panvk_image_view *view,
              source_img->vk.format);
       assert(view->vk.format == create_info.format);
       assert(!(vk_image_from_handle(create_info.image)->create_flags &
-               VK_IMAGE_CREATE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT));
+               VK_IMAGE_CREATE_2_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT));
 
       panvk_per_arch(CreateImageView)(panvk_device_to_handle(dev), &create_info,
                                       pAllocator, &view->ms_views[idx]);
@@ -429,11 +421,11 @@ panvk_per_arch(CreateImageView)(VkDevice _device,
    else if (view->vk.aspects == VK_IMAGE_ASPECT_DEPTH_BIT)
       view->pview.format = panvk_image_depth_only_pfmt(image);
 
-   VkImageUsageFlags tex_usage_mask = VK_IMAGE_USAGE_SAMPLED_BIT;
+   VkImageUsageFlags2KHR tex_usage_mask = VK_IMAGE_USAGE_2_SAMPLED_BIT_KHR;
 
 #if PAN_ARCH >= 9
    /* Valhall passes a texture descriptor to LEA_TEX. */
-   tex_usage_mask |= VK_IMAGE_USAGE_STORAGE_BIT;
+   tex_usage_mask |= VK_IMAGE_USAGE_2_STORAGE_BIT_KHR;
 #endif
 
    if (view->vk.usage & tex_usage_mask) {
@@ -443,12 +435,12 @@ panvk_per_arch(CreateImageView)(VkDevice _device,
    }
 
 #if PAN_ARCH < 9
-   if (view->vk.usage & VK_IMAGE_USAGE_STORAGE_BIT)
+   if (view->vk.usage & VK_IMAGE_USAGE_2_STORAGE_BIT_KHR)
       prepare_attr_buf_descs(view);
 #endif
 
    if (view->vk.image->create_flags &
-       VK_IMAGE_CREATE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT)
+       VK_IMAGE_CREATE_2_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT)
       create_ms_views(device, view, pCreateInfo, pAllocator);
 
    *pView = panvk_image_view_to_handle(view);

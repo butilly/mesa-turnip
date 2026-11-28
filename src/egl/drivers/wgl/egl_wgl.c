@@ -52,7 +52,7 @@
 #include <GL/mesa_glinterop.h>
 
 static EGLBoolean
-wgl_match_config(const _EGLConfig *conf, const _EGLConfig *criteria)
+wgl_match_config(const struct _egl_config *conf, const struct _egl_config *criteria)
 {
    if (_eglCompareConfigs(conf, criteria, NULL, EGL_FALSE) != 0)
       return EGL_FALSE;
@@ -64,13 +64,13 @@ wgl_match_config(const _EGLConfig *conf, const _EGLConfig *criteria)
 }
 
 static struct wgl_egl_config *
-wgl_add_config(_EGLDisplay *disp, const struct stw_pixelformat_info *stw_config,
+wgl_add_config(struct _egl_display *disp, const struct stw_pixelformat_info *stw_config,
                int id, EGLint surface_type)
 {
    struct wgl_egl_config *conf;
-   _EGLConfig base;
+   struct _egl_config base;
    unsigned int double_buffer;
-   _EGLConfig *matching_config;
+   struct _egl_config *matching_config;
    EGLint num_configs = 0;
    EGLint config_id;
 
@@ -169,7 +169,7 @@ wgl_add_config(_EGLDisplay *disp, const struct stw_pixelformat_info *stw_config,
 }
 
 static EGLBoolean
-wgl_add_configs(_EGLDisplay *disp)
+wgl_add_configs(struct _egl_display *disp)
 {
    unsigned int config_count = 0;
    unsigned surface_type = EGL_PBUFFER_BIT | EGL_WINDOW_BIT;
@@ -191,20 +191,12 @@ wgl_add_configs(_EGLDisplay *disp)
 }
 
 static void
-wgl_display_destroy(_EGLDisplay *disp)
+wgl_display_destroy(struct _egl_display *disp)
 {
    struct wgl_egl_display *wgl_dpy = wgl_egl_display(disp);
 
    st_screen_destroy(&wgl_dpy->base);
    free(wgl_dpy);
-}
-
-static int
-wgl_egl_st_get_param(struct pipe_frontend_screen *fscreen,
-                     enum st_manager_param param)
-{
-   /* no-op */
-   return 0;
 }
 
 static bool
@@ -220,8 +212,8 @@ static bool
 wgl_validate_egl_image(struct pipe_frontend_screen *fscreen, void *image)
 {
    struct wgl_egl_display *wgl_dpy = (struct wgl_egl_display *)fscreen;
-   _EGLDisplay *disp = _eglLockDisplay(wgl_dpy->parent);
-   _EGLImage *img = _eglLookupImage(image, disp);
+   struct _egl_display *disp = _eglLockDisplay(wgl_dpy->parent);
+   struct _egl_image *img = _eglLookupImage(image, disp);
    _eglUnlockDisplay(disp);
 
    if (img == NULL) {
@@ -233,7 +225,7 @@ wgl_validate_egl_image(struct pipe_frontend_screen *fscreen, void *image)
 }
 
 static EGLBoolean
-wgl_initialize_impl(_EGLDisplay *disp, HDC hdc)
+wgl_initialize_impl(struct _egl_display *disp, HDC hdc)
 {
    struct wgl_egl_display *wgl_dpy;
    const char *err;
@@ -242,7 +234,7 @@ wgl_initialize_impl(_EGLDisplay *disp, HDC hdc)
    if (!wgl_dpy)
       return _eglError(EGL_BAD_ALLOC, "eglInitialize");
 
-   disp->DriverData = (void *)wgl_dpy;
+   disp->DriverDisplay = (void *)wgl_dpy;
    wgl_dpy->parent = disp;
 
    if (!stw_init_screen(hdc)) {
@@ -254,7 +246,6 @@ wgl_initialize_impl(_EGLDisplay *disp, HDC hdc)
    wgl_dpy->screen = stw_dev->screen;
 
    wgl_dpy->base.screen = stw_dev->screen;
-   wgl_dpy->base.get_param = wgl_egl_st_get_param;
    wgl_dpy->base.get_egl_image = wgl_get_egl_image;
    wgl_dpy->base.validate_egl_image = wgl_validate_egl_image;
 
@@ -307,7 +298,7 @@ cleanup:
 }
 
 static EGLBoolean
-wgl_initialize(_EGLDisplay *disp)
+wgl_initialize(struct _egl_display *disp)
 {
    EGLBoolean ret = EGL_FALSE;
    struct wgl_egl_display *wgl_dpy = wgl_egl_display(disp);
@@ -354,7 +345,7 @@ wgl_initialize(_EGLDisplay *disp)
  * Decrement display reference count, and free up display if necessary.
  */
 static void
-wgl_display_release(_EGLDisplay *disp)
+wgl_display_release(struct _egl_display *disp)
 {
    struct wgl_egl_display *wgl_dpy;
 
@@ -378,7 +369,7 @@ wgl_display_release(_EGLDisplay *disp)
  * called many times (without a eglInitialize in between).
  */
 static EGLBoolean
-wgl_terminate(_EGLDisplay *disp)
+wgl_terminate(struct _egl_display *disp)
 {
    /* Release all non-current Context/Surfaces. */
    _eglReleaseDisplayResources(disp);
@@ -391,8 +382,8 @@ wgl_terminate(_EGLDisplay *disp)
 /**
  * Called via eglCreateContext(), drv->CreateContext().
  */
-static _EGLContext *
-wgl_create_context(_EGLDisplay *disp, _EGLConfig *conf, _EGLContext *share_list,
+static struct _egl_context *
+wgl_create_context(struct _egl_display *disp, struct _egl_config *conf, struct _egl_context *share_list,
                    const EGLint *attrib_list)
 {
    struct wgl_egl_context *wgl_ctx;
@@ -476,7 +467,7 @@ cleanup:
  * Called via eglDestroyContext(), drv->DestroyContext().
  */
 static EGLBoolean
-wgl_destroy_context(_EGLDisplay *disp, _EGLContext *ctx)
+wgl_destroy_context(struct _egl_display *disp, struct _egl_context *ctx)
 {
    struct wgl_egl_context *wgl_ctx = wgl_egl_context(ctx);
 
@@ -489,7 +480,7 @@ wgl_destroy_context(_EGLDisplay *disp, _EGLContext *ctx)
 }
 
 static EGLBoolean
-wgl_destroy_surface(_EGLDisplay *disp, _EGLSurface *surf)
+wgl_destroy_surface(struct _egl_display *disp, struct _egl_surface *surf)
 {
    struct wgl_egl_surface *wgl_surf = wgl_egl_surface(surf);
 
@@ -516,15 +507,15 @@ wgl_gl_flush()
  * Called via eglMakeCurrent(), drv->MakeCurrent().
  */
 static EGLBoolean
-wgl_make_current(_EGLDisplay *disp, _EGLSurface *dsurf, _EGLSurface *rsurf,
-                 _EGLContext *ctx)
+wgl_make_current(struct _egl_display *disp, struct _egl_surface *dsurf, struct _egl_surface *rsurf,
+                 struct _egl_context *ctx)
 {
    struct wgl_egl_display *wgl_dpy = wgl_egl_display(disp);
    struct wgl_egl_context *wgl_ctx = wgl_egl_context(ctx);
-   _EGLDisplay *old_disp = NULL;
-   _EGLContext *old_ctx;
-   _EGLSurface *old_dsurf, *old_rsurf;
-   _EGLSurface *tmp_dsurf, *tmp_rsurf;
+   struct _egl_display *old_disp = NULL;
+   struct _egl_context *old_ctx;
+   struct _egl_surface *old_dsurf, *old_rsurf;
+   struct _egl_surface *tmp_dsurf, *tmp_rsurf;
    struct stw_framebuffer *ddraw, *rdraw;
    struct stw_context *cctx;
    EGLint egl_error = EGL_SUCCESS;
@@ -552,7 +543,7 @@ wgl_make_current(_EGLDisplay *disp, _EGLSurface *dsurf, _EGLSurface *rsurf,
 
    if (cctx || ddraw || rdraw) {
       if (!stw_make_current(ddraw, rdraw, cctx)) {
-         _EGLContext *tmp_ctx;
+         struct _egl_context *tmp_ctx;
 
          /* stw_make_current failed. We cannot tell for sure why, but
           * setting the error to EGL_BAD_MATCH is surely better than leaving it
@@ -620,8 +611,8 @@ wgl_make_current(_EGLDisplay *disp, _EGLSurface *dsurf, _EGLSurface *rsurf,
    return EGL_TRUE;
 }
 
-static _EGLSurface *
-wgl_create_window_surface(_EGLDisplay *disp, _EGLConfig *conf,
+static struct _egl_surface *
+wgl_create_window_surface(struct _egl_display *disp, struct _egl_config *conf,
                           void *native_window, const EGLint *attrib_list)
 {
    struct wgl_egl_display *wgl_dpy = wgl_egl_display(disp);
@@ -653,8 +644,8 @@ wgl_create_window_surface(_EGLDisplay *disp, _EGLConfig *conf,
    return &wgl_surf->base;
 }
 
-static _EGLSurface *
-wgl_create_pbuffer_surface(_EGLDisplay *disp, _EGLConfig *conf,
+static struct _egl_surface *
+wgl_create_pbuffer_surface(struct _egl_display *disp, struct _egl_config *conf,
                            const EGLint *attrib_list)
 {
    struct wgl_egl_display *wgl_dpy = wgl_egl_display(disp);
@@ -687,7 +678,7 @@ wgl_create_pbuffer_surface(_EGLDisplay *disp, _EGLConfig *conf,
 }
 
 static EGLBoolean
-wgl_query_surface(_EGLDisplay *disp, _EGLSurface *surf, EGLint attribute,
+wgl_query_surface(struct _egl_display *disp, struct _egl_surface *surf, EGLint attribute,
                   EGLint *value)
 {
    struct wgl_egl_surface *wgl_surf = wgl_egl_surface(surf);
@@ -708,11 +699,11 @@ wgl_query_surface(_EGLDisplay *disp, _EGLSurface *surf, EGLint attribute,
 }
 
 static EGLBoolean
-wgl_bind_tex_image(_EGLDisplay *disp, _EGLSurface *surf, EGLint buffer)
+wgl_bind_tex_image(struct _egl_display *disp, struct _egl_surface *surf, EGLint buffer)
 {
    struct wgl_egl_surface *wgl_surf = wgl_egl_surface(surf);
 
-   _EGLContext *ctx = _eglGetCurrentContext();
+   struct _egl_context *ctx = _eglGetCurrentContext();
    struct wgl_egl_context *wgl_ctx = wgl_egl_context(ctx);
 
    if (!_eglBindTexImage(disp, surf, buffer))
@@ -763,7 +754,7 @@ wgl_bind_tex_image(_EGLDisplay *disp, _EGLSurface *surf, EGLint buffer)
 }
 
 static EGLBoolean
-wgl_swap_interval(_EGLDisplay *disp, _EGLSurface *surf, EGLint interval)
+wgl_swap_interval(struct _egl_display *disp, struct _egl_surface *surf, EGLint interval)
 {
    struct wgl_egl_surface *wgl_surf = wgl_egl_surface(surf);
    wgl_surf->fb->swap_interval = interval;
@@ -771,7 +762,7 @@ wgl_swap_interval(_EGLDisplay *disp, _EGLSurface *surf, EGLint interval)
 }
 
 static EGLBoolean
-wgl_swap_buffers(_EGLDisplay *disp, _EGLSurface *draw)
+wgl_swap_buffers(struct _egl_display *disp, struct _egl_surface *draw)
 {
    struct wgl_egl_surface *wgl_surf = wgl_egl_surface(draw);
 
@@ -784,7 +775,7 @@ wgl_swap_buffers(_EGLDisplay *disp, _EGLSurface *draw)
 }
 
 static EGLBoolean
-wgl_wait_client(_EGLDisplay *disp, _EGLContext *ctx)
+wgl_wait_client(struct _egl_display *disp, struct _egl_context *ctx)
 {
    struct wgl_egl_context *wgl_ctx = wgl_egl_context(ctx);
    struct pipe_fence_handle *fence = NULL;
@@ -823,15 +814,15 @@ egl_error_from_stw_image_error(enum stw_image_error err)
    }
 }
 
-static _EGLImage *
-wgl_create_image_khr_texture(_EGLDisplay *disp, _EGLContext *ctx,
+static struct _egl_image *
+wgl_create_image_khr_texture(struct _egl_display *disp, struct _egl_context *ctx,
                              EGLenum target, EGLClientBuffer buffer,
                              const EGLint *attr_list)
 {
    struct wgl_egl_context *wgl_ctx = wgl_egl_context(ctx);
    struct wgl_egl_image *wgl_img;
    GLuint texture = (GLuint)(uintptr_t)buffer;
-   _EGLImageAttribs attrs;
+   struct _egl_image_attribs attrs;
    GLuint depth;
    GLenum gl_target;
    enum stw_image_error error;
@@ -887,8 +878,8 @@ wgl_create_image_khr_texture(_EGLDisplay *disp, _EGLContext *ctx,
    return &wgl_img->base;
 }
 
-static _EGLImage *
-wgl_create_image_khr_renderbuffer(_EGLDisplay *disp, _EGLContext *ctx,
+static struct _egl_image *
+wgl_create_image_khr_renderbuffer(struct _egl_display *disp, struct _egl_context *ctx,
                                   EGLClientBuffer buffer,
                                   const EGLint *attr_list)
 {
@@ -923,8 +914,8 @@ wgl_create_image_khr_renderbuffer(_EGLDisplay *disp, _EGLContext *ctx,
    return &wgl_img->base;
 }
 
-static _EGLImage *
-wgl_create_image_khr(_EGLDisplay *disp, _EGLContext *ctx, EGLenum target,
+static struct _egl_image *
+wgl_create_image_khr(struct _egl_display *disp, struct _egl_context *ctx, EGLenum target,
                      EGLClientBuffer buffer, const EGLint *attr_list)
 {
    switch (target) {
@@ -946,7 +937,7 @@ wgl_create_image_khr(_EGLDisplay *disp, _EGLContext *ctx, EGLenum target,
 }
 
 static EGLBoolean
-wgl_destroy_image_khr(_EGLDisplay *disp, _EGLImage *img)
+wgl_destroy_image_khr(struct _egl_display *disp, struct _egl_image *img)
 {
    struct wgl_egl_image *wgl_img = wgl_egl_image(img);
    stw_destroy_image(wgl_img->img);
@@ -954,12 +945,12 @@ wgl_destroy_image_khr(_EGLDisplay *disp, _EGLImage *img)
    return EGL_TRUE;
 }
 
-static _EGLSync *
-wgl_create_sync_khr(_EGLDisplay *disp, EGLenum type,
+static struct _egl_sync *
+wgl_create_sync_khr(struct _egl_display *disp, EGLenum type,
                     const EGLAttrib *attrib_list)
 {
 
-   _EGLContext *ctx = _eglGetCurrentContext();
+   struct _egl_context *ctx = _eglGetCurrentContext();
    struct wgl_egl_context *wgl_ctx = wgl_egl_context(ctx);
    struct wgl_egl_sync *wgl_sync;
 
@@ -1014,7 +1005,7 @@ wgl_egl_unref_sync(struct wgl_egl_display *wgl_dpy,
 }
 
 static EGLBoolean
-wgl_destroy_sync_khr(_EGLDisplay *disp, _EGLSync *sync)
+wgl_destroy_sync_khr(struct _egl_display *disp, struct _egl_sync *sync)
 {
    struct wgl_egl_display *wgl_dpy = wgl_egl_display(disp);
    struct wgl_egl_sync *wgl_sync = wgl_egl_sync(sync);
@@ -1023,10 +1014,10 @@ wgl_destroy_sync_khr(_EGLDisplay *disp, _EGLSync *sync)
 }
 
 static EGLint
-wgl_client_wait_sync_khr(_EGLDisplay *disp, _EGLSync *sync, EGLint flags,
+wgl_client_wait_sync_khr(struct _egl_display *disp, struct _egl_sync *sync, EGLint flags,
                          EGLTime timeout)
 {
-   _EGLContext *ctx = _eglGetCurrentContext();
+   struct _egl_context *ctx = _eglGetCurrentContext();
    struct wgl_egl_display *wgl_dpy = wgl_egl_display(disp);
    struct wgl_egl_context *wgl_ctx = wgl_egl_context(ctx);
    struct wgl_egl_sync *wgl_sync = wgl_egl_sync(sync);
@@ -1077,9 +1068,9 @@ wgl_client_wait_sync_khr(_EGLDisplay *disp, _EGLSync *sync, EGLint flags,
 }
 
 static EGLint
-wgl_wait_sync_khr(_EGLDisplay *disp, _EGLSync *sync)
+wgl_wait_sync_khr(struct _egl_display *disp, struct _egl_sync *sync)
 {
-   _EGLContext *ctx = _eglGetCurrentContext();
+   struct _egl_context *ctx = _eglGetCurrentContext();
    struct wgl_egl_context *wgl_ctx = wgl_egl_context(ctx);
    struct wgl_egl_sync *wgl_sync = wgl_egl_sync(sync);
 
@@ -1094,7 +1085,7 @@ wgl_wait_sync_khr(_EGLDisplay *disp, _EGLSync *sync)
 }
 
 static EGLBoolean
-wgl_signal_sync_khr(_EGLDisplay *disp, _EGLSync *sync, EGLenum mode)
+wgl_signal_sync_khr(struct _egl_display *disp, struct _egl_sync *sync, EGLenum mode)
 {
    struct wgl_egl_sync *wgl_sync = wgl_egl_sync(sync);
 
@@ -1118,19 +1109,19 @@ wgl_signal_sync_khr(_EGLDisplay *disp, _EGLSync *sync, EGLenum mode)
 }
 
 static const char *
-wgl_query_driver_name(_EGLDisplay *disp)
+wgl_query_driver_name(struct _egl_display *disp)
 {
    return stw_get_device()->stw_winsys->get_name();
 }
 
 static char *
-wgl_query_driver_config(_EGLDisplay *disp)
+wgl_query_driver_config(struct _egl_display *disp)
 {
    return stw_get_config_xml();
 }
 
 static int
-wgl_interop_query_device_info(_EGLDisplay *disp, _EGLContext *ctx,
+wgl_interop_query_device_info(struct _egl_display *disp, struct _egl_context *ctx,
                               struct mesa_glinterop_device_info *out)
 {
    struct wgl_egl_context *wgl_ctx = wgl_egl_context(ctx);
@@ -1138,7 +1129,7 @@ wgl_interop_query_device_info(_EGLDisplay *disp, _EGLContext *ctx,
 }
 
 static int
-wgl_interop_export_object(_EGLDisplay *disp, _EGLContext *ctx,
+wgl_interop_export_object(struct _egl_display *disp, struct _egl_context *ctx,
                           struct mesa_glinterop_export_in *in,
                           struct mesa_glinterop_export_out *out)
 {
@@ -1147,7 +1138,7 @@ wgl_interop_export_object(_EGLDisplay *disp, _EGLContext *ctx,
 }
 
 static int
-wgl_interop_flush_objects(_EGLDisplay *disp, _EGLContext *ctx, unsigned count,
+wgl_interop_flush_objects(struct _egl_display *disp, struct _egl_context *ctx, unsigned count,
                           struct mesa_glinterop_export_in *objects,
                           struct mesa_glinterop_flush_out *out)
 {
@@ -1155,7 +1146,7 @@ wgl_interop_flush_objects(_EGLDisplay *disp, _EGLContext *ctx, unsigned count,
    return stw_interop_flush_objects(wgl_ctx->ctx, count, objects, out);
 }
 
-struct _egl_driver _eglDriver = {
+const struct _egl_driver Driver = {
    .Initialize = wgl_initialize,
    .Terminate = wgl_terminate,
    .CreateContext = wgl_create_context,

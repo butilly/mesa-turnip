@@ -28,6 +28,7 @@
 #include "drm-uapi/drm_fourcc.h"
 #include "drm-uapi/drm.h"
 #include <xf86drm.h>
+#include "c11/time.h"
 
 #include "anv_private.h"
 #include "anv_measure.h"
@@ -875,7 +876,7 @@ VkResult anv_CreateDevice(
                                                 true);
       override_initial_entrypoints = false;
    }
-#if DETECT_OS_ANDROID
+#ifdef VK_USE_PLATFORM_ANDROID_KHR
    vk_device_dispatch_table_from_entrypoints(&dispatch_table,
                                              &anv_android_device_entrypoints,
                                              true);
@@ -1063,6 +1064,19 @@ VkResult anv_CreateDevice(
                                    ANV_BO_ALLOC_NO_LOCAL_MEM | ANV_BO_ALLOC_INTERNAL,
                                    0, &device->mem_fence_bo);
       ANV_DMR_BO_ALLOC(&device->vk.base, device->mem_fence_bo, result);
+      if (result != VK_SUCCESS)
+         goto fail_alloc_device_bo;
+   }
+
+   if (intel_device_info_memory_urb_size_per_slice(device->info) &&
+       !intel_device_info_memory_urb_is_allocated_in_stolen(device->info)) {
+      const uint64_t buffer_size = intel_device_info_memory_urb_size_per_slice(device->info) *
+                                   device->info->subslice_total;
+
+      result = anv_device_alloc_bo(device, "urb_memory", buffer_size,
+                                   ANV_BO_ALLOC_INTERNAL, 0,
+                                   &device->urb_memory_bo);
+      ANV_DMR_BO_ALLOC(&device->vk.base, device->urb_memory_bo, result);
       if (result != VK_SUCCESS)
          goto fail_alloc_device_bo;
    }
@@ -1311,6 +1325,10 @@ VkResult anv_CreateDevice(
    BITSET_CLEAR(device->gfx_dirty_state, ANV_GFX_STATE_SO_DECL_LIST);
    /* Only programmed when line stipple is enabled, avoids PIPE_CONTROL */
    BITSET_CLEAR(device->gfx_dirty_state, ANV_GFX_STATE_LINE_STIPPLE);
+   /* Only programmed when detecting a change to non standard locations,
+    * always reprogrammed to default at end of command buffer.
+    */
+   BITSET_CLEAR(device->gfx_dirty_state, ANV_GFX_STATE_SAMPLE_PATTERN);
 
    if (device->info->ver < 11)
       BITSET_CLEAR(device->gfx_dirty_state, ANV_GFX_STATE_VF_SGVS_2);
@@ -1318,8 +1336,6 @@ VkResult anv_CreateDevice(
       BITSET_CLEAR(device->gfx_dirty_state, ANV_GFX_STATE_PRIMITIVE_REPLICATION);
       BITSET_CLEAR(device->gfx_dirty_state, ANV_GFX_STATE_DEPTH_BOUNDS);
    }
-   if (!device->vk.enabled_extensions.EXT_sample_locations)
-      BITSET_CLEAR(device->gfx_dirty_state, ANV_GFX_STATE_SAMPLE_PATTERN);
    if (!device->vk.enabled_extensions.KHR_fragment_shading_rate) {
       BITSET_CLEAR(device->gfx_dirty_state, ANV_GFX_STATE_CPS);
    }
@@ -1382,6 +1398,8 @@ VkResult anv_CreateDevice(
  fail_meta_device:
    vk_meta_device_finish(&device->vk, &device->meta_device);
  fail_utrace:
+   for (uint32_t i = 0; i < device->queue_count; i++)
+      anv_queue_drain(&device->queues[i]);
    anv_device_utrace_finish(device);
  fail_queues:
    for (uint32_t i = 0; i < device->queue_count; i++)
@@ -1428,6 +1446,10 @@ VkResult anv_CreateDevice(
       }
    }
  fail_alloc_device_bo:
+   if (device->urb_memory_bo) {
+      ANV_DMR_BO_FREE(&device->vk.base, device->urb_memory_bo);
+      anv_device_release_bo(device, device->urb_memory_bo);
+   }
    if (device->mem_fence_bo) {
       ANV_DMR_BO_FREE(&device->vk.base, device->mem_fence_bo);
       anv_device_release_bo(device, device->mem_fence_bo);
@@ -1498,6 +1520,9 @@ void anv_DestroyDevice(
    anv_device_finish_trtt(device);
 
    vk_meta_device_finish(&device->vk, &device->meta_device);
+
+   for (uint32_t i = 0; i < device->queue_count; i++)
+      anv_queue_drain(&device->queues[i]);
 
    anv_device_utrace_finish(device);
 
@@ -1574,6 +1599,10 @@ void anv_DestroyDevice(
    }
    ANV_DMR_BO_FREE(&device->vk.base, device->workaround_bo);
    anv_device_release_bo(device, device->workaround_bo);
+   if (device->urb_memory_bo) {
+      ANV_DMR_BO_FREE(&device->vk.base, device->urb_memory_bo);
+      anv_device_release_bo(device, device->urb_memory_bo);
+   }
    if (device->dummy_aux_bo) {
       ANV_DMR_BO_FREE(&device->vk.base, device->dummy_aux_bo);
       anv_device_release_bo(device, device->dummy_aux_bo);
@@ -1673,7 +1702,7 @@ anv_vma_alloc(struct anv_device *device,
    uint64_t addr = 0;
    *out_vma_heap = anv_vma_heap_for_flags(device, alloc_flags);
 
-   if (alloc_flags & ANV_BO_ALLOC_CLIENT_VISIBLE_ADDRESS) {
+   if (alloc_flags & ANV_BO_ALLOC_CAPTURE_REPLAY) {
       assert(*out_vma_heap == &device->vma_hi ||
              *out_vma_heap == &device->vma_dynamic_visible ||
              *out_vma_heap == &device->vma_trtt ||
@@ -1757,8 +1786,8 @@ VkResult anv_AllocateMemory(
    if (aligned_alloc_size > mem_heap->size)
       return vk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
 
-   uint64_t mem_heap_used = p_atomic_read(
-      &pdevice->memory.heaps_budget->used[mem_type->heapIndex]);
+   uint64_t mem_heap_used =
+      vk_memory_budget_used(pdevice->memory.heaps_budget, mem_type->heapIndex);
    if (mem_heap_used + aligned_alloc_size > mem_heap->size)
       return vk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
 
@@ -1830,8 +1859,8 @@ VkResult anv_AllocateMemory(
    if (!mem_heap->is_local_mem)
       alloc_flags |= ANV_BO_ALLOC_NO_LOCAL_MEM;
 
-   if (mem->vk.alloc_flags & VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT)
-      alloc_flags |= ANV_BO_ALLOC_CLIENT_VISIBLE_ADDRESS;
+   if (mem->vk.alloc_flags & VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_CAPTURE_REPLAY_BIT)
+      alloc_flags |= ANV_BO_ALLOC_CAPTURE_REPLAY;
 
    if (mem_type->propertyFlags & VK_MEMORY_PROPERTY_PROTECTED_BIT)
       alloc_flags |= ANV_BO_ALLOC_PROTECTED;
@@ -1907,7 +1936,7 @@ VkResult anv_AllocateMemory(
           * wait for render complete.
           */
          if (pdevice->drirc.debug.external_memory_implicit_sync &&
-             (image->vk.usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT))
+             (image->vk.usage & VK_IMAGE_USAGE_2_COLOR_ATTACHMENT_BIT_KHR))
             alloc_flags |= ANV_BO_ALLOC_IMPLICIT_WRITE;
       }
    }
@@ -2050,11 +2079,9 @@ VkResult anv_AllocateMemory(
    }
 
  success:
-   mem_heap_used = p_atomic_add_return(
-      &pdevice->memory.heaps_budget->used[mem_type->heapIndex], mem->bo->size);
-   if (mem_heap_used > mem_heap->size) {
-      p_atomic_add(&pdevice->memory.heaps_budget->used[mem_type->heapIndex],
-                   -mem->bo->size);
+   if (!vk_memory_budget_try_add(pdevice->memory.heaps_budget,
+                                 mem_type->heapIndex,
+                                 mem->bo->size, mem_heap->size)) {
       anv_device_release_bo(device, mem->bo);
       result = vk_errorf(device, VK_ERROR_OUT_OF_DEVICE_MEMORY,
                          "Out of heap memory");
@@ -2174,8 +2201,8 @@ void anv_FreeMemory(
       anv_UnmapMemory2(_device, &unmap);
    }
 
-   p_atomic_add(&pdevice->memory.heaps_budget->used[mem->type->heapIndex],
-                -mem->bo->size);
+   vk_memory_budget_sub(pdevice->memory.heaps_budget,
+                        mem->type->heapIndex, mem->bo->size);
 
    ANV_DMR_BO_FREE_IMPORT(&mem->vk.base, mem->bo,
                           mem->vk.import_handle_type);

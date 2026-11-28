@@ -110,8 +110,22 @@ lp_build_half_to_float(struct gallivm_state *gallivm,
    LLVMTypeRef ext_int_vec_type = lp_build_vec_type(gallivm, i32_type);
    LLVMValueRef h;
 
-   if (lp_has_fp16() && (src_length == 4 || src_length == 8)) {
+   if (lp_has_fp16() &&
+       (src_length == 4 || src_length == 8 ||
+        (src_length == 16 && util_get_cpu_caps()->has_avx512f))) {
       if (util_get_cpu_caps()->has_f16c && LLVM_VERSION_MAJOR < 11) {
+         if (src_length == 16) {
+            LLVMTypeRef ret_type = lp_build_vec_type(gallivm, f32_type);
+            LLVMValueRef args[] = {
+               LLVMBuildBitCast(builder, src, int_vec_type, ""),
+               LLVMGetUndef(ret_type),
+               LLVMConstInt(LLVMInt16TypeInContext(gallivm->context), 0xffff, 0),
+               lp_build_const_int32(gallivm, 4),
+            };
+            return lp_build_intrinsic(builder, "llvm.x86.avx512.mask.vcvtph2ps.512",
+                                       ret_type, args, ARRAY_SIZE(args), 0);
+         }
+
          const char *intrinsic = NULL;
          if (src_length == 4) {
             src = lp_build_pad_vector(gallivm, src, 8);
@@ -655,14 +669,10 @@ lp_build_conv(struct gallivm_state *gallivm,
                 */
                if (dst_type.sign) {
                   tmp[j] = lp_build_min(&bld, bld.one, src[j]);
-
                }
                else {
-                  if (1) {
-                     tmp[j] = lp_build_min_ext(&bld, bld.one, src[j],
-                                               GALLIVM_NAN_RETURN_NAN_FIRST_NONNAN);
-                  }
-                  tmp[j] = src[j];
+                  tmp[j] = lp_build_min_ext(&bld, bld.one, src[j],
+                                            GALLIVM_NAN_RETURN_NAN_FIRST_NONNAN);
                }
                tmp[j] = LLVMBuildFMul(builder, tmp[j], const_scale, "");
                tmp[j] = lp_build_iround(&bld, tmp[j]);
@@ -788,6 +798,34 @@ lp_build_conv(struct gallivm_state *gallivm,
          dst[0] = lp_build_extract_range(gallivm, dst[0], 0, dst_type.length);
       }
 
+      return;
+   }
+
+   /* avx512 16xf32 -> 16unorm8 */
+   else if (util_get_cpu_caps()->has_avx512f &&
+            src_type.floating && src_type.sign &&
+            !src_type.norm && !src_type.fixed &&
+            src_type.width == 32 && src_type.length == 16 &&
+            !dst_type.floating && !dst_type.fixed && !dst_type.sign &&
+            dst_type.norm && dst_type.width == 8 && dst_type.length == 16 &&
+            num_srcs == num_dsts) {
+      struct lp_build_context bld, int_bld;
+      struct lp_type int_type = lp_int_type(src_type);
+      LLVMTypeRef dst_vec_type = lp_build_vec_type(gallivm, dst_type);
+
+      lp_build_context_init(&bld, gallivm, src_type);
+      lp_build_context_init(&int_bld, gallivm, int_type);
+      LLVMValueRef scale = lp_build_const_vec(gallivm, src_type,
+                                             lp_const_scale(dst_type));
+
+      for (i = 0; i < num_dsts; i++) {
+         LLVMValueRef a = lp_build_min_ext(&bld, bld.one, src[i],
+                                          GALLIVM_NAN_RETURN_NAN_FIRST_NONNAN);
+         a = LLVMBuildFMul(builder, a, scale, "");
+         a = lp_build_iround(&bld, a);
+         a = lp_build_max(&int_bld, a, int_bld.zero);
+         dst[i] = LLVMBuildTrunc(builder, a, dst_vec_type, "");
+      }
       return;
    }
 

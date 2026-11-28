@@ -7,11 +7,11 @@ SPDX-License-Identifier: MIT
 <isa>
 
 <template name="INSTR_ALU">
-	{NAME}{DST_FULL}{SAT}{SKPHP}{UNK}{TYPE}{PMODE}{THREAD}{RMODE}
+	{NAME}{DST_FULL}{SAT}{SKPHP}{UNK}{DENORM}{TYPE}{PMODE}{THREAD}{RMODE}
 </template>
 
 <template name="INSTR_ALU_COND">
-	{NAME}{DST_FULL}{SAT}{COND}{SKPHP}{UNK}{TYPE}{PMODE}{THREAD}{RMODE}
+	{NAME}{DST_FULL}{SAT}{COND}{SKPHP}{UNK}{DENORM}{TYPE}{PMODE}{THREAD}{RMODE}
 </template>
 
 <template name="INSTR_TEX">
@@ -48,6 +48,7 @@ SPDX-License-Identifier: MIT
 	<value val="14" display=".lez"/>
 	<value val="15" display=".lz"/>
 	<value val="22" display=".selmsb"/>
+	<value val="24" display=".hlp"/>
 </enum>
 
 <enum name="#swiz">
@@ -226,7 +227,9 @@ SPDX-License-Identifier: MIT
 
 	<pattern low="35" high="38">0000</pattern>
 	<field name="SKPHP" pos="39" type="bool" display=".skpHp"/>
-	<pattern low="40" high="42">000</pattern>
+	<pattern low="40" high="41">00</pattern>
+
+	<field name="DENORM" pos="42" type="bool" display=".denorm"/>
 
 	<field name="LOW_HALF" pos="109" type="bool"/>
 	<field name="HIGH_HALF" pos="120" type="bool"/>
@@ -415,6 +418,47 @@ SPDX-License-Identifier: MIT
 	<pattern pos="119">0</pattern> <!-- SRC2_ABS -->
 	<pattern low="121" high="123">000</pattern> <!-- SRC2_AMODE -->
 	<pattern low="124" high="126">000</pattern> <!-- SRC2_RGROUP -->
+</bitset>
+
+<bitset name="#instruction-alu-cond-no-src" extends="#instruction-alu">
+	<meta type="alu_cond" has_dest="true" valid_srcs=""/>
+
+	<field name="COND" low="6" high="10" type="#cond"/>
+
+	<display>
+		{INSTR_ALU_COND} {DST:align=18}, void, void, void
+	</display>
+
+	<!-- SRC0 -->
+	<pattern pos="43">0</pattern> <!-- SRC0_USE -->
+	<pattern low="44" high="52">000000000</pattern> <!-- SRC0_REG -->
+	<pattern low="54" high="61">00000000</pattern> <!-- SRC0_SWIZ -->
+	<pattern pos="62">0</pattern> <!-- SRC0_NEG -->
+	<pattern pos="63">0</pattern> <!-- SRC0_ABS -->
+	<pattern low="64" high="66">000</pattern> <!-- SRC0_AMODE -->
+	<pattern low="67" high="69">000</pattern> <!-- SRC0_RGROUP -->
+
+	<!-- SRC1 -->
+	<pattern pos="70">0</pattern> <!-- SRC1_USE -->
+	<pattern low="71" high="79">000000000</pattern> <!-- SRC1_REG -->
+	<pattern low="81" high="88">00000000</pattern> <!-- SRC1_SWIZ -->
+	<pattern pos="89">0</pattern> <!-- SRC1_NEG -->
+	<pattern pos="90">0</pattern> <!-- SRC1_ABS -->
+	<pattern low="91" high="93">000</pattern> <!-- SRC1_AMODE -->
+	<pattern low="96" high="98">000</pattern> <!-- SRC1_RGROUP -->
+
+	<!-- SRC2 -->
+	<pattern pos="99">0</pattern> <!-- SRC2_USE -->
+	<pattern low="100" high="108">000000000</pattern> <!-- SRC2_REG -->
+	<pattern low="110" high="117">00000000</pattern> <!-- SRC2_SWIZ -->
+	<pattern pos="118">0</pattern> <!-- SRC2_NEG -->
+	<pattern pos="119">0</pattern> <!-- SRC2_ABS -->
+	<pattern low="121" high="123">000</pattern> <!-- SRC2_AMODE -->
+	<pattern low="124" high="126">000</pattern> <!-- SRC2_RGROUP -->
+
+	<encode type="struct etna_inst *" case-prefix="ISA_OPC_">
+		<map name="COND">src->cond</map>
+	</encode>
 </bitset>
 
 <bitset name="#instruction-alu-no-dst-cond-src0" extends="#instruction-alu">
@@ -1259,10 +1303,25 @@ SPDX-License-Identifier: MIT
 	<meta has_dest="true" valid_srcs="0|1|2"/>
 	<pattern low="6" high="10">00000</pattern>
 
-	<pattern low="12" high="16">xxxxx</pattern>
-	<pattern pos="17">x</pattern>
-	<pattern low="18" high="22">xxxxx</pattern>
+	<field name="DST_USE" pos="12" type="bool"/>
+	<field name="DST_AMODE" low="13" high="15" type="#reg_addressing_mode"/>
+	<field name="DST_REG" low="16" high="22" type="uint"/>
 	<field name="COMPS" low="23" high="26" type="#wrmask"/>
+
+	<encode type="struct etna_inst *" case-prefix="ISA_OPC_">
+		<map name="DST_REG">src->dst.reg</map>
+		<map name="DST_AMODE">src->dst.amode</map>
+	</encode>
+
+	<override>
+		<expr>
+			{DST_USE} == 1
+		</expr>
+		<display>
+			{INSTR_LOAD_STORE} {:align=18}t{DST_REG}{DST_AMODE}{COMPS}, {SRC0}, {SRC1}, {SRC2}
+		</display>
+	</override>
+
 	<pattern low="27" high="31">xxxxx</pattern>
 	<pattern low="32" high="33">xx</pattern>
 	<field name="PMODE" pos="34" type="bool_inv" display=".pack"/>
@@ -1398,6 +1457,11 @@ SPDX-License-Identifier: MIT
 	<pattern pos="80">0</pattern> <!-- OPCODE_BIT6 -->
 </bitset>
 
+<bitset name="set_no_src" extends="#instruction-alu-cond-no-src" displayname="set">
+	<pattern low="0" high="5">010000</pattern> <!-- OPC -->
+	<pattern pos="80">0</pattern> <!-- OPCODE_BIT6 -->
+</bitset>
+
 <bitset name="exp" extends="#instruction-alu-src2">
 	<pattern low="0" high="5">010001</pattern> <!-- OPC -->
 	<pattern pos="80">0</pattern> <!-- OPCODE_BIT6 -->
@@ -1516,8 +1580,28 @@ SPDX-License-Identifier: MIT
 	<pattern pos="80">0</pattern> <!-- OPCODE_BIT6 -->
 </bitset>
 
-<!-- addlo -->
-<!-- mullo -->
+<bitset name="addlo" extends="#instruction-alu-src0-src2">
+	<doc>
+		The low part of the sum a + b: a + b minus the sum rounded toward
+		zero. The hardware keeps the exact sum only to 48 bits below the
+		exponent of the larger source, so smaller bits are lost. The
+		rounding mode has no effect.
+	</doc>
+	<pattern low="0" high="5">101000</pattern> <!-- OPC -->
+	<pattern pos="80">0</pattern> <!-- OPCODE_BIT6 -->
+</bitset>
+
+<bitset name="mullo" extends="#instruction-alu-src0-src1">
+	<doc>
+		The low half of the exact product a * b. The significands multiply
+		to 48 bits. mul.rtz returns the upper 24 bits and mullo.rtz the
+		lower 24 bits as a float, so the two add up to the exact product.
+		This holds as long as the low half is a normal float. Without RTZ,
+		mullo does not return the low half.
+	</doc>
+	<pattern low="0" high="5">101001</pattern> <!-- OPC -->
+	<pattern pos="80">0</pattern> <!-- OPCODE_BIT6 -->
+</bitset>
 
 <bitset name="barrier" extends="#instruction-alu-no-src">
 	<pattern low="0" high="5">101010</pattern> <!-- OPC -->
@@ -1785,12 +1869,37 @@ SPDX-License-Identifier: MIT
 	<pattern pos="80">1</pattern> <!-- OPCODE_BIT6 -->
 </bitset>
 
+<bitset name="img_load_3d" extends="#instruction-load">
+	<pattern low="0" high="5">110100</pattern> <!-- OPC -->
+	<pattern pos="80">0</pattern> <!-- OPCODE_BIT6 -->
+</bitset>
+
+<bitset name="img_addr" extends="#instruction-load">
+	<pattern low="0" high="5">110111</pattern> <!-- OPC -->
+	<pattern pos="80">0</pattern> <!-- OPCODE_BIT6 -->
+</bitset>
+
+<bitset name="img_addr_3d" extends="#instruction-load">
+	<pattern low="0" high="5">111000</pattern> <!-- OPC -->
+	<pattern pos="80">0</pattern> <!-- OPCODE_BIT6 -->
+</bitset>
+
 <bitset name="img_store" extends="#instruction-store">
 	<pattern low="0" high="5">111010</pattern> <!-- OPC -->
 	<pattern pos="80">1</pattern> <!-- OPCODE_BIT6 -->
 </bitset>
 
+<bitset name="img_store_3d" extends="#instruction-store">
+	<pattern low="0" high="5">110101</pattern> <!-- OPC -->
+	<pattern pos="80">0</pattern> <!-- OPCODE_BIT6 -->
+</bitset>
+
 <bitset name="tg4" extends="#instruction-tex-src0-src1">
+	<pattern low="0" high="5">111101</pattern> <!-- OPC -->
+	<pattern pos="80">1</pattern> <!-- OPCODE_BIT6 -->
+</bitset>
+
+<bitset name="tg4pcf" extends="#instruction-tex-src0-src1-src2">
 	<pattern low="0" high="5">111101</pattern> <!-- OPC -->
 	<pattern pos="80">1</pattern> <!-- OPCODE_BIT6 -->
 </bitset>

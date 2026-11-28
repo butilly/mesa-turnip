@@ -29,15 +29,6 @@
 
 #include "util/perf/cpu_trace.h"
 
-/* Default max size of the bo cache, in MB.
- *
- * This value comes from testing different Vulkan application. Greater values
- * didn't get any further performance benefit. This looks somewhat small, but
- * from testing those applications, the main consumer of the bo cache are
- * the bos used for the CLs, that are usually small.
- */
-#define DEFAULT_MAX_BO_CACHE_SIZE 64
-
 /* Discarded to use a V3D_DEBUG for this, as it would mean adding a run-time
  * check for most of the calls
  */
@@ -146,9 +137,9 @@ bo_free(struct v3dv_device *device,
    }
 
    uint32_t handle = bo->handle;
-   /* Our BO structs are stored in a sparse array in the physical device,
-    * so we don't want to free the BO pointer, instead we want to reset it
-    * to 0, to signal that array entry as being free.
+   /* Our BO structs are stored in a sparse array in the device, so we don't
+    * want to free the BO pointer, instead we want to reset it to 0, to signal
+    * that array entry as being free.
     *
     * We must do the reset before we actually free the BO in the kernel, since
     * otherwise there is a chance the application creates another BO in a
@@ -159,7 +150,7 @@ bo_free(struct v3dv_device *device,
    struct drm_gem_close c;
    memset(&c, 0, sizeof(c));
    c.handle = handle;
-   int ret = v3d_ioctl(device->pdevice->render_fd, DRM_IOCTL_GEM_CLOSE, &c);
+   int ret = v3d_ioctl(device->fd, DRM_IOCTL_GEM_CLOSE, &c);
    if (ret != 0)
       mesa_loge("close object %d: %s\n", handle, strerror(errno));
 
@@ -275,8 +266,7 @@ v3dv_bo_alloc(struct v3dv_device *device,
 
    int ret;
 retry:
-   ret = v3d_ioctl(device->pdevice->render_fd,
-                   DRM_IOCTL_V3D_CREATE_BO, &create);
+   ret = v3d_ioctl(device->fd, DRM_IOCTL_V3D_CREATE_BO, &create);
    if (ret != 0) {
       if (!list_is_empty(&device->bo_cache.time_list)) {
          bo_cache_free_all(device, true);
@@ -296,7 +286,7 @@ retry:
    assert(create.offset % page_align == 0);
    assert((create.offset & 0xffffffff) == create.offset);
 
-   bo = v3dv_device_lookup_bo(device->pdevice, create.handle);
+   bo = v3dv_device_lookup_bo(device, create.handle);
    assert(bo && bo->handle == 0);
 
    /* Private BOs may be recycled from the cache, so bo->handle
@@ -342,15 +332,14 @@ v3dv_bo_map_unsynchronized(struct v3dv_device *device,
    struct drm_v3d_mmap_bo map;
    memset(&map, 0, sizeof(map));
    map.handle = bo->handle;
-   int ret = v3d_ioctl(device->pdevice->render_fd,
-                       DRM_IOCTL_V3D_MMAP_BO, &map);
+   int ret = v3d_ioctl(device->fd, DRM_IOCTL_V3D_MMAP_BO, &map);
    if (ret != 0) {
       mesa_loge("map ioctl failure\n");
       return false;
    }
 
    bo->map = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED,
-                  device->pdevice->render_fd, map.offset);
+                  device->fd, map.offset);
    if (bo->map == MAP_FAILED) {
       mesa_loge("mmap of bo %d (offset 0x%016llx, size %d) failed\n",
                 bo->handle, (long long)map.offset, (uint32_t)bo->size);
@@ -373,8 +362,7 @@ v3dv_bo_wait(struct v3dv_device *device,
       .handle = bo->handle,
       .timeout_ns = timeout_ns,
    };
-   return v3d_ioctl(device->pdevice->render_fd,
-                    DRM_IOCTL_V3D_WAIT_BO, &wait) == 0;
+   return v3d_ioctl(device->fd, DRM_IOCTL_V3D_WAIT_BO, &wait) == 0;
 }
 
 bool
@@ -460,7 +448,7 @@ v3dv_bo_cache_init(struct v3dv_device *device)
 
    const char *max_cache_size_str = os_get_option("V3DV_MAX_BO_CACHE_SIZE");
    if (max_cache_size_str == NULL)
-      device->bo_cache.max_cache_size = DEFAULT_MAX_BO_CACHE_SIZE;
+      device->bo_cache.max_cache_size = V3D_DEFAULT_MAX_BO_CACHE_SIZE;
    else
       device->bo_cache.max_cache_size = atoll(max_cache_size_str);
 

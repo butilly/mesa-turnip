@@ -30,8 +30,9 @@
 #ifndef EGLCONTEXT_INCLUDED
 #define EGLCONTEXT_INCLUDED
 
+#include <EGL/egl.h>
+
 #include "egldisplay.h"
-#include "egltypedefs.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -42,14 +43,14 @@ extern "C" {
  */
 struct _egl_context {
    /* A context is a display resource */
-   _EGLResource Resource;
+   struct _egl_resource Resource;
 
    /* The bound status of the context */
-   _EGLThreadInfo *Binding;
-   _EGLSurface *DrawSurface;
-   _EGLSurface *ReadSurface;
+   struct _egl_thread_info *Binding;
+   struct _egl_surface *DrawSurface;
+   struct _egl_surface *ReadSurface;
 
-   _EGLConfig *Config;
+   struct _egl_config *Config;
 
    EGLint ClientAPI; /**< EGL_OPENGL_ES_API, EGL_OPENGL_API, EGL_OPENVG_API */
    EGLint ClientMajorVersion;
@@ -64,25 +65,25 @@ struct _egl_context {
 };
 
 extern EGLBoolean
-_eglInitContext(_EGLContext *ctx, _EGLDisplay *disp, _EGLConfig *config,
-                _EGLContext *share_list, const EGLint *attrib_list);
+_eglInitContext(struct _egl_context *ctx, struct _egl_display *disp, struct _egl_config *config,
+                struct _egl_context *share_list, const EGLint *attrib_list);
 
 extern EGLBoolean
-_eglQueryContext(_EGLContext *ctx, EGLint attribute, EGLint *value);
+_eglQueryContext(struct _egl_context *ctx, EGLint attribute, EGLint *value);
 
 extern EGLBoolean
-_eglBindContext(_EGLContext *ctx, _EGLSurface *draw, _EGLSurface *read,
-                _EGLContext **old_ctx, _EGLSurface **old_draw,
-                _EGLSurface **old_read);
+_eglBindContext(struct _egl_context *ctx, struct _egl_surface *draw, struct _egl_surface *read,
+                struct _egl_context **old_ctx, struct _egl_surface **old_draw,
+                struct _egl_surface **old_read);
 
-extern _EGLContext *
-_eglBindContextToThread(_EGLContext *ctx, _EGLThreadInfo *t);
+extern struct _egl_context *
+_eglBindContextToThread(struct _egl_context *ctx, struct _egl_thread_info *t);
 
 /**
  * Increment reference count for the context.
  */
-static inline _EGLContext *
-_eglGetContext(_EGLContext *ctx)
+static inline struct _egl_context *
+_eglGetContext(struct _egl_context *ctx)
 {
    if (ctx)
       _eglGetResource(&ctx->Resource);
@@ -93,7 +94,7 @@ _eglGetContext(_EGLContext *ctx)
  * Decrement reference count for the context.
  */
 static inline EGLBoolean
-_eglPutContext(_EGLContext *ctx)
+_eglPutContext(struct _egl_context *ctx)
 {
    return (ctx) ? _eglPutResource(&ctx->Resource) : EGL_FALSE;
 }
@@ -103,7 +104,7 @@ _eglPutContext(_EGLContext *ctx)
  * The handle can be passed to client directly.
  */
 static inline EGLContext
-_eglLinkContext(_EGLContext *ctx)
+_eglLinkContext(struct _egl_context *ctx)
 {
    _eglLinkResource(&ctx->Resource, _EGL_RESOURCE_CONTEXT);
    return (EGLContext)ctx;
@@ -114,7 +115,7 @@ _eglLinkContext(_EGLContext *ctx)
  * Accessing an unlinked context should generate EGL_BAD_CONTEXT error.
  */
 static inline void
-_eglUnlinkContext(_EGLContext *ctx)
+_eglUnlinkContext(struct _egl_context *ctx)
 {
    _eglUnlinkResource(&ctx->Resource, _EGL_RESOURCE_CONTEXT);
 }
@@ -123,10 +124,10 @@ _eglUnlinkContext(_EGLContext *ctx)
  * Lookup a handle to find the linked context.
  * Return NULL if the handle has no corresponding linked context.
  */
-static inline _EGLContext *
-_eglLookupContext(EGLContext context, _EGLDisplay *disp)
+static inline struct _egl_context *
+_eglLookupContext(EGLContext context, struct _egl_display *disp)
 {
-   _EGLContext *ctx = (_EGLContext *)context;
+   struct _egl_context *ctx = (struct _egl_context *)context;
    if (!disp || !_eglCheckResource((void *)ctx, _EGL_RESOURCE_CONTEXT, disp))
       ctx = NULL;
    return ctx;
@@ -136,9 +137,9 @@ _eglLookupContext(EGLContext context, _EGLDisplay *disp)
  * Return the handle of a linked context, or EGL_NO_CONTEXT.
  */
 static inline EGLContext
-_eglGetContextHandle(_EGLContext *ctx)
+_eglGetContextHandle(struct _egl_context *ctx)
 {
-   _EGLResource *res = (_EGLResource *)ctx;
+   struct _egl_resource *res = (struct _egl_resource *)ctx;
    return (res && _eglIsResourceLinked(res)) ? (EGLContext)ctx : EGL_NO_CONTEXT;
 }
 

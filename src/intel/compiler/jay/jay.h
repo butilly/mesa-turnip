@@ -6,22 +6,40 @@
 #pragma once
 
 #include "compiler/brw/brw_compiler.h"
-#include "util/shader_stats.h"
 #include "nir.h"
 
 struct intel_device_info;
 struct nir_shader_compiler_options;
 
-struct jay_shader_bin {
-   const uint32_t *kernel;
-   uint32_t size;
-   struct genisa_stats stats[3];
+struct jay_compile_params {
+   void *mem_ctx;
+
+   nir_shader *nir;
+
+   union brw_any_prog_key *key;
+
+   uint64_t source_hash;
+
+   struct intel_push_layout push_layout;
+
+   struct {
+      /* Whether the compute shader uses BTD stack IDs, delivered in the
+       * thread payload.
+       */
+      bool uses_btd_stack_ids;
+      struct intel_cs_dispatch_params dispatch;
+      struct brw_cs_push_const_info push;
+      bool force_simd32;
+   } cs;
+
+   struct {
+      const struct brw_mue_map *mue_map;
+   } fs;
+
+   debug_archiver *archiver;
+
+   char **error_str;
 };
 
-struct jay_shader_bin *jay_compile(const struct intel_device_info *devinfo,
-                                   void *mem_ctx,
-                                   nir_shader *nir,
-                                   union brw_any_prog_data *prog_data,
-                                   union brw_any_prog_key *key,
-                                   debug_archiver *archiver,
-                                   const struct brw_mue_map *mue_map_for_fs);
+intel_shader_bin *jay_compile(const struct intel_device_info *devinfo,
+                              const struct jay_compile_params *params);

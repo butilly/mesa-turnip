@@ -10,6 +10,7 @@
 #include "panfrost/compiler/pan_compiler.h"
 #include "panfrost/compiler/pan_nir.h"
 #include "util/perf/cpu_trace.h"
+#include <sys/stat.h>
 
 #include "panfrost/model/pan_model.h"
 #include "valhall/valhall.h"
@@ -20,10 +21,9 @@
 #include "../kraid/kraid.h"
 
 static bool
-bi_use_kraid(nir_shader *nir, uint64_t gpu_id)
+bi_use_kraid(nir_shader *nir, unsigned arch)
 {
-   return pan_use_kraid(pan_arch(gpu_id), nir->info.stage,
-                        nir->info.internal);
+   return pan_use_kraid(arch, nir->info.stage, nir->info.internal);
 }
 
 /*
@@ -33,7 +33,7 @@ bi_use_kraid(nir_shader *nir, uint64_t gpu_id)
  */
 struct lower_bit_size_opts {
    bool use_kraid;
-   uint64_t gpu_id;
+   unsigned arch;
 };
 static unsigned
 bi_lower_bit_size(const nir_instr *instr, void *data)
@@ -47,7 +47,7 @@ bi_lower_bit_size(const nir_instr *instr, void *data)
       case nir_op_flog2:
       case nir_op_fpow:
          // Kraid can handle 16-bit fexp/flog/fpow on v12+
-         if (opts->use_kraid && pan_arch(opts->gpu_id) >= 12)
+         if (opts->use_kraid && opts->arch >= 12)
             return 0;
          FALLTHROUGH;
       case nir_op_fsin:
@@ -63,7 +63,7 @@ bi_lower_bit_size(const nir_instr *instr, void *data)
       case nir_op_frexp_sig:
       case nir_op_frexp_exp:
          /* On v11+, FROUND.v2s16 is gone */
-         if (pan_arch(opts->gpu_id) < 11)
+         if (opts->arch < 11)
             return 0;
          return (nir_src_bit_size(alu->src[0].src) == 32) ? 0 : 32;
       case nir_op_iadd:
@@ -75,7 +75,7 @@ bi_lower_bit_size(const nir_instr *instr, void *data)
       case nir_op_ineg:
       case nir_op_iabs:
          /* On v11+, IABS.v4s8, IADD.v4s8 and ISUB.v4s8 are gone */
-         if (pan_arch(opts->gpu_id) < 11)
+         if (opts->arch < 11)
             return 0;
 
          return (nir_src_bit_size(alu->src[0].src) == 8) ? 16 : 0;
@@ -113,7 +113,7 @@ bi_lower_bit_size(const nir_instr *instr, void *data)
 static uint8_t
 bi_vectorize_filter(const nir_instr *instr, const void *data)
 {
-   uint64_t gpu_id = *((uint64_t *)data);
+   unsigned arch = *((unsigned *)data);
 
    if (instr->type == nir_instr_type_phi) {
       unsigned bit_size = nir_instr_as_phi(instr)->def.bit_size;
@@ -156,9 +156,6 @@ bi_vectorize_filter(const nir_instr *instr, const void *data)
    case nir_op_bany_inequal8:
    case nir_op_bany_inequal16:
       return 1;
-   case nir_op_pack_uvec2_to_uint:
-   case nir_op_pack_uvec4_to_uint:
-      return 0;
    case nir_op_fexp2:
    case nir_op_flog2:
    case nir_op_fpow:
@@ -179,11 +176,11 @@ bi_vectorize_filter(const nir_instr *instr, const void *data)
       /* On v10 and earlier we can take 2 32-bit floats as srcs, while on v11+
        * we lost all packed F16 conversions.
        */
-      return (pan_arch(gpu_id) >= 11) ? 1 : 2;
+      return (arch >= 11) ? 1 : 2;
    /* On v11+, we lost packed 16-bit frexp_*  */
    case nir_op_frexp_sig:
    case nir_op_frexp_exp:
-      if (pan_arch(gpu_id) >= 11)
+      if (arch >= 11)
          return 1;
 
       break;
@@ -206,7 +203,7 @@ mem_vectorize_cb(unsigned align_mul, unsigned align_offset, unsigned bit_size,
                  nir_intrinsic_instr *low, nir_intrinsic_instr *high,
                  void *data)
 {
-   uint64_t gpu_id = *(uint64_t *)data;
+   unsigned arch = *(unsigned *)data;
 
    if (hole_size > 0)
       return false;
@@ -224,7 +221,7 @@ mem_vectorize_cb(unsigned align_mul, unsigned align_offset, unsigned bit_size,
    /* Valhall+ (v9+) supports unaligned load/store, so we don't need the
     * combined access to be naturally aligned.
     */
-   if (pan_arch(gpu_id) >= 9)
+   if (arch >= 9)
       return true;
 
    const unsigned combined_align = nir_combined_align(align_mul, align_offset);
@@ -232,7 +229,7 @@ mem_vectorize_cb(unsigned align_mul, unsigned align_offset, unsigned bit_size,
 }
 
 static void
-bi_optimize_loop(nir_shader *nir, uint64_t gpu_id, bool allow_copies)
+bi_optimize_loop(nir_shader *nir, unsigned arch, bool allow_copies)
 {
    bool progress;
 
@@ -258,8 +255,8 @@ bi_optimize_loop(nir_shader *nir, uint64_t gpu_id, bool allow_copies)
       NIR_PASS(progress, nir, nir_opt_dead_write_vars);
       NIR_PASS(progress, nir, nir_opt_combine_stores, nir_var_all);
 
-      NIR_PASS(progress, nir, nir_lower_alu_width, bi_vectorize_filter, &gpu_id);
-      NIR_PASS(progress, nir, nir_opt_vectorize, bi_vectorize_filter, &gpu_id);
+      NIR_PASS(progress, nir, nir_lower_alu_width, bi_vectorize_filter, &arch);
+      NIR_PASS(progress, nir, nir_opt_vectorize, bi_vectorize_filter, &arch);
       NIR_PASS(progress, nir, nir_opt_copy_prop);
       NIR_PASS(progress, nir, nir_opt_dce);
       NIR_PASS(progress, nir, nir_opt_cse);
@@ -292,7 +289,7 @@ bi_optimize_loop(nir_shader *nir, uint64_t gpu_id, bool allow_copies)
       /* XXX: On Bifrost (G52), this cause a failure on
        * "dEQP-VK.graphicsfuzz.spv-composite-phi" and is related to an unknown
        * scheduling issue */
-      if (pan_arch(gpu_id) >= 9)
+      if (arch >= 9)
          NIR_PASS(
             progress, nir, nir_opt_if,
             nir_opt_if_optimize_phi_true_false | nir_opt_if_avoid_64bit_phis);
@@ -309,15 +306,17 @@ bi_optimize_loop(nir_shader *nir, uint64_t gpu_id, bool allow_copies)
 }
 
 static void
-bi_optimize_late(nir_shader *nir, uint64_t gpu_id,
+bi_optimize_late(nir_shader *nir, unsigned arch,
                 const struct pan_shader_info *info)
 {
+   bool use_kraid = bi_use_kraid(nir, arch);
+
    NIR_PASS(_, nir, nir_opt_shrink_stores, false /* shrink_image_store */);
-   bi_optimize_loop(nir, gpu_id, false /* allow_copies */);
+   bi_optimize_loop(nir, arch, false /* allow_copies */);
 
    NIR_PASS(_, nir, nir_opt_shrink_vectors, false);
 
-   NIR_PASS(_, nir, pan_nir_fuse_io_cvt, gpu_id, &info->varyings.formats);
+   NIR_PASS(_, nir, pan_nir_fuse_io_cvt, &info->varyings.formats);
 
    /* nir_lower_pack can generate split operations, execute algebraic again to
     * handle them */
@@ -337,9 +336,12 @@ bi_optimize_late(nir_shader *nir, uint64_t gpu_id,
    /* Algebraic can materialize instructions with a bit_size that we need to lower */
    NIR_PASS(_, nir, nir_lower_bit_size, bi_lower_bit_size,
             &(struct lower_bit_size_opts) {
-               .use_kraid = bi_use_kraid(nir, gpu_id),
-               .gpu_id = gpu_id,
+               .use_kraid = use_kraid,
+               .arch = arch,
             });
+
+   if (use_kraid)
+      NIR_PASS(_, nir, pan_nir_lower_trig);
 
    /* We need to cleanup after each iteration of late algebraic
     * optimizations, since otherwise NIR can produce weird edge cases
@@ -348,7 +350,7 @@ bi_optimize_late(nir_shader *nir, uint64_t gpu_id,
    while (late_algebraic) {
       late_algebraic = false;
       NIR_PASS(late_algebraic, nir, nir_opt_algebraic_late);
-      NIR_PASS(_, nir, nir_lower_alu_width, bi_vectorize_filter, &gpu_id);
+      NIR_PASS(_, nir, nir_lower_alu_width, bi_vectorize_filter, &arch);
       NIR_PASS(_, nir, nir_opt_constant_folding);
       NIR_PASS(_, nir, nir_opt_copy_prop);
       NIR_PASS(_, nir, nir_opt_dce);
@@ -356,7 +358,7 @@ bi_optimize_late(nir_shader *nir, uint64_t gpu_id,
    }
 
    /* This opt currently helps on Bifrost but not Valhall */
-   if (pan_arch(gpu_id) < 9)
+   if (arch < 9)
       NIR_PASS(_, nir, bifrost_nir_opt_boolean_bitwise);
 
    /* Hoist loop-invariant code out of loops */
@@ -364,22 +366,22 @@ bi_optimize_late(nir_shader *nir, uint64_t gpu_id,
    NIR_PASS(_, nir, nir_opt_dce);
 
    NIR_PASS(_, nir, pan_nir_lower_bool_to_bitsize);
-   NIR_PASS(_, nir, nir_lower_alu_width, bi_vectorize_filter, &gpu_id);
-   NIR_PASS(_, nir, nir_opt_vectorize, bi_vectorize_filter, &gpu_id);
+   NIR_PASS(_, nir, nir_lower_alu_width, bi_vectorize_filter, &arch);
+   NIR_PASS(_, nir, nir_opt_vectorize, bi_vectorize_filter, &arch);
 
    /* Prepass to simplify instruction selection */
    bool late_algebraic_progress = true;
    while (late_algebraic_progress) {
       late_algebraic_progress = false;
       NIR_PASS(late_algebraic_progress, nir, bifrost_nir_lower_algebraic_late,
-               pan_arch(gpu_id), bi_use_kraid(nir, gpu_id));
+               arch, use_kraid);
       late_algebraic |= late_algebraic_progress;
    }
 
    while (late_algebraic) {
       late_algebraic = false;
       NIR_PASS(late_algebraic, nir, nir_opt_algebraic_late);
-      NIR_PASS(_, nir, nir_lower_alu_width, bi_vectorize_filter, &gpu_id);
+      NIR_PASS(_, nir, nir_lower_alu_width, bi_vectorize_filter, &arch);
       NIR_PASS(_, nir, nir_opt_constant_folding);
       NIR_PASS(_, nir, nir_opt_copy_prop);
       NIR_PASS(_, nir, nir_opt_dce);
@@ -390,25 +392,10 @@ bi_optimize_late(nir_shader *nir, uint64_t gpu_id,
     * to reduce register pressure. */
    NIR_PASS(_, nir, nir_opt_sink, nir_move_all);
    NIR_PASS(_, nir, nir_opt_move, nir_move_all);
-
-   /* We might lower attribute, varying, and image indirects. Use the
-    * gathered info to skip the extra analysis in the happy path. */
-   bool any_indirects =
-      nir->info.inputs_read_indirectly || nir->info.outputs_read_indirectly ||
-      nir->info.outputs_written_indirectly ||
-      nir->info.patch_inputs_read_indirectly ||
-      nir->info.patch_outputs_read_indirectly ||
-      nir->info.patch_outputs_written_indirectly || nir->info.images_used[0];
-
-   if (any_indirects) {
-      nir_divergence_analysis(nir);
-      NIR_PASS(_, nir, bi_lower_divergent_indirects,
-               pan_subgroup_size(pan_arch(gpu_id)));
-   }
 }
 
 void
-bifrost_preprocess_nir(nir_shader *nir, uint64_t gpu_id)
+bifrost_preprocess_nir(nir_shader *nir, unsigned arch)
 {
    MESA_TRACE_FUNC();
 
@@ -426,7 +413,7 @@ bifrost_preprocess_nir(nir_shader *nir, uint64_t gpu_id)
    if (nir->info.stage == MESA_SHADER_FRAGMENT) {
       NIR_PASS(_, nir, nir_lower_terminate_to_demote);
    } else if (nir->info.stage == MESA_SHADER_VERTEX) {
-      if (pan_arch(gpu_id) <= 7)
+      if (arch <= 7)
          NIR_PASS(_, nir, pan_nir_lower_vertex_id);
    }
 
@@ -437,7 +424,7 @@ bifrost_preprocess_nir(nir_shader *nir, uint64_t gpu_id)
    /* Get rid of any global vars before we lower to scratch. */
    NIR_PASS(_, nir, nir_lower_global_vars_to_local);
 
-   bi_optimize_loop(nir, gpu_id, true /* allow_copies */);
+   bi_optimize_loop(nir, arch, true /* allow_copies */);
 
    NIR_PASS(_, nir, nir_lower_var_copies);
 }
@@ -445,8 +432,7 @@ bifrost_preprocess_nir(nir_shader *nir, uint64_t gpu_id)
 static bool
 bi_lower_subgroups(nir_builder *b, nir_intrinsic_instr *intr, void *data)
 {
-   uint64_t gpu_id = *(uint64_t *)data;
-   unsigned int arch = pan_arch(gpu_id);
+   unsigned int arch = *(unsigned *)data;
 
    b->cursor = nir_before_instr(&intr->instr);
 
@@ -487,14 +473,25 @@ bi_lower_subgroups(nir_builder *b, nir_intrinsic_instr *intr, void *data)
       break;
 
    case nir_intrinsic_load_num_subgroups: {
-      uint32_t subgroup_size = pan_subgroup_size(arch);
-      assert(!b->shader->info.workgroup_size_variable);
-      uint32_t workgroup_size =
-         b->shader->info.workgroup_size[0] *
-         b->shader->info.workgroup_size[1] *
-         b->shader->info.workgroup_size[2];
-      uint32_t num_subgroups = DIV_ROUND_UP(workgroup_size, subgroup_size);
-      val = nir_imm_int(b, num_subgroups);
+      unsigned subgroup_size = pan_subgroup_size(arch);
+      nir_def *local_size = nir_load_workgroup_size(b);
+      /* workgroup_size.x * workgroup_size.y * workgroup_size.z */
+      nir_def *workgroup_size =
+         nir_imul(b,
+            nir_imul(b,
+               nir_channel(b, local_size, 0),
+               nir_channel(b, local_size, 1)),
+            nir_channel(b, local_size, 2));
+      /*
+       * DIV_ROUND_UP(workgroup_size, subgroup_size). subgroup_size is a power
+       * of two, so nir_udiv_imm lowers the division to a right shift. Using the
+       * runtime workgroup size (like load_subgroup_id above) keeps this correct
+       * for kernels with a variable local size.
+       */
+      nir_def *num_subgroups =
+         nir_udiv_imm(b, nir_iadd_imm(b, workgroup_size, subgroup_size - 1),
+                      subgroup_size);
+      val = num_subgroups;
       break;
    }
 
@@ -718,7 +715,7 @@ mem_access_size_align_cb(nir_intrinsic_op intrin, uint8_t bytes,
                          uint32_t align_offset, bool offset_is_const,
                          enum gl_access_qualifier access, const void *cb_data)
 {
-   uint64_t gpu_id = *(uint64_t *)cb_data;
+   unsigned arch = *(unsigned *)cb_data;
    uint32_t align = nir_combined_align(align_mul, align_offset);
    assert(util_is_power_of_two_nonzero(align));
 
@@ -729,10 +726,10 @@ mem_access_size_align_cb(nir_intrinsic_op intrin, uint8_t bytes,
    bytes = MIN2(bytes, 16);
 
    /* TLS memory requires special alignment, handle it separately */
-   if (pan_arch(gpu_id) >= 9 && is_scratch) {
+   if (arch >= 9 && is_scratch) {
       bool is_store = intrin == nir_intrinsic_store_scratch;
 
-      if (pan_arch(gpu_id) >= 11)
+      if (arch >= 11)
          return scratch_access_size_align_v11(bytes, bit_size, align_mul,
                                                 align_offset, is_store);
       else
@@ -747,7 +744,7 @@ mem_access_size_align_cb(nir_intrinsic_op intrin, uint8_t bytes,
     * split them for alignment there.
     */
    unsigned required_align = util_next_power_of_two(bytes);
-   if (pan_arch(gpu_id) >= 9) {
+   if (arch >= 9) {
       required_align = MIN2(align, required_align);
    } else if (align < required_align) {
       bytes = align;
@@ -813,8 +810,7 @@ bifrost_postprocess_nir(nir_shader *nir,
 {
    MESA_TRACE_FUNC();
 
-   const uint64_t gpu_id = inputs->gpu_id;
-   const unsigned gpu_arch = pan_arch(gpu_id);
+   const unsigned gpu_arch = inputs->arch;
 
    if (gpu_arch >= 9)
       NIR_PASS(_, nir, pan_nir_lower_image_64bit);
@@ -843,7 +839,8 @@ bifrost_postprocess_nir(nir_shader *nir,
       NIR_PASS(_, nir, bifrost_nir_lower_load_output);
 
       /* Collect format varyings */
-      pan_varying_collect_formats(&info->varyings.formats, nir, inputs->gpu_id);
+      pan_varying_collect_formats(&info->varyings.formats, nir, gpu_arch,
+                                  false);
 
       NIR_PASS(_, nir, pan_nir_resize_varying_io, &info->varyings.formats,
                inputs->varying_layout ?: &info->varyings.formats);
@@ -851,7 +848,7 @@ bifrost_postprocess_nir(nir_shader *nir,
       NIR_PASS(_, nir, nir_opt_vectorize_io, nir_var_shader_in, false);
 
       if (!inputs->is_blend)
-         NIR_PASS(_, nir, pan_nir_lower_fs_inputs, inputs->gpu_id,
+         NIR_PASS(_, nir, pan_nir_lower_fs_inputs, gpu_arch,
                   inputs->varying_layout, info);
 
       /* Blit shaders may not need to run ATEST, since ATEST is not needed if
@@ -864,8 +861,8 @@ bifrost_postprocess_nir(nir_shader *nir,
          nir->info.outputs_written & (BITFIELD_BIT(FRAG_RESULT_DEPTH) |
                                       BITFIELD_BIT(FRAG_RESULT_STENCIL));
       const bool skip_atest = inputs->is_blit && !emit_zs;
-      NIR_PASS(_, nir, pan_nir_lower_fs_outputs, skip_atest,
-               inputs->fragcolor_nr_cbufs);
+      NIR_PASS(_, nir, pan_nir_lower_fs_outputs, skip_atest, gpu_arch,
+               inputs->model, inputs->fragcolor_nr_cbufs);
    } else if (nir->info.stage == MESA_SHADER_VERTEX) {
       NIR_PASS(_, nir, nir_lower_viewport_transform);
       NIR_PASS(_, nir, nir_lower_point_size, 1.0, 0.0);
@@ -886,17 +883,32 @@ bifrost_postprocess_nir(nir_shader *nir,
       /* Needs to run after lower_vs_atomics as it inserts operations between
        * ssbo_atomic and store_output */
       NIR_PASS(_, nir, pan_nir_lower_noperspective_vs);
-      NIR_PASS(_, nir, pan_nir_lower_vs_inputs, inputs->gpu_id);
-      NIR_PASS(_, nir, pan_nir_lower_vs_outputs, inputs->gpu_id,
+      NIR_PASS(_, nir, pan_nir_lower_vs_inputs);
+      NIR_PASS(_, nir, pan_nir_lower_vs_outputs, gpu_arch,
                inputs->varying_layout, info->vs.idvs,
                &info->vs.needs_extended_fifo);
+   } else if (nir->info.stage == MESA_SHADER_COMPUTE) {
+      /* This may be a SW VS, which still has a varying layout */
+      if (inputs->varying_layout)
+         memcpy(&info->varyings.formats, inputs->varying_layout,
+                sizeof(*inputs->varying_layout));
    }
 
-   NIR_PASS(_, nir, pan_nir_lower_tex, gpu_id);
-   NIR_PASS(_, nir, pan_nir_lower_image, gpu_id);
+   NIR_PASS(_, nir, pan_nir_lower_tex, gpu_arch);
+   NIR_PASS(_, nir, pan_nir_lower_image, gpu_arch);
 
    /* Remove useless movs left behind from lower_io_to_scalar/vectorize_io */
    NIR_PASS(_, nir, nir_opt_copy_prop);
+   NIR_PASS(_, nir, nir_opt_dce);
+
+   if (bi_use_kraid(nir, gpu_arch) && nir->info.stage == MESA_SHADER_FRAGMENT)
+      NIR_PASS(_, nir, pan_nir_opt_var_tex, gpu_arch);
+
+   /* CSE helps expose loads from the same resource. load_store_vectorize
+    * does not vectorize loads if they are not from the same resource
+    * (determined by the SSA value of the source).
+    */
+   NIR_PASS(_, nir, nir_opt_cse);
 
    /* Why aren't we vectorizing nir_var_shader_temp?
     * Basically, the current RA doesn't know rematerialization and is still
@@ -913,7 +925,7 @@ bifrost_postprocess_nir(nir_shader *nir,
                nir_var_mem_shared |
                nir_var_mem_ubo /* | nir_var_mem_temp */,
       .callback = mem_vectorize_cb,
-      .cb_data = (void *)&gpu_id,
+      .cb_data = (void *)&gpu_arch,
       .robust_modes = inputs->robust_modes,
    };
 
@@ -972,14 +984,14 @@ bifrost_postprocess_nir(nir_shader *nir,
                nir_var_shader_temp | nir_var_function_temp |
                nir_var_mem_global | nir_var_mem_shared,
       .callback = mem_access_size_align_cb,
-      .cb_data = (void *) &gpu_id,
+      .cb_data = (void *) &gpu_arch,
    };
    NIR_PASS(_, nir, nir_lower_mem_access_bit_sizes, &mem_size_options);
 
    nir_divergence_analysis(nir);
 
    /* Write the .skip_helpers modifier when possible */
-   if (bi_use_kraid(nir, gpu_id) && nir->info.stage == MESA_SHADER_FRAGMENT) {
+   if (bi_use_kraid(nir, gpu_arch) && nir->info.stage == MESA_SHADER_FRAGMENT) {
       nir_opt_load_skip_helpers_options skip_helper_opts = {
          .no_add_divergence = true,
          .intrinsic_cb = NULL, /* Only tex instrs need .skip (TODO: bifrost) */
@@ -990,7 +1002,7 @@ bifrost_postprocess_nir(nir_shader *nir,
 
    /* The divergent scratch lowering must come after mem access bit lowering */
    NIR_PASS(_, nir, pan_nir_lower_divergent_scratch, gpu_arch);
-   if (bi_use_kraid(nir, gpu_id))
+   if (bi_use_kraid(nir, gpu_arch))
       NIR_PASS(_, nir, pan_nir_lower_mem_to_global);
 
    nir_lower_ssbo_options ssbo_opts = {
@@ -1040,7 +1052,7 @@ bifrost_postprocess_nir(nir_shader *nir,
       NIR_PASS(_, nir, nir_lower_vars_to_ssa);
 
    NIR_PASS(_, nir, nir_shader_intrinsics_pass, bi_lower_subgroups,
-            nir_metadata_control_flow, (void *) &gpu_id);
+            nir_metadata_control_flow, (void *) &gpu_arch);
 
    /* Lower constant idiv before we lower 64-bit integers */
    NIR_PASS(_, nir, nir_opt_idiv_const, 8);
@@ -1060,14 +1072,14 @@ bifrost_postprocess_nir(nir_shader *nir,
    /* Lower bit sizes and vector widths */
    NIR_PASS(_, nir, nir_lower_bit_size, bi_lower_bit_size,
             &(struct lower_bit_size_opts) {
-               .use_kraid = bi_use_kraid(nir, gpu_id),
-               .gpu_id = gpu_id,
+               .use_kraid = bi_use_kraid(nir, gpu_arch),
+               .arch = gpu_arch,
             });
-   NIR_PASS(_, nir, nir_lower_alu_width, bi_vectorize_filter, &gpu_id);
+   NIR_PASS(_, nir, nir_lower_alu_width, bi_vectorize_filter, &gpu_arch);
    NIR_PASS(_, nir, nir_lower_load_const_to_scalar);
-   NIR_PASS(_, nir, nir_lower_phis_to_scalar, bi_vectorize_filter, &gpu_id);
+   NIR_PASS(_, nir, nir_lower_phis_to_scalar, bi_vectorize_filter, &gpu_arch);
 
-   bi_optimize_loop(nir, gpu_id, false /* allow_copies */);
+   bi_optimize_loop(nir, gpu_arch, false /* allow_copies */);
 }
 
 static bool
@@ -1090,6 +1102,30 @@ lower_buf_image_access(nir_builder *b, nir_intrinsic_instr *intr, void *data)
 
    nir_def *res_handle = intr->src[0].ssa;
    nir_def *buf_index = nir_channel(b, intr->src[1].ssa, 0);
+
+   /* On pre-Valhall, LEA_ATTR encodes the register format in the conversion
+    * descriptor; the LOAD_CVT and ST_CVT format fields are not encoded.
+    *
+    * Use F16 for 16-bit float operations, while 32-bit operations use
+    * auto32 to avoid clamping.  Due to SPIR-V limitations, the source type
+    * is not fully reliable: it reports uint32 even for write_imagei,
+    * causing a u32 -> s32 -> u32 roundtrip.
+    */
+   nir_alu_type cvt_type = 32; /* auto32 */
+   if (intr->intrinsic == nir_intrinsic_image_store &&
+       intr->src[3].ssa->bit_size == 16) {
+      ASSERTED nir_alu_type T = nir_intrinsic_src_type(intr);
+
+      assert(nir_alu_type_get_base_type(T) == nir_type_float);
+      cvt_type = nir_type_float16;
+   } else if (intr->intrinsic == nir_intrinsic_image_load &&
+              intr->def.bit_size == 16) {
+      ASSERTED nir_alu_type T = nir_intrinsic_dest_type(intr);
+
+      assert(nir_alu_type_get_base_type(T) == nir_type_float);
+      cvt_type = nir_type_float16;
+   }
+
    nir_def *texel_addr, *icd;
    if (*arch >= 9) {
       texel_addr = nir_lea_buf_pan(b, res_handle, buf_index);
@@ -1097,7 +1133,7 @@ lower_buf_image_access(nir_builder *b, nir_intrinsic_instr *intr, void *data)
    } else {
       nir_def *attr = nir_lea_attr_pan(b, res_handle, buf_index,
                                        nir_imm_int(b, 0),
-                                       .src_type = 32,
+                                       .src_type = cvt_type,
                                        .desc_set = BI_TABLE_ATTRIBUTE_1);
       texel_addr = nir_channels(b, attr, BITFIELD_MASK(2));
       icd = nir_channel(b, attr, 2);
@@ -1116,17 +1152,9 @@ lower_buf_image_access(nir_builder *b, nir_intrinsic_instr *intr, void *data)
       break;
    }
    case nir_intrinsic_image_store: {
-      /* Due to SPIR-V limitations, the source type is not fully reliable: it
-       * reports uint32 even for write_imagei. This causes an incorrect
-       * u32->s32->u32 roundtrip which incurs an unwanted clamping. Use auto32
-       * instead, which will match per the OpenCL spec. Of course this does
-       * not work for 16-bit stores, but those are not available in OpenCL.
-       */
-      ASSERTED nir_alu_type T = nir_intrinsic_src_type(intr);
-      assert(nir_alu_type_get_type_size(T) == 32);
-
       nir_def *value = intr->src[3].ssa;
-      nir_store_global_cvt_pan(b, value, texel_addr, icd, .src_type = 32);
+      nir_store_global_cvt_pan(b, value, texel_addr, icd,
+                               .src_type = cvt_type);
       nir_instr_remove(&intr->instr);
       break;
    }
@@ -1157,7 +1185,7 @@ bi_should_idvs(nir_shader *nir, const struct pan_compile_inputs *inputs)
       return false;
 
    /* Bifrost cannot write gl_PointSize during IDVS */
-   if ((pan_arch(inputs->gpu_id) < 9) &&
+   if ((inputs->arch < 9) &&
        nir->info.outputs_written & VARYING_BIT_PSIZ)
       return false;
 
@@ -1355,12 +1383,33 @@ idvs_variant_suffix(enum bi_idvs_mode idvs)
 }
 
 static void
-bifrost_dump_shader(nir_shader *nir, struct util_dynarray *binary,
-                    enum bi_idvs_mode idvs, uint32_t offset, uint32_t size)
+bifrost_dump_shader(nir_shader *nir, unsigned arch,
+                    struct util_dynarray *binary, enum bi_idvs_mode idvs,
+                    uint32_t offset, uint32_t size)
 {
    const char *dump_dir = os_get_option_secure("BIFROST_MESA_DUMP_DIR");
    if (dump_dir == NULL)
       return;
+
+   struct stat statbuf;
+   if (stat(dump_dir, &statbuf) != 0) {
+      int err = errno;
+      if (err == ENOENT) {
+         fprintf(stderr, "PAN: Directory %s does not exist, creating\n",
+                 dump_dir);
+         if (mkdir(dump_dir, 0755) != 0) {
+            fprintf(stderr, "PAN: Failed to create directory %s\n", dump_dir);
+            return;
+         }
+      } else {
+         fprintf(stderr, "PAN: Error opening %s: %s\n", dump_dir,
+                 strerror(err));
+         return;
+      }
+   } else if (!S_ISDIR(statbuf.st_mode)) {
+      fprintf(stderr, "PAN: %s exists, but is not a directory\n", dump_dir);
+      return;
+   }
 
    bool has_src_blake3 = false;
    for (uint32_t i = 0; i < BLAKE3_OUT_LEN && !has_src_blake3; ++i)
@@ -1399,6 +1448,22 @@ bifrost_dump_shader(nir_shader *nir, struct util_dynarray *binary,
               nir->info.name ?: "<unnamed>", path);
    } else {
       fprintf(stderr, "PAN: Failed to dump %s to %s\n",
+              nir->info.name ?: "<unnamed>", path);
+   }
+
+   if (dump_stream)
+      fclose(dump_stream);
+
+   /* Dump the disassembly */
+   snprintf(path, sizeof(path), "%s/%s.%s%s.s", dump_dir, id,
+            _mesa_shader_stage_to_file_ext(nir->info.stage),
+            idvs_variant_suffix(idvs));
+   dump_stream = fopen(path, "w");
+
+   if (dump_stream) {
+      pan_disassemble_bi(dump_stream, binary->data + offset, size, arch, true);
+   } else {
+      fprintf(stderr, "PAN: Failed to dump %s disassembly to %s\n",
               nir->info.name ?: "<unnamed>", path);
    }
 
@@ -1472,22 +1537,23 @@ bifrost_compile_shader_nir(nir_shader *nir,
 
    bifrost_init_debug_options();
 
+   unsigned arch = inputs->arch;
+
    /* Apply special transformation to IDVS_ALL shaders before late
     * optimization loop. */
    if (nir->info.stage == MESA_SHADER_VERTEX && info->vs.idvs &&
-       (pan_arch(inputs->gpu_id) >= 12)) {
+       (arch >= 12)) {
       bifrost_handle_unified_idvs_shader(nir);
    }
 
-   bi_optimize_late(nir, inputs->gpu_id, info);
+   bi_optimize_late(nir, arch, info);
 
    /* Lower constants to scalar but then immediately fold so we get minimum-
     * width vectors instead of scalars
     */
    NIR_PASS(_, nir, nir_lower_load_const_to_scalar);
    NIR_PASS(_, nir, nir_opt_constant_folding);
-   uint64_t gpu_id = inputs->gpu_id;
-   NIR_PASS(_, nir, nir_lower_phis_to_scalar, bi_vectorize_filter, &gpu_id);
+   NIR_PASS(_, nir, nir_lower_phis_to_scalar, bi_vectorize_filter, &arch);
    NIR_PASS(_, nir, nir_opt_copy_prop);
    NIR_PASS(_, nir, nir_opt_dce);
 
@@ -1497,7 +1563,7 @@ bifrost_compile_shader_nir(nir_shader *nir,
    info->fau.reserved = inputs->fau.reserved;
    info->fau.count = inputs->fau.reserved;
 
-   if (bi_use_kraid(nir, gpu_id)) {
+   if (bi_use_kraid(nir, arch)) {
       if (inputs->fau.pushable_ubos) {
          /* We can't push if there's a driver-reserved range */
          assert(inputs->fau.reserved == 0);
@@ -1507,7 +1573,7 @@ bifrost_compile_shader_nir(nir_shader *nir,
 
       if (nir->info.stage == MESA_SHADER_VERTEX && info->vs.idvs) {
          /* On 5th Gen, IDVS is only in one binary */
-         if (pan_arch(inputs->gpu_id) >= 12)
+         if (arch >= 12)
             kraid_compile_variant(nir, inputs, binary, info, KRAID_IDVS_ALL);
          else {
             kraid_compile_variant(nir, inputs, binary, info, KRAID_IDVS_POSITION);
@@ -1518,7 +1584,7 @@ bifrost_compile_shader_nir(nir_shader *nir,
       }
    } else if (nir->info.stage == MESA_SHADER_VERTEX && info->vs.idvs) {
       /* On 5th Gen, IDVS is only in one binary */
-      if (pan_arch(inputs->gpu_id) >= 12)
+      if (arch >= 12)
          bi_compile_variant(nir, inputs, binary, info, BI_IDVS_ALL);
       else {
          bi_compile_variant(nir, inputs, binary, info, BI_IDVS_POSITION);
@@ -1531,16 +1597,17 @@ bifrost_compile_shader_nir(nir_shader *nir,
    /* Based on the provided info, dump the binary/-ies. */
    if (info->stage == MESA_SHADER_VERTEX && info->vs.idvs) {
       enum bi_idvs_mode mode =
-         pan_arch(inputs->gpu_id) >= 12 ? BI_IDVS_ALL : BI_IDVS_POSITION;
+         arch >= 12 ? BI_IDVS_ALL : BI_IDVS_POSITION;
       uint32_t size_prim = info->vs.secondary_offset ?: binary->size;
-      bifrost_dump_shader(nir, binary, mode, 0, size_prim);
+      bifrost_dump_shader(nir, arch, binary, mode, 0, size_prim);
       if (info->vs.secondary_enable && mode != BI_IDVS_ALL) {
          uint32_t offs = info->vs.secondary_offset;
          uint32_t size_sec = binary->size - offs;
-         bifrost_dump_shader(nir, binary, BI_IDVS_VARYING, offs, size_sec);
+         bifrost_dump_shader(nir, arch, binary, BI_IDVS_VARYING, offs,
+                             size_sec);
       }
    } else {
-      bifrost_dump_shader(nir, binary, BI_IDVS_NONE, 0, binary->size);
+      bifrost_dump_shader(nir, arch, binary, BI_IDVS_NONE, 0, binary->size);
    }
 
    info->ubo_mask &= (1 << nir->info.num_ubos) - 1;

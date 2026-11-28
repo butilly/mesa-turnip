@@ -3,10 +3,10 @@
 
 use crate::ir::*;
 use crate::legalize::LegalizeBuilder;
-use crate::sm120_instr_latencies::SM120Latency;
 use crate::sm70_encode::*;
 use crate::sm75_instr_latencies::SM75Latency;
 use crate::sm80_instr_latencies::SM80Latency;
+use crate::sm120_instr_latencies::SM120Latency;
 pub struct ShaderModel70 {
     sm: u8,
 }
@@ -190,6 +190,16 @@ impl ShaderModel for ShaderModel70 {
                 }
             }
             Op::Nanosleep(_) => 5,
+            Op::TtuOpen(_) => 6,
+            Op::TtuMacroFuse(_) => 4,
+            Op::TtuSt(_) | Op::TtuGo(_) => 1,
+            Op::TtuLd(op) => {
+                if op.close {
+                    2
+                } else {
+                    1
+                }
+            }
             Op::CCtl(_op) => {
                 // CCTL.C needs 8, CCTL.I needs 11
                 11

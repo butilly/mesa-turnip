@@ -77,6 +77,10 @@
 #define _MM_FLUSH_ZERO_MASK 0x8000
 #endif
 
+#ifndef _MM_FROUND_NO_EXC
+#define _MM_FROUND_NO_EXC 0x08
+#endif
+
 #define EXP_POLY_DEGREE 5
 
 #define LOG_POLY_DEGREE 4
@@ -97,6 +101,7 @@ lp_build_min_simple(struct lp_build_context *bld,
    const struct lp_type type = bld->type;
    const char *intrinsic = NULL;
    unsigned intr_size = 0;
+   int sae = 0;
    LLVMValueRef cond;
 
    assert(lp_check_value(type, a));
@@ -114,9 +119,14 @@ lp_build_min_simple(struct lp_build_context *bld,
             intrinsic = "llvm.x86.sse.min.ps";
             intr_size = 128;
          }
-         else {
+         else if (type.length <= 8 || !util_get_cpu_caps()->has_avx512f) {
             intrinsic = "llvm.x86.avx.min.ps.256";
             intr_size = 256;
+         }
+         else {
+            intrinsic = "llvm.x86.avx512.min.ps.512";
+            intr_size = 512;
+            sae = _MM_FROUND_NO_EXC;
          }
       }
       if (type.width == 64 && util_get_cpu_caps()->has_sse2) {
@@ -128,9 +138,13 @@ lp_build_min_simple(struct lp_build_context *bld,
             intrinsic = "llvm.x86.sse2.min.pd";
             intr_size = 128;
          }
-         else {
+         else if (type.length == 4 || !util_get_cpu_caps()->has_avx512f) {
             intrinsic = "llvm.x86.avx.min.pd.256";
             intr_size = 256;
+         } else {
+            intrinsic = "llvm.x86.avx512.min.pd.512";
+            intr_size = 512;
+            sae = _MM_FROUND_NO_EXC;
          }
       }
    }
@@ -175,15 +189,15 @@ lp_build_min_simple(struct lp_build_context *bld,
       if (util_get_cpu_caps()->has_sse && type.floating &&
           nan_behavior == GALLIVM_NAN_RETURN_OTHER) {
          LLVMValueRef isnan, min;
-         min = lp_build_intrinsic_binary_anylength(bld->gallivm, intrinsic,
-                                                   type,
-                                                   intr_size, a, b);
+         min = lp_build_intrinsic_binary_anylength_sae(bld->gallivm, intrinsic,
+                                                       type,
+                                                       intr_size, a, b, sae);
          isnan = lp_build_isnan(bld, b);
          return lp_build_select(bld, isnan, a, min);
       } else {
-         return lp_build_intrinsic_binary_anylength(bld->gallivm, intrinsic,
-                                                    type,
-                                                    intr_size, a, b);
+         return lp_build_intrinsic_binary_anylength_sae(bld->gallivm, intrinsic,
+                                                        type,
+                                                        intr_size, a, b, sae);
       }
    }
 
@@ -250,6 +264,7 @@ lp_build_max_simple(struct lp_build_context *bld,
    const struct lp_type type = bld->type;
    const char *intrinsic = NULL;
    unsigned intr_size = 0;
+   int sae = 0;
    LLVMValueRef cond;
 
    assert(lp_check_value(type, a));
@@ -267,9 +282,14 @@ lp_build_max_simple(struct lp_build_context *bld,
             intrinsic = "llvm.x86.sse.max.ps";
             intr_size = 128;
          }
-         else {
+         else if (type.length <= 8 || !util_get_cpu_caps()->has_avx512f) {
             intrinsic = "llvm.x86.avx.max.ps.256";
             intr_size = 256;
+         }
+         else {
+            intrinsic = "llvm.x86.avx512.max.ps.512";
+            intr_size = 512;
+            sae = _MM_FROUND_NO_EXC;
          }
       }
       if (type.width == 64 && util_get_cpu_caps()->has_sse2) {
@@ -281,9 +301,14 @@ lp_build_max_simple(struct lp_build_context *bld,
             intrinsic = "llvm.x86.sse2.max.pd";
             intr_size = 128;
          }
-         else {
+         else if (type.length == 4 || !util_get_cpu_caps()->has_avx512f) {
             intrinsic = "llvm.x86.avx.max.pd.256";
             intr_size = 256;
+         }
+         else {
+            intrinsic = "llvm.x86.avx512.max.pd.512";
+            intr_size = 512;
+            sae = _MM_FROUND_NO_EXC;
          }
       }
    }
@@ -322,15 +347,15 @@ lp_build_max_simple(struct lp_build_context *bld,
       if (util_get_cpu_caps()->has_sse && type.floating &&
           nan_behavior == GALLIVM_NAN_RETURN_OTHER) {
          LLVMValueRef isnan, max;
-         max = lp_build_intrinsic_binary_anylength(bld->gallivm, intrinsic,
-                                                   type,
-                                                   intr_size, a, b);
+         max = lp_build_intrinsic_binary_anylength_sae(bld->gallivm, intrinsic,
+                                                       type,
+                                                       intr_size, a, b, sae);
          isnan = lp_build_isnan(bld, b);
          return lp_build_select(bld, isnan, a, max);
       } else {
-         return lp_build_intrinsic_binary_anylength(bld->gallivm, intrinsic,
-                                                    type,
-                                                    intr_size, a, b);
+         return lp_build_intrinsic_binary_anylength_sae(bld->gallivm, intrinsic,
+                                                        type,
+                                                        intr_size, a, b, sae);
       }
    }
 
@@ -820,7 +845,7 @@ lp_build_mul_norm(struct gallivm_state *gallivm,
          LLVMBuildICmp(builder, LLVMIntEQ, a, min_value, ""),
          bld.int_vec_type, ""), "");
       b = LLVMBuildAdd(builder, b, LLVMBuildZExt(builder,
-         LLVMBuildICmp(builder, LLVMIntEQ, a, min_value, ""),
+         LLVMBuildICmp(builder, LLVMIntEQ, b, min_value, ""),
          bld.int_vec_type, ""), "");
    }
 
@@ -1662,11 +1687,7 @@ lp_build_int_to_float(struct lp_build_context *bld,
 static bool
 arch_rounding_available(const struct lp_type type)
 {
-   if ((util_get_cpu_caps()->has_sse4_1 &&
-       (type.length == 1 || type.length == 2 ||
-        type.width * type.length == 128)) ||
-       (util_get_cpu_caps()->has_avx && type.width * type.length == 256) ||
-       (util_get_cpu_caps()->has_avx512f && type.width * type.length == 512))
+   if (util_get_cpu_caps()->has_sse4_1)
       return true;
    else if ((util_get_cpu_caps()->has_altivec &&
             (type.width == 32 && type.length == 4)))
@@ -1723,6 +1744,18 @@ lp_build_iround_nearest_sse2(struct lp_build_context *bld,
 
       res = lp_build_intrinsic_unary(builder, intrinsic,
                                      ret_type, arg);
+   }
+   else if (type.width * type.length == 512) {
+      /* can't use unary path as intrinsic needs more args */
+      assert(util_get_cpu_caps()->has_avx512f);
+      LLVMValueRef args[] = {
+         a,
+         LLVMGetUndef(ret_type),
+         LLVMConstInt(LLVMInt16TypeInContext(bld->gallivm->context), 0xffff, 0),
+         LLVMConstInt(i32t, 4, 0),
+      };
+      res = lp_build_intrinsic(builder, "llvm.x86.avx512.mask.cvtps2dq.512",
+                               ret_type, args, ARRAY_SIZE(args), 0);
    }
    else {
       if (type.width* type.length == 128) {
@@ -1920,10 +1953,14 @@ lp_build_round(struct lp_build_context *bld,
       LLVMTypeRef vec_type = bld->vec_type;
 
       /* On altivec/VSX, llvm.nearbyint lowers to vrfin/xvrspic (1 instruction,
-       * round-to-nearest-even) for any vector width. */
-      if (util_get_cpu_caps()->has_altivec) {
+       * round-to-nearest-even) for any vector width. A scalar llvm.nearbyint
+       * is a libcall; only llvm.rint is inline, and only with VSX. */
+      if (util_get_cpu_caps()->has_altivec &&
+          (type.length > 1 || util_get_cpu_caps()->has_vsx)) {
          char intrinsic[64];
-         lp_format_intrinsic(intrinsic, sizeof(intrinsic), "llvm.nearbyint", bld->vec_type);
+         lp_format_intrinsic(intrinsic, sizeof(intrinsic),
+                             type.length > 1 ? "llvm.nearbyint" : "llvm.rint",
+                             bld->vec_type);
          return lp_build_intrinsic_unary(builder, intrinsic, bld->vec_type, a);
       }
 
@@ -2191,7 +2228,8 @@ lp_build_iround(struct lp_build_context *bld,
 
    if ((util_get_cpu_caps()->has_sse2 &&
        ((type.width == 32) && (type.length == 1 || type.length == 4))) ||
-       (util_get_cpu_caps()->has_avx && type.width == 32 && type.length == 8)) {
+       (util_get_cpu_caps()->has_avx && type.width == 32 && type.length == 8) ||
+       (util_get_cpu_caps()->has_avx512f && type.width == 32 && type.length == 16)) {
       return lp_build_iround_nearest_sse2(bld, a);
    }
    if (arch_rounding_available(type)) {
@@ -3587,7 +3625,7 @@ lp_build_fpstate_set_denorms_zero(struct gallivm_state *gallivm,
                              LLVMConstInt(LLVMTypeOf(mxcsr), daz_ftz, 0), "");
       } else {
          mxcsr = LLVMBuildAnd(builder, mxcsr,
-                              LLVMConstInt(LLVMTypeOf(mxcsr), ~daz_ftz, 0), "");
+                              lp_build_const_int_trunc(LLVMTypeOf(mxcsr), ~daz_ftz), "");
       }
 
       LLVMBuildStore(builder, mxcsr, mxcsr_ptr);

@@ -35,13 +35,13 @@ radv_suspend_queries(struct radv_meta_saved_state *state, struct radv_cmd_buffer
    if (cmd_buffer->state.active_occlusion_queries) {
       state->active_occlusion_queries = cmd_buffer->state.active_occlusion_queries;
       cmd_buffer->state.active_occlusion_queries = 0;
-      cmd_buffer->state.dirty |= RADV_CMD_DIRTY_OCCLUSION_QUERY;
+      cmd_buffer->state.dirty |= RADV_CMD_DIRTY(OCCLUSION_QUERY);
    }
 
    /* Primitives generated queries (legacy). */
    if (cmd_buffer->state.active_prims_gen_queries) {
       cmd_buffer->state.streamout.suspended = true;
-      cmd_buffer->state.dirty |= RADV_CMD_DIRTY_STREAMOUT_ENABLE;
+      cmd_buffer->state.dirty |= RADV_CMD_DIRTY(STREAMOUT_ENABLE);
    }
 
    /* Primitives generated queries (NGG). */
@@ -78,13 +78,13 @@ radv_resume_queries(const struct radv_meta_saved_state *state, struct radv_cmd_b
    /* Occlusion queries. */
    if (state->active_occlusion_queries) {
       cmd_buffer->state.active_occlusion_queries = state->active_occlusion_queries;
-      cmd_buffer->state.dirty |= RADV_CMD_DIRTY_OCCLUSION_QUERY;
+      cmd_buffer->state.dirty |= RADV_CMD_DIRTY(OCCLUSION_QUERY);
    }
 
    /* Primitives generated queries (legacy). */
    if (cmd_buffer->state.active_prims_gen_queries) {
       cmd_buffer->state.streamout.suspended = false;
-      cmd_buffer->state.dirty |= RADV_CMD_DIRTY_STREAMOUT_ENABLE;
+      cmd_buffer->state.dirty |= RADV_CMD_DIRTY(STREAMOUT_ENABLE);
    }
 
    /* Primitives generated queries (NGG). */
@@ -186,7 +186,7 @@ radv_meta_end(struct radv_cmd_buffer *cmd_buffer)
       cmd_buffer->state.dirty_dynamic |= RADV_DYNAMIC_ALL;
 
       /* Re-emit the guardband state because meta operations changed dynamic states. */
-      cmd_buffer->state.dirty |= RADV_CMD_DIRTY_GUARDBAND;
+      cmd_buffer->state.dirty |= RADV_CMD_DIRTY(GUARDBAND);
    }
 
    if (state->flags & RADV_META_SAVE_COMPUTE_PIPELINE) {
@@ -247,8 +247,8 @@ radv_meta_end(struct radv_cmd_buffer *cmd_buffer)
 
       assert(stage_flags);
 
-      const VkPushConstantsInfoKHR pc_info = {
-         .sType = VK_STRUCTURE_TYPE_PUSH_CONSTANTS_INFO_KHR,
+      const VkPushConstantsInfo pc_info = {
+         .sType = VK_STRUCTURE_TYPE_PUSH_CONSTANTS_INFO,
          .layout = VK_NULL_HANDLE,
          .stageFlags = stage_flags,
          .offset = 0,
@@ -272,7 +272,7 @@ radv_meta_begin_rendering(struct radv_cmd_buffer *cmd_buffer)
    /* We always enable HiZ within meta operations, so this needs to be set for meta draws which
     * don't have their own render pass instance.
     */
-   cmd_buffer->state.dirty |= RADV_CMD_DIRTY_GFX12_HIZ_WA_STATE;
+   cmd_buffer->state.dirty |= RADV_CMD_DIRTY(GFX12_HIZ_WA_STATE);
 }
 
 void
@@ -280,7 +280,7 @@ radv_meta_end_rendering(struct radv_cmd_buffer *cmd_buffer)
 {
    assert(cmd_buffer->state.render.active);
    radv_meta_end(cmd_buffer);
-   cmd_buffer->state.dirty |= RADV_CMD_DIRTY_GFX12_HIZ_WA_STATE;
+   cmd_buffer->state.dirty |= RADV_CMD_DIRTY(GFX12_HIZ_WA_STATE);
 }
 
 VkImageViewType
@@ -375,9 +375,9 @@ radv_device_init_meta(struct radv_device *device)
    }
 
    if (pdev->emulate_astc) {
-      result = vk_texcompress_astc_init(&device->vk, &device->meta_state.alloc, device->meta_state.cache,
-                                        &device->meta_state.astc_decode,
-                                        vk_texcompress_astc_default_params(&device->vk));
+      result =
+         vk_texcompress_astc_init(&device->vk, &device->meta_state.alloc, device->meta_state.cache,
+                                  &device->meta_state.astc_decode, vk_texcompress_astc_default_params(&device->vk));
       if (result != VK_SUCCESS)
          return result;
    }
@@ -422,12 +422,12 @@ radv_meta_bind_descriptors(struct radv_cmd_buffer *cmd_buffer, VkPipelineBindPoi
    struct radv_device *device = radv_cmd_buffer_device(cmd_buffer);
    struct radv_descriptor_set_layout *set_layout = layout->set[0].layout;
    struct radv_cmd_stream *cs = cmd_buffer->cs;
-   uint32_t upload_offset;
+   uint64_t va;
    uint8_t *ptr;
 
    assert(layout->num_sets == 1);
 
-   if (!radv_cmd_buffer_upload_alloc(cmd_buffer, set_layout->size, &upload_offset, (void *)&ptr))
+   if (!radv_cmd_buffer_upload_alloc(cmd_buffer, set_layout->size, 4, &va, (void *)&ptr))
       return;
 
    radv_meta_save(cmd_buffer, (bind_point == VK_PIPELINE_BIND_POINT_GRAPHICS ? RADV_META_SAVE_GRAPHICS_DESCRIPTORS
@@ -461,7 +461,7 @@ radv_meta_bind_descriptors(struct radv_cmd_buffer *cmd_buffer, VkPipelineBindPoi
 
    const VkDescriptorBufferBindingInfoEXT descriptor_buffer_binding = {
       .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_BUFFER_BINDING_INFO_EXT,
-      .address = radv_buffer_get_va(cmd_buffer->upload.upload_bo) + upload_offset,
+      .address = va,
       .usage = VK_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT,
    };
 

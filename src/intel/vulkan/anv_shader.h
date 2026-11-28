@@ -86,7 +86,14 @@ struct anv_shader_data {
    union brw_any_prog_key key;
    uint32_t key_size;
 
-   union brw_any_prog_data prog_data;
+   struct intel_push_layout push_layout;
+   struct intel_cs_dispatch_params cs_dispatch;
+   struct brw_cs_push_const_info cs_push;
+
+   /* Compile output.  On the deserialization path this points at a
+    * temporary bin read from the blob.
+    */
+   const intel_shader_bin *bin;
 
    uint64_t source_hash;
 
@@ -97,15 +104,10 @@ struct anv_shader_data {
 
    const nir_xfb_info *xfb_info;
 
-   uint32_t num_stats;
-   struct genisa_stats stats[3];
    char *disasm[3];
 
    bool use_primitive_replication;
    uint32_t instance_multiplier;
-
-   /* For fragment shaders only */
-   struct brw_mue_map *mue_map;
 
    struct anv_push_descriptor_info push_desc_info;
 
@@ -118,6 +120,7 @@ struct anv_shader_data {
    bool uses_bt_for_push_descs;
 
    const struct vk_color_attachment_location_state *fs_color_map;
+   uint32_t fs_color_att_count;
 
    const unsigned *code;
 

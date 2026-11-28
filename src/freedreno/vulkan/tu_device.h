@@ -17,6 +17,7 @@
 #include "util/u_vector.h"
 #include "util/vma.h"
 #include "vk_device_memory.h"
+#include "vk_memory.h"
 #include "vk_meta.h"
 
 #include "common/fd6_gmem_cache.h"
@@ -52,6 +53,7 @@ enum global_shader {
    GLOBAL_SH_FS_BLIT_SWAP_COORDS,
    GLOBAL_SH_FS_BLIT_ZSCALE_SWAP_COORDS,
    GLOBAL_SH_FS_COPY_MS,
+   GLOBAL_SH_FS_COPY_MS_HALF,
    GLOBAL_SH_FS_RESOLVE_MS2,
    GLOBAL_SH_FS_RESOLVE_MS4,
    GLOBAL_SH_FS_RESOLVE_MS8,
@@ -62,16 +64,8 @@ enum global_shader {
 
 struct tu_memory_heap {
    /* Standard bits passed on to the client */
-   VkDeviceSize      size;
+   VkDeviceSize size;
    VkMemoryHeapFlags flags;
-
-   /** Copied from ANV:
-    *
-    * Driver-internal book-keeping.
-    *
-    * Align it to 64 bits to make atomic operations faster on 32 bit platforms.
-    */
-   alignas(8) VkDeviceSize used;
 };
 
 enum tu_kgsl_dma_type
@@ -138,6 +132,8 @@ struct tu_physical_device
    bool has_lazy_bos;
    /* Whether allocations can be aligned. */
    bool has_iova_align;
+   /* Whether the kernel can read the GPU timestamp. */
+   bool has_gpu_timestamp;
    uint64_t va_start;
    uint64_t va_size;
 
@@ -190,6 +186,8 @@ struct tu_physical_device
    uint32_t submitqueue_priority_count;
 
    struct tu_memory_heap heap;
+   /* Heap usage, shared with other instances using the same device */
+   struct vk_memory_budget *memory_budget;
 
    struct vk_sync_type syncobj_type;
    struct vk_sync_timeline_type timeline_type;
@@ -436,6 +434,7 @@ struct tu_device
    struct tu_cs sub_cs;
 
    /* Command streams to set pass index to a scratch reg */
+   struct tu_cs perfcntrs_pass_cs;
    struct tu_cs_entry *perfcntrs_pass_cs_entries;
 
    struct tu_cs_entry cmdbuf_QCTDD09112208_cmdbuf_start_cs_entry;
@@ -670,6 +669,7 @@ struct tu_copy_timestamp_data {
 struct tu_u_trace_submission_data
 {
    uint32_t submission_id;
+   bool submission_complete;
 
    /* We have to know when timestamps are available,
     * this queue and fence indicates it.
@@ -688,8 +688,16 @@ struct tu_u_trace_submission_data
     */
    uint64_t gpu_ts_offset;
 
-   /* KGSL needs a GPU memory to write submission timestamps into */
-   struct tu_suballoc_bo kgsl_timestamp_bo;
+   struct {
+      /* KGSL needs a GPU memory to write submission timestamps into */
+      struct tu_suballoc_bo timestamp_bo;
+
+      /* Submit-time samples of real-time and boot-time clocks */
+      struct {
+         uint64_t realtime_ns;
+         uint64_t boottime_ns;
+      } submit;
+   } kgsl;
 };
 
 VkResult
@@ -733,14 +741,17 @@ tu_bo_init_new_cached(struct tu_device *dev, struct vk_object_base *base,
       flags, NULL, name);
 }
 
-/* Return BO flags necessary for IBs */
+/* Return BO flags necessary for IB1s */
 static inline enum tu_bo_alloc_flags
-tu_bo_ib_flags(struct tu_device *dev)
+tu_bo_ib1_flags(struct tu_device *dev)
 {
    (void)dev; /* TODO don't do this workaround when newer FW comes out */
    /* All known firmwares have a bug where preemption can cause the wrong IB
     * contents to be fetched if there is 32B rollover (i.e. the IB crosses a
     * 4GB boundary). Avoid rollover here to workaround it.
+    *
+    * Only relevant for IB1, setting for other buffers may cause issues on
+    * A8XX / KGSL for some unknown reason.
     */
    return TU_BO_ALLOC_NO_32B_ROLLOVER;
 }

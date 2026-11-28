@@ -251,15 +251,14 @@ nir_shader_add_variable(nir_shader *shader, nir_variable *var)
    case nir_var_system_value:
    case nir_var_mem_push_const:
    case nir_var_mem_constant:
-   case nir_var_shader_call_data:
+   case nir_var_shader_call_data_in:
+   case nir_var_shader_call_data_out:
    case nir_var_ray_hit_attrib:
    case nir_var_mem_task_payload:
    case nir_var_mem_node_payload:
    case nir_var_mem_node_payload_in:
    case nir_var_mem_global:
-   case nir_var_mem_pixel_local_in:
-   case nir_var_mem_pixel_local_out:
-   case nir_var_mem_pixel_local_inout:
+   case nir_var_mem_pixel_local:
    case nir_var_resource_heap:
    case nir_var_sampler_heap:
       break;
@@ -938,7 +937,8 @@ nir_cmat_call_op_params(nir_cmat_call_op op, nir_function *callee)
 }
 
 nir_cmat_call_instr *
-nir_cmat_call_instr_create(nir_shader *shader, nir_cmat_call_op op, nir_function *callee)
+nir_cmat_call_instr_create(nir_shader *shader, nir_cmat_call_op op, nir_function *callee,
+			   nir_function *decode_vec_fn)
 {
    const unsigned num_params = nir_cmat_call_op_params(op, callee);
    nir_cmat_call_instr *instr =
@@ -946,6 +946,7 @@ nir_cmat_call_instr_create(nir_shader *shader, nir_cmat_call_op op, nir_function
                        sizeof(nir_cmat_call_instr) + sizeof(nir_src) * num_params);
 
    instr->callee = callee;
+   instr->decode_vec_fn = decode_vec_fn;
    instr->op = op;
    instr->num_params = num_params;
    for (unsigned i = 0; i < num_params; i++)
@@ -1661,7 +1662,7 @@ nir_src_is_always_uniform(nir_src src)
 }
 
 nir_block *
-nir_src_get_block(nir_src *src)
+nir_src_get_block(const nir_src *src)
 {
    if (nir_src_is_if(src))
       return nir_cf_node_cf_tree_prev(&nir_src_use_if(src)->cf_node);
@@ -2832,12 +2833,27 @@ nir_system_value_from_instr(nir_instr *instr)
       if (intr->intrinsic == nir_intrinsic_load_deref) {
          nir_variable *var = nir_intrinsic_get_var(intr, 0);
 
-         if (var->data.mode == nir_var_system_value)
+         if (var && var->data.mode == nir_var_system_value)
             return var->data.location;
       }
    }
 
    return SYSTEM_VALUE_MAX;
+}
+
+bool
+nir_def_is_invocation_id(const nir_shader *shader, nir_def *def)
+{
+   if (def->num_components != 1)
+      return false;
+
+   nir_scalar scalar = nir_scalar_resolved(def, 0);
+   if (shader->info.stage == MESA_SHADER_TESS_CTRL &&
+       shader->info.tess.tcs_vertices_out == 1 && nir_scalar_is_zero(scalar))
+      return true;
+
+   return nir_system_value_from_instr(nir_def_instr(scalar.def)) ==
+          SYSTEM_VALUE_INVOCATION_ID;
 }
 
 void
@@ -2885,6 +2901,9 @@ nir_rewrite_image_intrinsic(nir_intrinsic_instr *intrin, nir_def *src,
       }                                                         \
       break;
       CASE(load)
+      CASE(input_attachment_load)
+      CASE(depth_input_attachment_load)
+      CASE(stencil_input_attachment_load)
       CASE(sparse_load)
       CASE(store)
       CASE(atomic)
@@ -3478,6 +3497,7 @@ nir_tex_instr_need_sampler(const nir_tex_instr *instr)
    case nir_texop_image_min_lod_agx:
    case nir_texop_fragment_mask_fetch_amd:
    case nir_texop_fragment_fetch_amd:
+   case nir_texop_txs_lod0_intel:
    case nir_texop_resinfo_intel:
    case nir_texop_sparse_residency_txf_intel:
       return false;
@@ -3486,11 +3506,25 @@ nir_tex_instr_need_sampler(const nir_tex_instr *instr)
    }
 }
 
+bool
+nir_tex_instr_need_texture_2(const nir_tex_instr *instr)
+{
+   switch (instr->op) {
+   case nir_texop_sample_weighted_qcom:
+   case nir_texop_block_match_sad_qcom:
+   case nir_texop_block_match_ssd_qcom:
+      return true;
+   default:
+      return false;
+   }
+}
+
 unsigned
 nir_tex_instr_result_size(const nir_tex_instr *instr)
 {
    switch (instr->op) {
-   case nir_texop_txs: {
+   case nir_texop_txs:
+   case nir_texop_txs_lod0_intel: {
       unsigned ret;
       switch (instr->sampler_dim) {
       case GLSL_SAMPLER_DIM_1D:
@@ -3533,7 +3567,8 @@ nir_tex_instr_result_size(const nir_tex_instr *instr)
       return 1;
 
    case nir_texop_descriptor_amd:
-      return instr->sampler_dim == GLSL_SAMPLER_DIM_BUF ? 4 : 8;
+      /* Variable number of components: 4 or 8. */
+      return 0;
 
    case nir_texop_sampler_descriptor_amd:
       return 4;
@@ -3542,6 +3577,9 @@ nir_tex_instr_result_size(const nir_tex_instr *instr)
    case nir_texop_tex_type_nv:
    case nir_texop_sample_pos_nv:
       return 4;
+
+   case nir_texop_dual_pan:
+      return (instr->is_shadow && instr->is_new_style_shadow) ? 2 : 8;
 
    case nir_texop_gradient_pan:
       return 2;
@@ -3583,6 +3621,7 @@ nir_tex_instr_is_query(const nir_tex_instr *instr)
    case nir_texop_hdr_dim_nv:
    case nir_texop_tex_type_nv:
    case nir_texop_sample_pos_nv:
+   case nir_texop_txs_lod0_intel:
    case nir_texop_resinfo_intel:
    case nir_texop_sparse_residency_intel:
    case nir_texop_sparse_residency_txf_intel:
@@ -3694,6 +3733,10 @@ nir_tex_instr_src_type(const nir_tex_instr *instr, unsigned src)
    case nir_tex_src_block_size:
    case nir_tex_src_texture_heap_offset:
    case nir_tex_src_sampler_heap_offset:
+   case nir_tex_src_texture_2_heap_offset:
+   case nir_tex_src_sampler_2_heap_offset:
+   case nir_tex_src_var_handle_pan:
+   case nir_tex_src_var_buf_offset_pan:
       return nir_type_uint;
 
    case nir_num_tex_src_types:
@@ -3706,50 +3749,43 @@ nir_tex_instr_src_type(const nir_tex_instr *instr, unsigned src)
 unsigned
 nir_tex_instr_src_size(const nir_tex_instr *instr, unsigned src)
 {
-   if (instr->src[src].src_type == nir_tex_src_coord )
+   switch (instr->src[src].src_type) {
+   case nir_tex_src_coord:
       return instr->coord_components;
-
-   /* The MCS value is expected to be a vec4 returned by a txf_ms_mcs_intel */
-   if (instr->src[src].src_type == nir_tex_src_ms_mcs_intel)
+   case nir_tex_src_ms_mcs_intel:
+      /* The MCS value is expected to be a vec4 returned by a
+       * txf_ms_mcs_intel
+       */
       return 4;
-
-   if (instr->src[src].src_type == nir_tex_src_box_size)
+   case nir_tex_src_box_size:
       return 2;
-
-   /* These are vec2s at the spirv level, but get lowered to 16_16 packed values
-    * in the backend, so they don't have a single known size
-    */
-   if (instr->src[src].src_type == nir_tex_src_ref_coord ||
-       instr->src[src].src_type == nir_tex_src_block_size) {
+   case nir_tex_src_ref_coord:
+   case nir_tex_src_block_size:
+      /* These are vec2s at the spirv level, but get lowered to 16_16 packed
+       * values in the backend, so they don't have a single known size
+       */
       return 0;
-   }
-
-   if (instr->src[src].src_type == nir_tex_src_ddx ||
-       instr->src[src].src_type == nir_tex_src_ddy) {
-
+   case nir_tex_src_ddx:
+   case nir_tex_src_ddy:
       if (instr->is_array && !instr->array_is_lowered_cube)
          return instr->coord_components - 1;
       else
          return instr->coord_components;
-   }
-
-   if (instr->src[src].src_type == nir_tex_src_offset) {
+   case nir_tex_src_offset:
       if (instr->is_array)
          return instr->coord_components - 1;
       else
          return instr->coord_components;
-   }
-
-   if (instr->src[src].src_type == nir_tex_src_backend1 ||
-       instr->src[src].src_type == nir_tex_src_backend2)
+   case nir_tex_src_backend1:
+   case nir_tex_src_backend2:
       return nir_src_num_components(instr->src[src].src);
-
-   /* For AMD, this can be a vec8/vec4 image/sampler descriptor. */
-   if (instr->src[src].src_type == nir_tex_src_texture_handle ||
-       instr->src[src].src_type == nir_tex_src_sampler_handle)
+   case nir_tex_src_texture_handle:
+   case nir_tex_src_sampler_handle:
+      /* For AMD, this can be a vec8/vec4 image/sampler descriptor. */
       return 0;
-
-   return 1;
+   default:
+      return 1;
+   }
 }
 
 /**

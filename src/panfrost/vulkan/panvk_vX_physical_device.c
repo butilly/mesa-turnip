@@ -35,8 +35,8 @@
 
 void
 panvk_per_arch(get_physical_device_extensions)(
-   const struct panvk_physical_device *device,
    const struct panvk_instance *instance,
+   const struct panvk_physical_device *device,
    struct vk_device_extension_table *ext)
 {
    bool has_gralloc = vk_android_get_ugralloc() != NULL;
@@ -63,6 +63,7 @@ panvk_per_arch(get_physical_device_extensions)(
       .KHR_driver_properties = true,
       .KHR_dynamic_rendering = true,
       .KHR_dynamic_rendering_local_read = true,
+      .KHR_extended_flags = true,
       .KHR_external_fence = true,
       .KHR_external_fence_fd = true,
       .KHR_external_memory = true,
@@ -88,6 +89,7 @@ panvk_per_arch(get_physical_device_extensions)(
       .KHR_maintenance8 = true,
       .KHR_maintenance9 = true,
       .KHR_maintenance10 = true,
+      .KHR_maintenance11 = true,
       .KHR_map_memory2 = true,
       .KHR_multiview = true,
       .KHR_pipeline_binary = true,
@@ -162,6 +164,7 @@ panvk_per_arch(get_physical_device_extensions)(
 #endif
       .EXT_descriptor_indexing = PAN_ARCH >= 9,
       .EXT_dynamic_rendering_unused_attachments = true,
+      .EXT_descriptor_buffer = PAN_ARCH >= 9,
       .EXT_extended_dynamic_state = true,
       .EXT_extended_dynamic_state2 = true,
       .EXT_extended_dynamic_state3 = true,
@@ -227,6 +230,7 @@ panvk_per_arch(get_physical_device_extensions)(
       .EXT_texture_compression_astc_hdr = true,
       .EXT_tooling_info = true,
       .EXT_vertex_attribute_divisor = true,
+      .EXT_vertex_attribute_robustness = true,
       .EXT_vertex_input_dynamic_state = true,
       .EXT_ycbcr_2plane_444_formats = PAN_ARCH >= 10,
       .EXT_ycbcr_image_arrays = PAN_ARCH >= 10,
@@ -241,6 +245,7 @@ panvk_per_arch(get_physical_device_extensions)(
 #endif
       .GOOGLE_hlsl_functionality1 = true,
       .GOOGLE_user_type = true,
+      .INTEL_shader_integer_functions2 = true,
 
       .VALVE_mutable_descriptor_type = PAN_ARCH >= 9,
 
@@ -308,7 +313,7 @@ panvk_per_arch(get_physical_device_features)(
       .fullDrawIndexUint32 = true,
       .imageCubeArray = true,
       .independentBlend = true,
-      .geometryShader = false,
+      .geometryShader = instance->drirc.misc.enable_gs_xfb,
       .tessellationShader = false,
       .sampleRateShading = true,
       .dualSrcBlend = true,
@@ -335,7 +340,8 @@ panvk_per_arch(get_physical_device_features)(
          (PAN_ARCH >= 13 && instance->drirc.misc.enable_vertex_pipeline_stores_atomics) ||
          instance->drirc.misc.force_enable_shader_atomics,
       .fragmentStoresAndAtomics = true,
-      .shaderTessellationAndGeometryPointSize = false,
+      .shaderTessellationAndGeometryPointSize =
+        instance->drirc.misc.enable_gs_xfb,
       .shaderImageGatherExtended = true,
       .shaderStorageImageExtendedFormats = true,
       .shaderStorageImageMultisample = false,
@@ -496,8 +502,14 @@ panvk_per_arch(get_physical_device_features)(
       /* VK_KHR_maintenance9 */
       .maintenance9 = true,
 
+      /* VK_EXT_vertex_attribute_robustness */
+      .vertexAttributeRobustness = true,
+
       /* VK_KHR_maintenance10 */
       .maintenance10 = true,
+
+      /* VK_KHR_maintenance11 */
+      .maintenance11 = true,
 
       /* VK_KHR_internally_synchronized_queues */
       .internallySynchronizedQueues = true,
@@ -757,6 +769,9 @@ panvk_per_arch(get_physical_device_features)(
       /* VK_EXT_device_memory_report */
       .deviceMemoryReport = true,
 
+      /* VK_INTEL_shader_integer_functions2 */
+      .shaderIntegerFunctions2 = true,
+
       /* VK_ARM_shader_core_builtins */
       .shaderCoreBuiltins = true,
 
@@ -785,6 +800,15 @@ panvk_per_arch(get_physical_device_features)(
 
       /* VK_ANDROID_external_format_resolve */
       .externalFormatResolve = has_gralloc && PAN_ARCH >= 10,
+
+      /* VK_KHR_extended_flags */
+      .extendedFlags = true,
+
+      /* VK_EXT_descriptor_buffer */
+      .descriptorBuffer = PAN_ARCH >= 9,
+      .descriptorBufferCaptureReplay = false,
+      .descriptorBufferPushDescriptors = PAN_ARCH >= 9,
+      .descriptorBufferImageLayoutIgnored = PAN_ARCH >= 9,
    };
 }
 
@@ -805,7 +829,7 @@ static VkConformanceVersion
 get_conformance_version()
 {
    if (PAN_ARCH == 10)
-      return (VkConformanceVersion){1, 4, 1, 2};
+      return (VkConformanceVersion){1, 4, 5, 2};
 
    return (VkConformanceVersion){0, 0, 0, 0};
 }
@@ -859,10 +883,15 @@ panvk_per_arch(get_physical_device_properties)(
       .maxImageDimensionCube = (1 << 16),
       .maxImageArrayLayers = (1 << 16),
       .maxTexelBufferElements = UINT64_C(1) << (util_logbase2(panvk_get_max_buffer_size(device) / 16)),
-      /* Each uniform entry is 16-byte and the number of entries is encoded in a
-       * 12-bit field, with the minus(1) modifier, which gives 2^20.
+      /* PAN_ARCH < 9:
+       *   Each uniform entry is 16-byte and the number of entries is encoded in a
+       *   12-bit field, with the minus(1) modifier, which gives 2^16.
+       * PAN_ARCH >= 9:
+       *   A UBO is a generic Buffer descriptor with a 32-bit size field and loads
+       *   use a 32-bit offset. Use 2^31 as descriptor writes do align(range, 16),
+       *   which would overflow if UINT32_MAX is used.
        */
-      .maxUniformBufferRange = 1 << 20,
+      .maxUniformBufferRange = PAN_ARCH >= 9 ? (1u << 31) : (1 << 16),
       /* Storage buffer access is lowered to globals, so there's no limit here,
        * except for the SW-descriptor we use to encode storage buffer
        * descriptors, where the size is a 32-bit field.
@@ -1215,7 +1244,7 @@ panvk_per_arch(get_physical_device_properties)(
       .nonStrictSinglePixelWideLinesUseParallelogram = false,
       .nonStrictWideLinesUseParallelogram = false,
       .blockTexelViewCompatibleMultipleLayers = true,
-      .maxCombinedImageSamplerDescriptorCount = 1,
+      .maxCombinedImageSamplerDescriptorCount = 3,
       /* We don't implement VK_KHR_fragment_shading_rate */
       .fragmentShadingRateClampCombinerInputs = false,
       .defaultRobustnessStorageBuffers =
@@ -1333,6 +1362,65 @@ panvk_per_arch(get_physical_device_properties)(
 
       /* VK_KHR_copy_memory_indirect */
       .supportedQueues = VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT,
+
+      /* VK_EXT_descriptor_buffer */
+      .combinedImageSamplerDescriptorSingleArray = PAN_ARCH >= 9,
+      .bufferlessPushDescriptors = PAN_ARCH >= 9,
+      .descriptorBufferOffsetAlignment =
+         PAN_ARCH >= 9 ? PANVK_DESCRIPTOR_SIZE : 0,
+      .maxDescriptorBufferBindings =
+         PAN_ARCH >= 9 ? MAX_SETS : 0,
+      .maxResourceDescriptorBufferBindings =
+         PAN_ARCH >= 9 ? MAX_SETS : 0,
+      .maxSamplerDescriptorBufferBindings =
+         PAN_ARCH >= 9 ? MAX_SETS : 0,
+      .maxEmbeddedImmutableSamplerBindings =
+         PAN_ARCH >= 9 ? MAX_SETS : 0,
+      .maxEmbeddedImmutableSamplers =
+         PAN_ARCH >= 9 ? MAX_PER_SET_SAMPLERS * MAX_SETS : 0,
+      .bufferCaptureReplayDescriptorDataSize = 0,
+      .imageCaptureReplayDescriptorDataSize = 0,
+      .imageViewCaptureReplayDescriptorDataSize = 0,
+      .samplerCaptureReplayDescriptorDataSize = 0,
+      .accelerationStructureCaptureReplayDescriptorDataSize = 0,
+      .EDBsamplerDescriptorSize =
+         PAN_ARCH >= 9 ? PANVK_DESCRIPTOR_SIZE : 0,
+      .combinedImageSamplerDescriptorSize =
+         PAN_ARCH >= 9 ? 2 * PANVK_DESCRIPTOR_SIZE : 0,
+      .sampledImageDescriptorSize =
+         PAN_ARCH >= 9 ? PANVK_DESCRIPTOR_SIZE : 0,
+      .storageImageDescriptorSize =
+         PAN_ARCH >= 9 ? PANVK_DESCRIPTOR_SIZE : 0,
+      .uniformTexelBufferDescriptorSize =
+         PAN_ARCH >= 9 ? PANVK_DESCRIPTOR_SIZE : 0,
+      .robustUniformTexelBufferDescriptorSize =
+         PAN_ARCH >= 9 ? PANVK_DESCRIPTOR_SIZE : 0,
+      .storageTexelBufferDescriptorSize =
+         PAN_ARCH >= 9 ? PANVK_DESCRIPTOR_SIZE : 0,
+      .robustStorageTexelBufferDescriptorSize =
+         PAN_ARCH >= 9 ? PANVK_DESCRIPTOR_SIZE : 0,
+      .uniformBufferDescriptorSize =
+         PAN_ARCH >= 9 ? PANVK_DESCRIPTOR_SIZE : 0,
+      .robustUniformBufferDescriptorSize =
+         PAN_ARCH >= 9 ? PANVK_DESCRIPTOR_SIZE : 0,
+      .storageBufferDescriptorSize =
+         PAN_ARCH >= 9 ? PANVK_DESCRIPTOR_SIZE : 0,
+      .robustStorageBufferDescriptorSize =
+         PAN_ARCH >= 9 ? PANVK_DESCRIPTOR_SIZE : 0,
+      .inputAttachmentDescriptorSize =
+         PAN_ARCH >= 9 ? PANVK_DESCRIPTOR_SIZE : 0,
+      .accelerationStructureDescriptorSize = 0,
+      .maxSamplerDescriptorBufferRange =
+         PAN_ARCH >= 9 ? UINT32_MAX : 0,
+      .maxResourceDescriptorBufferRange =
+         PAN_ARCH >= 9 ? UINT32_MAX : 0,
+      .resourceDescriptorBufferAddressSpaceSize =
+         PAN_ARCH >= 9 ? UINT32_MAX : 0,
+      .samplerDescriptorBufferAddressSpaceSize =
+         PAN_ARCH >= 9 ? UINT32_MAX : 0,
+      .descriptorBufferAddressSpaceSize =
+         PAN_ARCH >= 9 ? UINT32_MAX : 0,
+
    };
 
    snprintf(properties->deviceName, sizeof(properties->deviceName), "%s",
@@ -1359,6 +1447,18 @@ panvk_per_arch(get_physical_device_properties)(
    snprintf(properties->driverName, VK_MAX_DRIVER_NAME_SIZE, "panvk");
    snprintf(properties->driverInfo, VK_MAX_DRIVER_INFO_SIZE,
             "Mesa " PACKAGE_VERSION MESA_GIT_SHA1);
+
+   if (instance->drirc.misc.enable_gs_xfb) {
+      properties->maxGeometryShaderInvocations = 32;
+      /* These are the same as maxVertexOutputComponents. GS outputs
+       * components is only limited by the HW VS limit. GS input is limited by
+       * the SW VS limit.
+       */
+      properties->maxGeometryInputComponents = 128;
+      properties->maxGeometryOutputComponents = 128;
+      properties->maxGeometryOutputVertices = 1024;
+      properties->maxGeometryTotalOutputComponents = 1024;
+   }
 
    /* VK_EXT_physical_device_drm */
    if (device->drm.primary_rdev) {

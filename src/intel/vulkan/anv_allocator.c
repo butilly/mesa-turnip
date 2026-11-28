@@ -1549,7 +1549,7 @@ anv_bo_vma_free(struct anv_device *device, struct anv_bo *bo)
 {
    if (bo->offset != 0 && !(bo->alloc_flags & ANV_BO_ALLOC_FIXED_ADDRESS)) {
       assert(bo->vma_heap != NULL);
-      anv_vma_free(device, bo->vma_heap, bo->offset, bo->size);
+      anv_vma_free(device, bo->vma_heap, bo->offset, bo->actual_size);
    }
    bo->vma_heap = NULL;
 }
@@ -1619,13 +1619,13 @@ anv_bo_vma_alloc_or_close(struct anv_device *device,
     * Only available on ICL+.
     */
    if (anv_device_has_perf_improvement_with_2mb_pages(device) &&
-       (bo->size >= 1 * 1024 * 1024) && !is_small_heap)
+       (bo->actual_size >= 1 * 1024 * 1024) && !is_small_heap)
       align = MAX2(2 * 1024 * 1024, align);
 
    if (alloc_flags & ANV_BO_ALLOC_FIXED_ADDRESS) {
       bo->offset = intel_canonical_address(explicit_address);
    } else {
-      bo->offset = anv_vma_alloc(device, bo->size, align, alloc_flags,
+      bo->offset = anv_vma_alloc(device, bo->actual_size, align, alloc_flags,
                                  explicit_address, &bo->vma_heap);
       if (bo->offset == 0) {
          anv_bo_unmap_close(device, bo);
@@ -1893,6 +1893,8 @@ anv_device_unmap_bo(struct anv_device *device,
       assert(((uintptr_t)map & (page_size - 1)) == 0);
    }
 
+   VG(VALGRIND_FREELIKE_BLOCK(map, 0));
+
    if (replace) {
       map = mmap(map, map_size, PROT_NONE,
                  MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
@@ -1901,7 +1903,6 @@ anv_device_unmap_bo(struct anv_device *device,
                           "Failed to map over original mapping");
       }
    } else {
-      VG(VALGRIND_FREELIKE_BLOCK(map, 0));
       munmap(map, map_size);
    }
    return VK_SUCCESS;
@@ -1909,7 +1910,7 @@ anv_device_unmap_bo(struct anv_device *device,
 
 VkResult
 anv_device_import_bo_from_host_ptr(struct anv_device *device,
-                                   void *host_ptr, uint32_t size,
+                                   void *host_ptr, uint64_t size,
                                    enum anv_bo_alloc_flags alloc_flags,
                                    uint64_t client_address,
                                    struct anv_bo **bo_out)
@@ -1957,14 +1958,6 @@ anv_device_import_bo_from_host_ptr(struct anv_device *device,
                           "same host pointer imported two different ways");
       }
 
-      if ((bo->alloc_flags & ANV_BO_ALLOC_CLIENT_VISIBLE_ADDRESS) !=
-          (alloc_flags & ANV_BO_ALLOC_CLIENT_VISIBLE_ADDRESS)) {
-         simple_mtx_unlock(&cache->mutex);
-         return vk_errorf(device, VK_ERROR_INVALID_EXTERNAL_HANDLE,
-                          "The same BO was imported with and without buffer "
-                          "device address");
-      }
-
       if (client_address && client_address != intel_48b_address(bo->offset)) {
          simple_mtx_unlock(&cache->mutex);
          return vk_errorf(device, VK_ERROR_INVALID_EXTERNAL_HANDLE,
@@ -1994,6 +1987,8 @@ anv_device_import_bo_from_host_ptr(struct anv_device *device,
                                                   client_address,
                                                   alignment);
       if (result != VK_SUCCESS) {
+         if (device->info->kmd_type == INTEL_KMD_TYPE_XE)
+            vk_free(&device->vk.alloc, bo);
          simple_mtx_unlock(&cache->mutex);
          return result;
       }
@@ -2001,6 +1996,8 @@ anv_device_import_bo_from_host_ptr(struct anv_device *device,
       result = device->kmd_backend->vm_bind_bo(device, &new_bo);
       if (result != VK_SUCCESS) {
          anv_bo_vma_free(device, &new_bo);
+         if (device->info->kmd_type == INTEL_KMD_TYPE_XE)
+            vk_free(&device->vk.alloc, bo);
          simple_mtx_unlock(&cache->mutex);
          return result;
       }
@@ -2051,14 +2048,6 @@ anv_device_import_bo(struct anv_device *device,
    }
 
    if (bo->refcount > 0) {
-      if ((bo->alloc_flags & ANV_BO_ALLOC_CLIENT_VISIBLE_ADDRESS) !=
-          (alloc_flags & ANV_BO_ALLOC_CLIENT_VISIBLE_ADDRESS)) {
-         simple_mtx_unlock(&cache->mutex);
-         return vk_errorf(device, VK_ERROR_INVALID_EXTERNAL_HANDLE,
-                          "The same BO was imported with and without buffer "
-                          "device address");
-      }
-
       if (client_address && client_address != intel_48b_address(bo->offset)) {
          simple_mtx_unlock(&cache->mutex);
          return vk_errorf(device, VK_ERROR_INVALID_EXTERNAL_HANDLE,
@@ -2185,6 +2174,12 @@ anv_device_release_bo(struct anv_device *device,
    if (p_atomic_dec_not_one(&bo->refcount))
       return;
 
+   if (bo->slab_parent) {
+      if (p_atomic_dec_zero(&bo->refcount))
+         anv_slab_bo_free(device, bo);
+      return;
+   }
+
    simple_mtx_lock(&cache->mutex);
 
    /* We are probably the last reference since our attempt to decrement above
@@ -2198,12 +2193,6 @@ anv_device_release_bo(struct anv_device *device,
       return;
    }
    assert(bo->refcount == 0);
-
-   if (bo->slab_parent) {
-      simple_mtx_unlock(&cache->mutex);
-      anv_slab_bo_free(device, bo);
-      return;
-   }
 
    assert(bo_is_xe_userptr ||
           anv_device_lookup_bo(device, bo->gem_handle) == bo);

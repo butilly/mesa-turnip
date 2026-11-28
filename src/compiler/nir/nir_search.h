@@ -134,6 +134,9 @@ typedef struct {
    /* One of nir_op or nir_search_op */
    uint16_t opcode : 13;
 
+   /* If not zero, overwrite the components of the replacement expression. */
+   uint16_t replace_num_components : 3;
+
    /* Commutative expression index.  This is assigned by opt_algebraic.py when
     * search structures are constructed and is a unique (to this structure)
     * index within the commutative operation bitfield used for searching for
@@ -158,16 +161,33 @@ typedef struct {
    int16_t cond_index;
 } nir_search_expression;
 
-struct per_op_table {
-   const uint16_t *filter;
+struct per_src_filter {
+   /* Maps an automaton state to a filtered state index for this source, or
+    * NULL if every state maps to 0.
+    */
+   const uint8_t *filter;
+   /* The size of this source's dimension in per_op_table::table.
+    * If filter != NULL, this is also the length of the filter array.
+    */
    unsigned num_filtered_states;
+};
+
+struct per_op_table {
+   /* One filter per source, giving the dimensions of the rectangular
+    * transition table. Sources may share the same filter.
+    */
+   const struct per_src_filter *srcs;
+   /* Transition table, indexed by the filtered state of each source in
+    * row-major order, or NULL if the opcode isn't used by the pass.
+    */
    const uint16_t *table;
 };
 
 struct transform {
    uint16_t search;  /* Index in table->values[] for the search expression. */
    uint16_t replace; /* Index in table->values[] for the replace value. */
-   unsigned condition_offset;
+   uint16_t condition_flag_offset;
+   uint16_t cond_index;
 };
 
 typedef union {
@@ -178,7 +198,15 @@ typedef union {
    nir_search_expression expression;
 } nir_search_value_union;
 
+typedef struct nir_match_variable {
+   unsigned num_components;
+   nir_alu_src src;
+} nir_match_variable;
+
 typedef struct {
+   const nir_shader *shader;
+   const nir_shader_compiler_options *options;
+   const shader_info *info;
    nir_fp_analysis_state *range_ht;
    struct hash_table *numlsb_ht;
 } nir_search_state;
@@ -188,6 +216,8 @@ typedef bool (*nir_search_variable_cond)(const nir_search_state *state,
                                          const nir_alu_instr *instr,
                                          unsigned src, unsigned num_components,
                                          const uint8_t *swizzle);
+typedef bool (*nir_search_transform_cond)(const nir_search_state *state,
+                                          const nir_match_variable *vars);
 
 /* Generated data table for an algebraic optimization pass. */
 typedef struct {
@@ -200,15 +230,21 @@ typedef struct {
 
    /**
     * Array of condition functions for expressions, referenced by
-    * nir_search_expression->cond.
+    * nir_search_expression::cond_index.
     */
    const nir_search_expression_cond *expression_cond;
 
    /**
     * Array of condition functions for variables, referenced by
-    * nir_search_variable->cond.
+    * nir_search_variable::cond_index.
     */
    const nir_search_variable_cond *variable_cond;
+
+   /**
+    * Array of condition functions for transforms, referenced by
+    * transform::cond_index.
+    */
+   const nir_search_transform_cond *transform_cond;
 } nir_algebraic_table;
 
 /* Note: these must match the start states created in

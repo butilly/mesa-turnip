@@ -8,8 +8,8 @@ use crate::ir::*;
 use crate::isa::ExecUnit;
 use crate::ops::*;
 
-use compiler::bitset::BitSet;
 use kraid_bindings::*;
+use mesa_util::bitset::BitSet;
 
 #[derive(Default)]
 struct VaStatCount {
@@ -81,6 +81,26 @@ impl VaStatCount {
             }
         };
 
+        macro_rules! var_tex_case {
+            ($op: expr, $t: expr) => {{
+                let var_comps = $op.dim.coord_comps()
+                    + u8::from($op.projection_enable)
+                    + u8::from($op.array_enable)
+                    + u8::from($op.compare_enable);
+                self.v += f32::from(var_comps);
+                self.t += $t;
+            }};
+        }
+
+        macro_rules! var_tex_gradient_case {
+            ($op: expr) => {{
+                let var_comps =
+                    $op.dim.coord_comps() + u8::from($op.projection_enable);
+                self.v += f32::from(var_comps);
+                self.t += 1.0;
+            }};
+        }
+
         match model.op_exec_unit(&instr.op).unwrap() {
             ExecUnit::Cvt => self.cvt += f32::from(cycles),
             ExecUnit::Fma => self.fma += f32::from(cycles),
@@ -115,12 +135,23 @@ impl VaStatCount {
                     };
                     self.v += f32::from(total_bytes.div_ceil(4));
                 }
+                Op::TexDual(_) => {
+                    self.t += 2.0;
+                }
                 Op::TexFetch(_)
                 | Op::TexGather(_)
                 | Op::TexGradient(_)
                 | Op::TexSingle(_) => {
                     self.t += 1.0;
                 }
+                Op::VarTexBufDual(op) => var_tex_case!(op, 2.0),
+                Op::VarTexBufGather(op) => var_tex_case!(op, 1.0),
+                Op::VarTexBufGradient(op) => var_tex_gradient_case!(op),
+                Op::VarTexBufSingle(op) => var_tex_case!(op, 1.0),
+                Op::VarTexDual(op) => var_tex_case!(op, 2.0),
+                Op::VarTexGather(op) => var_tex_case!(op, 1.0),
+                Op::VarTexGradient(op) => var_tex_gradient_case!(op),
+                Op::VarTexSingle(op) => var_tex_case!(op, 1.0),
                 Op::ATest(_)
                 | Op::Barrier(_)
                 | Op::Blend(_)
@@ -232,19 +263,23 @@ impl VaStatCount {
     }
 }
 
-fn per_spill_cost(s: &Shader, bi: usize) -> u32 {
+fn per_spill_cost(f: &Function, bi: usize) -> u32 {
     // The cost of a spill/fill is 10*depth for now.  This matches the old
     // Bifrost compiler
-    u32::try_from(10 * (s.blocks.loop_depth(bi) + 1)).unwrap_or(u32::MAX)
+    u32::try_from(10 * (f.blocks.loop_depth(bi) + 1)).unwrap_or(u32::MAX)
 }
 
 /// Print the shader annotating each instruction with its cost
 fn report_stats_per_instr(s: &Shader) {
+    // Counting needs to be revisited when function call support is introduced.
+    assert_eq!(s.functions.len(), 1);
+    let entrypoint = s.entrypoint();
+
     eprintln!("Kraid shader per-instruction stats details:");
     eprint!(
         "{}",
-        Fmt(|f| s.fmt_annotate(f, |bi, _ii, i| {
-            let per_spill_cost = per_spill_cost(s, bi);
+        Fmt(|f| entrypoint.fmt_annotate(f, |bi, _ii, i| {
+            let per_spill_cost = per_spill_cost(s.entrypoint(), bi);
             let mut stats = VaStatCount::default();
 
             stats.visit_instr(i, per_spill_cost, s.model);
@@ -255,17 +290,20 @@ fn report_stats_per_instr(s: &Shader) {
 }
 
 fn get_va_stats(s: &Shader) -> valhall_stats {
+    // Counting needs to be revisited when function call support is introduced.
+    assert_eq!(s.functions.len(), 1);
+    let entrypoint = s.entrypoint();
     let mut stats = VaStatCount::default();
     let mut instrs = 0usize;
     let mut loops = 0usize;
 
-    for (i, block) in s.blocks.iter().enumerate() {
-        if s.blocks.is_loop_header(i) {
+    for (i, block) in entrypoint.blocks.iter().enumerate() {
+        if entrypoint.blocks.is_loop_header(i) {
             loops += 1;
         }
         instrs += block.instrs.len();
 
-        let per_spill_cost = per_spill_cost(s, i);
+        let per_spill_cost = per_spill_cost(entrypoint, i);
         for instr in &block.instrs {
             stats.visit_instr(instr, per_spill_cost, s.model);
         }

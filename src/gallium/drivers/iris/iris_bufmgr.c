@@ -226,6 +226,8 @@ struct iris_bufmgr {
    struct iris_bo *mem_fence_bo;
 
    bool enable_efficient_64bit;
+
+   struct iris_bo *urb_memory_bo;
 };
 
 static simple_mtx_t global_bufmgr_list_mutex = SIMPLE_MTX_INITIALIZER;
@@ -1548,6 +1550,8 @@ out:
 
 err_vm_alloc:
    vma_free(bufmgr, bo->address, bo->size);
+   /* clear bo->address to prevent double free in bo_close() */
+   bo->address = 0;
 err_free:
    bo_free(bo);
    simple_mtx_unlock(&bufmgr->lock);
@@ -1923,6 +1927,7 @@ iris_bufmgr_destroy(struct iris_bufmgr *bufmgr)
 {
    iris_bo_unreference(bufmgr->dummy_aux_bo);
    iris_bo_unreference(bufmgr->mem_fence_bo);
+   iris_bo_unreference(bufmgr->urb_memory_bo);
 
    iris_destroy_border_color_pool(&bufmgr->border_color_pool);
 
@@ -2594,7 +2599,8 @@ iris_bufmgr_create(struct intel_device_info *devinfo, int fd, bool bo_reuse, str
       assert(bufmgr->aux_map_ctx);
    }
 
-   iris_init_border_color_pool(bufmgr, &bufmgr->border_color_pool);
+   if (!iris_bufmgr_is_eff_64bit_enabled(bufmgr))
+      iris_init_border_color_pool(bufmgr, &bufmgr->border_color_pool);
 
    if (intel_needs_workaround(devinfo, 14019708328)) {
       bufmgr->dummy_aux_bo = iris_bo_alloc(bufmgr, "dummy_aux", 4096, 4096,
@@ -2617,11 +2623,22 @@ iris_bufmgr_create(struct intel_device_info *devinfo, int fd, bool bo_reuse, str
          goto error_alloc_bo;
    }
 
+   if (intel_device_info_memory_urb_size_per_slice(devinfo) &&
+       !intel_device_info_memory_urb_is_allocated_in_stolen(devinfo)) {
+      const uint64_t buffer_size = intel_device_info_memory_urb_size_per_slice(devinfo) *
+                                   devinfo->subslice_total;
+      bufmgr->urb_memory_bo = iris_bo_alloc(bufmgr, "urb_memory", buffer_size, 4096,
+                                            IRIS_MEMZONE_OTHER, BO_ALLOC_SMEM);
+      if (!bufmgr->urb_memory_bo)
+         goto error_alloc_bo;
+   }
+
    return bufmgr;
 
 error_alloc_bo:
    iris_bo_unreference(bufmgr->dummy_aux_bo);
    iris_bo_unreference(bufmgr->mem_fence_bo);
+   iris_bo_unreference(bufmgr->urb_memory_bo);
    iris_destroy_border_color_pool(&bufmgr->border_color_pool);
    intel_aux_map_finish(bufmgr->aux_map_ctx);
    _mesa_hash_table_destroy(bufmgr->handle_table, NULL);
@@ -2843,4 +2860,10 @@ bool
 iris_bufmgr_is_eff_64bit_enabled(const struct iris_bufmgr *bufmgr)
 {
    return bufmgr->enable_efficient_64bit;
+}
+
+struct iris_bo *
+iris_bufmgr_get_urb_memory_bo(struct iris_bufmgr *bufmgr)
+{
+   return bufmgr->urb_memory_bo;
 }

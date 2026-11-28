@@ -855,7 +855,7 @@ dxil_nir_split_clip_cull_distance_instr(nir_builder *b,
    int old_length = glsl_array_size(old_type);
    if (!new_var) {
       /* Update lengths for new and old vars */
-      int new_length = (old_length + var->data.location_frac) - 4;
+      int new_length = (old_length + var->data.location_frac) - DXIL_IO_ROW_COMPONENTS;
 
       /* The existing variable fits in the float4 */
       if (new_length <= 0) {
@@ -865,8 +865,8 @@ dxil_nir_split_clip_cull_distance_instr(nir_builder *b,
          if (!clip_size_accurate)
             return false;
 
-         assert(old_length <= 4);
-         unsigned start = (var->data.location - VARYING_SLOT_CLIP_DIST0) * 4;
+         assert(old_length <= DXIL_IO_ROW_COMPONENTS);
+         unsigned start = (var->data.location - VARYING_SLOT_CLIP_DIST0) * DXIL_IO_ROW_COMPONENTS;
          unsigned end = start + old_length;
          /* If it doesn't straddle the clip array size, then it's either just clip or cull, not both. */
          if (start >= b->shader->info.clip_distance_array_size ||
@@ -1487,7 +1487,7 @@ nir_var_to_dxil_sysvalue_type(nir_variable *var, uint64_t other_stage_mask,
          return DXIL_UNUSED_NO_SYSVALUE;
       if (var->data.location_frac && other_stage_frac_mask &&
           var->data.location >= VARYING_SLOT_VAR0 &&
-          !BITSET_TEST(other_stage_frac_mask, ((var->data.location - VARYING_SLOT_VAR0) * 4 + var->data.location_frac)))
+          !BITSET_TEST(other_stage_frac_mask, ((var->data.location - VARYING_SLOT_VAR0) * DXIL_IO_ROW_COMPONENTS + var->data.location_frac)))
          return DXIL_UNUSED_NO_SYSVALUE;
       return DXIL_NO_SYSVALUE;
    }
@@ -2248,7 +2248,7 @@ set_input_bits(struct dxil_module *mod, nir_intrinsic_instr *intr, BITSET_WORD *
          uint32_t row = sig_rec->elements[element + base_element].reg;
          if (row == 0xffffffff)
             continue;
-         BITSET_SET(input_bits, row * 4 + component + nir_intrinsic_component(intr));
+         BITSET_SET(input_bits, row * DXIL_IO_ROW_COMPONENTS + component + nir_intrinsic_component(intr));
          any_bits_set = true;
       }
    }
@@ -2280,9 +2280,9 @@ set_output_bits(struct dxil_module *mod, nir_intrinsic_instr *intr, BITSET_WORD 
          uint32_t *table = tables[table_idx];
          uint32_t output_component = component + nir_intrinsic_component(intr);
          uint32_t input_component;
-         BITSET_FOREACH_SET(input_component, input_bits, 32 * 4) {
+         BITSET_FOREACH_SET(input_component, input_bits, 32 * DXIL_IO_ROW_COMPONENTS) {
             uint32_t *table_for_input_component = table + table_sizes[table_idx] * input_component;
-            BITSET_SET(table_for_input_component, row * 4 + output_component);
+            BITSET_SET(table_for_input_component, row * DXIL_IO_ROW_COMPONENTS + output_component);
             any_bits_set = true;
          }
       }
@@ -2294,7 +2294,7 @@ static bool
 propagate_input_to_output_dependencies(struct dxil_module *mod, nir_intrinsic_instr *load_intr, uint32_t **tables, const uint32_t *table_sizes)
 {
    /* Which input components are being loaded by this instruction */
-   BITSET_DECLARE(input_bits, 32 * 4) = { 0 };
+   BITSET_DECLARE(input_bits, 32 * DXIL_IO_ROW_COMPONENTS) = { 0 };
    if (!set_input_bits(mod, load_intr, input_bits, &tables, &table_sizes))
       return false;
 
@@ -2778,7 +2778,7 @@ kill_undefined_varyings(struct nir_builder *b,
    if (BITFIELD64_RANGE(loc, glsl_varying_count(var->type)) & written) {
       if (!masks->frac_io_mask || !var->data.location_frac ||
           var->data.location < VARYING_SLOT_VAR0 ||
-          BITSET_TEST(masks->frac_io_mask, (var->data.location - VARYING_SLOT_VAR0) * 4 + var->data.location_frac))
+          BITSET_TEST(masks->frac_io_mask, (var->data.location - VARYING_SLOT_VAR0) * DXIL_IO_ROW_COMPONENTS + var->data.location_frac))
       return false;
    }
 
@@ -2875,7 +2875,7 @@ kill_unused_outputs(struct nir_builder *b,
    if (BITFIELD64_RANGE(loc, glsl_varying_count(var->type)) & read) {
       if (!masks->frac_io_mask || !var->data.location_frac ||
           var->data.location < VARYING_SLOT_VAR0 ||
-          BITSET_TEST(masks->frac_io_mask, (var->data.location - VARYING_SLOT_VAR0) * 4 + var->data.location_frac))
+          BITSET_TEST(masks->frac_io_mask, (var->data.location - VARYING_SLOT_VAR0) * DXIL_IO_ROW_COMPONENTS + var->data.location_frac))
       return false;
    }
 
@@ -3044,4 +3044,59 @@ dxil_nir_pad_tes_input_signature(nir_shader *tes, const nir_shader *tcs)
    }
 
    return added;
+}
+
+static nir_def *
+fp32_ordered_key(nir_builder *b, nir_def *bits)
+{
+   nir_def *sign = nir_ishr_imm(b, bits, 31);
+   nir_def *mask = nir_ior_imm(b, sign, 0x80000000u);
+   return nir_ixor(b, bits, mask);
+}
+
+static bool
+lower_fp32_compare_select(nir_builder *b, nir_alu_instr *sel, void *data)
+{
+   if (sel->op != nir_op_bcsel || sel->def.num_components != 1 ||
+       sel->def.bit_size != 32)
+      return false;
+
+   nir_instr *cond = nir_def_instr(sel->src[0].src.ssa);
+   if (cond->type != nir_instr_type_alu)
+      return false;
+
+   nir_alu_instr *cmp = nir_instr_as_alu(cond);
+   if ((cmp->op != nir_op_flt && cmp->op != nir_op_fge) ||
+       cmp->def.num_components != 1 || cmp->src[0].src.ssa->bit_size != 32)
+      return false;
+
+   if (!(nir_alu_srcs_equal(cmp, sel, 0, 1) && nir_alu_srcs_equal(cmp, sel, 1, 2)) &&
+       !(nir_alu_srcs_equal(cmp, sel, 1, 1) && nir_alu_srcs_equal(cmp, sel, 0, 2)))
+      return false;
+
+   b->cursor = nir_before_instr(&sel->instr);
+   nir_def *a = nir_ssa_for_alu_src(b, cmp, 0);
+   nir_def *c = nir_ssa_for_alu_src(b, cmp, 1);
+   nir_def *abs_a = nir_iand_imm(b, a, 0x7fffffffu);
+   nir_def *abs_c = nir_iand_imm(b, c, 0x7fffffffu);
+   nir_def *ordered = nir_iand(b, nir_ule_imm(b, abs_a, 0x7f800000u),
+                                nir_ule_imm(b, abs_c, 0x7f800000u));
+   nir_def *both_zero = nir_ieq_imm(b, nir_ior(b, abs_a, abs_c), 0);
+   nir_def *key_a = fp32_ordered_key(b, a);
+   nir_def *key_c = fp32_ordered_key(b, c);
+   nir_def *test;
+   if (cmp->op == nir_op_fge)
+      test = nir_ior(b, both_zero, nir_uge(b, key_a, key_c));
+   else
+      test = nir_iand(b, nir_inot(b, both_zero), nir_ult(b, key_a, key_c));
+
+   nir_src_rewrite(&sel->src[0].src, nir_iand(b, ordered, test));
+   return true;
+}
+
+bool
+dxil_nir_lower_fp32_compare_select(nir_shader *s)
+{
+   return nir_shader_alu_pass(s, lower_fp32_compare_select,
+                             nir_metadata_control_flow, NULL);
 }

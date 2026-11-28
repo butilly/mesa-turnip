@@ -51,12 +51,12 @@
  *
  * There are a few special cases that need to be handled, since sched
  * is currently independent of register allocation.  Usages of address
- * register (a0.x) or predicate register (p0.x) must be serialized.  Ie.
- * if you have two pairs of instructions that write the same special
- * register and then read it, then those pairs cannot be interleaved.
- * To solve this, when we are in such a scheduling "critical section",
- * and we encounter a conflicting write to a special register, we try
- * to schedule any remaining instructions that use that value first.
+ * registers (a0.x/a1.x) must be serialized.  Ie. if you have two
+ * pairs of instructions that write the same special register and then
+ * read it, then those pairs cannot be interleaved. To solve this,
+ * when we are in such a scheduling "critical section", and we
+ * encounter a conflicting write to a special register, we try to
+ * schedule any remaining instructions that use that value first.
  *
  * TODO we can detect too-large live_values here.. would be a good place
  * to "spill" cheap things, like move from uniform/immed.  (Constructing
@@ -72,6 +72,7 @@
  */
 
 struct ir3_sched_ctx {
+   struct ir3 *ir;
    struct ir3_compiler *compiler;
    struct ir3_block *block; /* the current block */
    struct dag *dag;
@@ -82,6 +83,8 @@ struct ir3_sched_ctx {
    struct ir3_instruction *addr1;     /* current a1.x user, if any */
    unsigned addr0_uses;               /* number of unscheduled uses of addr0 */
    unsigned addr1_uses;               /* number of unscheduled uses of addr1 */
+   unsigned addr0_scheduled_uses;     /* number of scheduled uses of addr0 */
+   unsigned addr1_scheduled_uses;     /* number of scheduled uses of addr1 */
 
    struct ir3_instruction *split; /* most-recently-split a0/a1 producer */
 
@@ -246,6 +249,73 @@ cycle_count(struct ir3_instruction *instr)
    }
 }
 
+static struct ir3_instruction *
+split_instr(struct ir3_sched_ctx *ctx, struct ir3_instruction *orig_instr)
+{
+   struct ir3_instruction *new_instr = ir3_instr_clone(orig_instr);
+   di(new_instr, "split instruction");
+   sched_node_init(ctx, new_instr);
+   return new_instr;
+}
+
+/* "spill" the address registers by remapping any unscheduled
+ * instructions which depend on the current address register
+ * to a clone of the instruction which wrote the address reg.
+ */
+static struct ir3_instruction *
+split_addr(struct ir3_sched_ctx *ctx, struct ir3_instruction **addr,
+           struct ir3_instruction **users, unsigned users_count)
+{
+   struct ir3_instruction *new_addr = NULL;
+   unsigned i;
+
+   assert(*addr);
+
+   for (i = 0; i < users_count; i++) {
+      struct ir3_instruction *indirect = users[i];
+
+      if (!indirect)
+         continue;
+
+      /* skip instructions already scheduled: */
+      if (is_scheduled(indirect))
+         continue;
+
+      /* remap remaining instructions using current addr
+       * to new addr:
+       */
+      if (indirect->address->def == (*addr)->dsts[0]) {
+         if (!new_addr) {
+            new_addr = split_instr(ctx, *addr);
+            /* original addr is scheduled, but new one isn't: */
+            new_addr->flags &= ~IR3_INSTR_MARK;
+            new_addr->uses = _mesa_pointer_set_create(ctx);
+         }
+         indirect->address->def = new_addr->dsts[0];
+         _mesa_set_add(new_addr->uses, indirect);
+         /* don't need to remove old dag edge since old addr is
+          * already scheduled:
+          */
+         sched_node_add_dep(ctx, indirect, new_addr, 0);
+         di(indirect, "new address");
+      }
+   }
+
+   /* all remaining indirects remapped to new addr: */
+   *addr = NULL;
+
+   assert(new_addr);
+   list_delinit(&new_addr->node);
+   list_addtail(&new_addr->node, &ctx->unscheduled_list);
+
+   /* If we produced a new instruction, do not schedule it next to
+    * guarantee progress.
+    */
+   ctx->split = new_addr;
+
+   return new_addr;
+}
+
 static void
 schedule(struct ir3_sched_ctx *ctx, struct ir3_instruction *instr)
 {
@@ -256,7 +326,11 @@ schedule(struct ir3_sched_ctx *ctx, struct ir3_instruction *instr)
    list_delinit(&instr->node);
 
    if (writes_addr0(instr)) {
-      assert(ctx->addr0 == NULL);
+      if (ctx->addr0) {
+         split_addr(ctx, &ctx->addr0, ctx->ir->a0_users,
+                    ctx->ir->a0_users_count);
+      }
+
       if (instr->opc != OPC_MOV) {
          /* If a0 is written but not actually used (i.e., bar in REUSEGPRMODE or
           * alias-using texture instructions), we shouldn't keep track of the
@@ -271,10 +345,16 @@ schedule(struct ir3_sched_ctx *ctx, struct ir3_instruction *instr)
          ctx->addr0 = instr;
          ctx->addr0_uses = instr->uses->entries;
       }
+
+      ctx->addr0_scheduled_uses = 0;
    }
 
    if (writes_addr1(instr)) {
-      assert(ctx->addr1 == NULL);
+      if (ctx->addr1) {
+         split_addr(ctx, &ctx->addr1, ctx->ir->a1_users,
+                    ctx->ir->a1_users_count);
+      }
+
       if (instr->opc != OPC_MOV) {
          /* See note above for a0. */
          ctx->addr1 = NULL;
@@ -283,6 +363,8 @@ schedule(struct ir3_sched_ctx *ctx, struct ir3_instruction *instr)
          ctx->addr1 = instr;
          ctx->addr1_uses = instr->uses->entries;
       }
+
+      ctx->addr1_scheduled_uses = 0;
    }
 
    if (reads_addr0(instr)) {
@@ -291,6 +373,9 @@ schedule(struct ir3_sched_ctx *ctx, struct ir3_instruction *instr)
 
       if (--ctx->addr0_uses == 0) {
          ctx->addr0 = NULL;
+         ctx->addr0_scheduled_uses = 0;
+      } else {
+         ctx->addr0_scheduled_uses++;
       }
    }
 
@@ -300,6 +385,9 @@ schedule(struct ir3_sched_ctx *ctx, struct ir3_instruction *instr)
 
       if (--ctx->addr1_uses == 0) {
          ctx->addr1 = NULL;
+         ctx->addr1_scheduled_uses = 0;
+      } else {
+         ctx->addr1_scheduled_uses++;
       }
    }
 
@@ -431,7 +519,7 @@ could_sched(struct ir3_sched_ctx *ctx,
 }
 
 /* Check if instruction is ok to schedule.  Make sure it is not blocked
- * by use of addr/predicate register, etc.
+ * by use of addr register, etc.
  */
 static bool
 check_instr(struct ir3_sched_ctx *ctx, struct ir3_sched_notes *notes,
@@ -440,7 +528,7 @@ check_instr(struct ir3_sched_ctx *ctx, struct ir3_sched_notes *notes,
    assert(!is_scheduled(instr));
 
    if (instr == ctx->split) {
-      /* Don't schedule instructions created by splitting a a0.x/a1.x/p0.x
+      /* Don't schedule instructions created by splitting a a0.x/a1.x
        * write until another "normal" instruction has been scheduled.
        */
       return false;
@@ -452,12 +540,9 @@ check_instr(struct ir3_sched_ctx *ctx, struct ir3_sched_notes *notes,
    /* For instructions that write address register we need to
     * make sure there is at least one instruction that uses the
     * addr value which is otherwise ready.
-    *
-    * NOTE if any instructions use pred register and have other
-    * src args, we would need to do the same for writes_pred()..
     */
    if (writes_addr0(instr) && instr->uses) {
-      struct ir3 *ir = instr->block->shader;
+      struct ir3 *ir = ctx->ir;
       bool ready = false;
       bool has_users = false;
       for (unsigned i = 0; (i < ir->a0_users_count) && !ready; i++) {
@@ -468,6 +553,8 @@ check_instr(struct ir3_sched_ctx *ctx, struct ir3_sched_notes *notes,
             continue;
          has_users = true;
          ready = could_sched(ctx, indirect, instr);
+         if (ready)
+            break;
       }
 
       /* nothing could be scheduled, so keep looking: */
@@ -476,7 +563,7 @@ check_instr(struct ir3_sched_ctx *ctx, struct ir3_sched_notes *notes,
    }
 
    if (writes_addr1(instr) && instr->uses) {
-      struct ir3 *ir = instr->block->shader;
+      struct ir3 *ir = ctx->ir;
       bool ready = false;
       bool has_users = false;
       for (unsigned i = 0; (i < ir->a1_users_count) && !ready; i++) {
@@ -487,6 +574,8 @@ check_instr(struct ir3_sched_ctx *ctx, struct ir3_sched_notes *notes,
             continue;
          has_users = true;
          ready = could_sched(ctx, indirect, instr);
+         if (ready)
+            break;
       }
 
       /* nothing could be scheduled, so keep looking: */
@@ -494,17 +583,31 @@ check_instr(struct ir3_sched_ctx *ctx, struct ir3_sched_notes *notes,
          return false;
    }
 
-   /* if this is a write to address/predicate register, and that
-    * register is currently in use, we need to defer until it is
-    * free:
+   /* if this is a write to address register, and that register is currently in
+    * use, we need to defer until it is free. Don't defer it indefinitely,
+    * though, as scheduling a new a0.x write might free up more instructions
+    * that can lower register pressure.
     */
-   if (writes_addr0(instr) && ctx->addr0) {
+   if (writes_addr0(instr) && ctx->addr0 && ctx->addr0_scheduled_uses < 4) {
       assert(ctx->addr0 != instr);
       notes->addr0_conflict = true;
       return false;
    }
 
-   if (writes_addr1(instr) && ctx->addr1) {
+   /* Same as above but allow a1.x writes to be scheduled even earlier.
+    * Preambles often contain many sequential sequences like this:
+    * mova1 ...
+    * isam.v ..., a1.x
+    * ; process SSBO values
+    * mova1 ...
+    * stc c[a1.x] ; store processed SSBO values
+    *
+    * If the a1.x value is the same for all isam.v but different for stc, we
+    * might end up with a huge register pressure because all the SSBO values
+    * pile up. Experimentally, it was found that just allowing a1.x writes to be
+    * scheduled again immediately gives the best results.
+    */
+   if (writes_addr1(instr) && ctx->addr1 && ctx->addr1_scheduled_uses < 1) {
       assert(ctx->addr1 != instr);
       notes->addr1_conflict = true;
       return false;
@@ -524,7 +627,7 @@ check_instr(struct ir3_sched_ctx *ctx, struct ir3_sched_notes *notes,
     * TODO we could handle this by false-deps now, probably.
     */
    if (is_kill_or_demote(instr)) {
-      struct ir3 *ir = instr->block->shader;
+      struct ir3 *ir = ctx->ir;
 
       for (unsigned i = 0; i < ir->baryfs_count; i++) {
          struct ir3_instruction *baryf = ir->baryfs[i];
@@ -674,6 +777,11 @@ should_defer(struct ir3_sched_ctx *ctx, struct ir3_instruction *instr)
       return true;
 
    if (ctx->ss_index - ctx->first_outstanding_ss_index >= 8 && is_ss_producer(instr))
+      return true;
+
+   if (writes_addr0(instr) && ctx->addr0)
+      return true;
+   if (writes_addr1(instr) && ctx->addr1)
       return true;
 
    return false;
@@ -895,9 +1003,12 @@ dump_state(struct ir3_sched_ctx *ctx)
    if (!SCHED_DEBUG)
       return;
 
+   struct ir3_sched_notes notes;
+
    foreach_sched_node (n, &ctx->dag->heads) {
-      di(n->instr, "maxdel=%3d le=%d del=%u ", n->max_delay,
-         live_effect(n->instr), node_delay(ctx, n));
+      di(n->instr, "maxdel=%3d le=%d del=%u should_defer=%u check_instr=%u",
+         n->max_delay, live_effect(n->instr), node_delay(ctx, n),
+         should_defer(ctx, n->instr), check_instr(ctx, &notes, n->instr));
 
       util_dynarray_foreach (&n->dag.edges, struct dag_edge, edge) {
          struct ir3_sched_node *child = (struct ir3_sched_node *)edge->child;
@@ -932,64 +1043,6 @@ choose_instr(struct ir3_sched_ctx *ctx, struct ir3_sched_notes *notes)
       return chosen->instr;
 
    return NULL;
-}
-
-static struct ir3_instruction *
-split_instr(struct ir3_sched_ctx *ctx, struct ir3_instruction *orig_instr)
-{
-   struct ir3_instruction *new_instr = ir3_instr_clone(orig_instr);
-   di(new_instr, "split instruction");
-   sched_node_init(ctx, new_instr);
-   return new_instr;
-}
-
-/* "spill" the address registers by remapping any unscheduled
- * instructions which depend on the current address register
- * to a clone of the instruction which wrote the address reg.
- */
-static struct ir3_instruction *
-split_addr(struct ir3_sched_ctx *ctx, struct ir3_instruction **addr,
-           struct ir3_instruction **users, unsigned users_count)
-{
-   struct ir3_instruction *new_addr = NULL;
-   unsigned i;
-
-   assert(*addr);
-
-   for (i = 0; i < users_count; i++) {
-      struct ir3_instruction *indirect = users[i];
-
-      if (!indirect)
-         continue;
-
-      /* skip instructions already scheduled: */
-      if (is_scheduled(indirect))
-         continue;
-
-      /* remap remaining instructions using current addr
-       * to new addr:
-       */
-      if (indirect->address->def == (*addr)->dsts[0]) {
-         if (!new_addr) {
-            new_addr = split_instr(ctx, *addr);
-            /* original addr is scheduled, but new one isn't: */
-            new_addr->flags &= ~IR3_INSTR_MARK;
-            new_addr->uses = _mesa_pointer_set_create(ctx);
-         }
-         indirect->address->def = new_addr->dsts[0];
-         _mesa_set_add(new_addr->uses, indirect);
-         /* don't need to remove old dag edge since old addr is
-          * already scheduled:
-          */
-         sched_node_add_dep(ctx, indirect, new_addr, 0);
-         di(indirect, "new address");
-      }
-   }
-
-   /* all remaining indirects remapped to new addr: */
-   *addr = NULL;
-
-   return new_addr;
 }
 
 static void
@@ -1169,7 +1222,7 @@ sched_block(struct ir3_sched_ctx *ctx, struct ir3_block *block)
 {
    ctx->block = block;
 
-   /* addr/pred writes are per-block: */
+   /* addr writes are per-block: */
    ctx->addr0 = NULL;
    ctx->addr1 = NULL;
    ctx->sy_delay = 0;
@@ -1242,20 +1295,16 @@ sched_block(struct ir3_sched_ctx *ctx, struct ir3_block *block)
           */
          ctx->split = NULL;
       } else {
-         struct ir3_instruction *new_instr = NULL;
          struct ir3 *ir = block->shader;
 
          /* nothing available to schedule.. if we are blocked on
-          * address/predicate register conflict, then break the
-          * deadlock by cloning the instruction that wrote that
-          * reg:
+          * address register conflict, then break the deadlock
+          * by cloning the instruction that wrote that reg:
           */
          if (notes.addr0_conflict) {
-            new_instr =
-               split_addr(ctx, &ctx->addr0, ir->a0_users, ir->a0_users_count);
+            split_addr(ctx, &ctx->addr0, ir->a0_users, ir->a0_users_count);
          } else if (notes.addr1_conflict) {
-            new_instr =
-               split_addr(ctx, &ctx->addr1, ir->a1_users, ir->a1_users_count);
+            split_addr(ctx, &ctx->addr1, ir->a1_users, ir->a1_users_count);
          } else {
             d("unscheduled_list:\n");
             foreach_instr (instr, &ctx->unscheduled_list)
@@ -1264,16 +1313,6 @@ sched_block(struct ir3_sched_ctx *ctx, struct ir3_block *block)
             ctx->error = true;
             return;
          }
-
-         if (new_instr) {
-            list_delinit(&new_instr->node);
-            list_addtail(&new_instr->node, &ctx->unscheduled_list);
-         }
-
-         /* If we produced a new instruction, do not schedule it next to
-          * guarantee progress.
-          */
-         ctx->split = new_instr;
       }
    }
 
@@ -1288,6 +1327,7 @@ ir3_sched(struct ir3 *ir)
 {
    struct ir3_sched_ctx *ctx = rzalloc(NULL, struct ir3_sched_ctx);
 
+   ctx->ir = ir;
    ctx->compiler = ir->compiler;
 
    foreach_block (block, &ir->block_list) {

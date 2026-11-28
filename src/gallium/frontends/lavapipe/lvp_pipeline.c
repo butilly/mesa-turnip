@@ -184,11 +184,13 @@ lvp_nir_lower_blend(nir_shader *nir, const nir_lower_blend_options *opts)
    /* nir_lower_blend operates on IO intrinsics, so lower derefs to intrinsics
     * first, run the blend lowering, then convert back to derefs for llvmpipe.
     */
-   NIR_PASS(_, nir, nir_lower_io, nir_var_shader_in | nir_var_shader_out, type_size_vec4, 0);
+   NIR_PASS(_, nir, nir_lower_io, nir_var_shader_in | nir_var_shader_out, type_size_vec4,
+            nir_lower_io_use_interpolated_input_intrinsics);
    NIR_PASS(_, nir, nir_opt_dce);
    NIR_PASS(_, nir, nir_remove_dead_variables, nir_var_shader_in | nir_var_shader_out, NULL);
    NIR_PASS(_, nir, nir_lower_blend, opts);
    NIR_PASS(_, nir, nir_unlower_io_to_vars, false);
+   NIR_PASS(_, nir, nir_opt_dce);
 }
 
 static void
@@ -537,6 +539,7 @@ lvp_shader_lower(struct lvp_device *pdevice, nir_shader *nir, struct lvp_shader 
    struct vk_sampler_state_array embedded_samplers;
    if (shader->heaps) {
       vk_nir_lower_descriptor_heaps_options heaps_options = {
+         .max_push_data_size = MAX_PUSH_CONSTANTS_SIZE,
          .lower_shader_record_index_to_non_uniform = true,
       };
       NIR_PASS(_, nir, vk_nir_lower_descriptor_heaps, mapping, &heaps_options, &embedded_samplers);
@@ -573,7 +576,7 @@ lvp_shader_lower(struct lvp_device *pdevice, nir_shader *nir, struct lvp_shader 
    };
 
    if (shader->heaps) {
-      NIR_PASS(_, nir, lvp_nir_lower_desciptor_heaps, mapping);
+      NIR_PASS(_, nir, lvp_nir_lower_descriptor_heaps);
 
       NIR_PASS(_, nir, lvp_nir_lower_push_constants, &shader->push_constant_size);
       NIR_PASS(_, nir, nir_lower_non_uniform_access, &options);

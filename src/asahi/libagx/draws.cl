@@ -50,7 +50,8 @@ libagx_draw_without_adj(global VkDrawIndirectCommand *out,
       uint offs = in->firstVertex;
 
       vp->index_buffer = poly_index_buffer(index_buffer, index_buffer_range_el,
-                                           offs, index_size_B);
+                                           offs, index_size_B,
+                                           nir_load_ro_sink_address_poly());
 
       vp->index_buffer_range_el =
          poly_index_buffer_range_el(index_buffer_range_el, offs);
@@ -85,6 +86,7 @@ libagx_memcpy_to_aligned(global uint *dst, constant uchar *src, uint len,
       uint need = 4 - start_unaligned;
       libagx_memcpy_small((global uchar *)dst, src, need, tid);
       src += need;
+      dst = (global uint *)((global uchar *)dst + need);
       len -= need;
    }
 
@@ -162,7 +164,7 @@ libagx_draw_robust_index(global uint32_t *vdm, global struct poly_heap *heap,
       /* Allocate memory for the shadow index buffer */
       global uchar *padded;
       if (first) {
-         padded = poly_heap_alloc(heap, out_size_B);
+         padded = poly_heap_alloc(heap, out_size_B, 16);
       }
       padded = (global uchar *)sub_group_broadcast((uintptr_t)padded, 0);
 

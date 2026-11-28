@@ -647,7 +647,9 @@ lp_rast_begin_query(struct lp_rasterizer_task *task,
       pq->start[task->thread_index] = task->thread_data.ps_invocations;
       break;
    case PIPE_QUERY_TIME_ELAPSED:
-      pq->start[task->thread_index] = os_time_get_nano();
+      /* Every bin begins the query: keep the time of the thread's first one. */
+      if (!pq->start[task->thread_index])
+         pq->start[task->thread_index] = os_time_get_nano();
       break;
    default:
       assert(0);
@@ -1079,6 +1081,12 @@ rasterize_scene(struct lp_rasterizer_task *task,
       }
    }
 
+   if (scene->num_timestamp_queries) {
+      const uint64_t now = os_time_get_nano();
+      for (unsigned i = 0; i < scene->num_timestamp_queries; i++)
+         scene->timestamp_queries[i]->end[task->thread_index] = now;
+   }
+
 #if LP_BUILD_FORMAT_CACHE_DEBUG
    {
       uint64_t total, miss;
@@ -1266,7 +1274,7 @@ create_rast_threads(struct lp_rasterizer *rast)
 struct lp_rasterizer *
 lp_rast_create(unsigned num_threads)
 {
-   struct lp_rasterizer *rast = CALLOC_STRUCT(lp_rasterizer);
+   struct lp_rasterizer *rast = CALLOC_STRUCT_CL(lp_rasterizer);
    if (!rast) {
       goto no_rast;
    }
@@ -1311,7 +1319,7 @@ no_thread_data_cache:
 
    lp_scene_queue_destroy(rast->full_scenes);
 no_full_scenes:
-   FREE(rast);
+   FREE_CL(rast);
 no_rast:
    return NULL;
 }
@@ -1370,7 +1378,7 @@ lp_rast_destroy(struct lp_rasterizer *rast)
 
    lp_scene_queue_destroy(rast->full_scenes);
 
-   FREE(rast);
+   FREE_CL(rast);
 }
 
 

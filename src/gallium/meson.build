@@ -4,6 +4,13 @@
 
 sym_config = configuration_data()
 
+if with_apitrace
+  sym_config.set('apitrace_symbols',
+                 '_mesa_apitrace_winsys_init; _mesa_apitrace_winsys_wrap;')
+else
+  sym_config.set('apitrace_symbols', '')
+endif
+
 foreach d : [[with_gallium_r300 or with_gallium_radeonsi or with_gallium_r600, 'radeon_drm_winsys_create'],
              [with_gallium_radeonsi, 'amdgpu_winsys_create'],
              [with_gallium_nouveau, 'nouveau_drm_screen_create'],
@@ -209,14 +216,15 @@ if with_gallium_d3d12
 else
   driver_d3d12 = declare_dependency()
 endif
+if with_gallium_earthqaic
+  subdir('winsys/earthqaic')
+  subdir('drivers/earthqaic')
+else
+  driver_earthqaic = declare_dependency()
+endif
 if with_gallium_rusticl
   subdir('frontends/rusticl')
   subdir('targets/rusticl')
-endif
-if with_glx == 'xlib'
-  subdir('winsys/sw/xlib')
-  subdir('frontends/glx/xlib')
-  subdir('targets/libgl-xlib')
 endif
 if with_gallium_va
   subdir('frontends/va')

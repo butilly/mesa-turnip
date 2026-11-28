@@ -177,7 +177,20 @@ ir3_emit_user_consts(const struct ir3_shader_variant *v,
       if (cb->user_buffer) {
          uint8_t *p = (uint8_t *)cb->user_buffer;
          p += state->range[i].start;
-         emit_const_user(ring, v, state->range[i].offset / 4, size / 4, (uint32_t *)p);
+         uint32_t avail = cb->buffer_size > state->range[i].start ?
+                          cb->buffer_size - state->range[i].start : 0;
+
+         if (avail >= size) {
+            emit_const_user(ring, v, state->range[i].offset / 4, size / 4,
+                            (uint32_t *)p);
+         } else {
+            /* the range is aligned up past the end of an unpadded user buffer */
+            uint32_t *padded = (uint32_t *)calloc(1, size);
+            memcpy(padded, p, avail);
+            emit_const_user(ring, v, state->range[i].offset / 4, size / 4,
+                            padded);
+            free(padded);
+         }
       } else {
          emit_const_prsc(ring, v, state->range[i].offset / 4, offset, size / 4,
                          cb->buffer);
@@ -185,6 +198,22 @@ ir3_emit_user_consts(const struct ir3_shader_variant *v,
    }
 }
 
+/* If we have user pointers (constbuf 0, aka GL uniforms), upload them to a
+ * buffer now, and save it in the constbuf so that we don't have to reupload
+ * until they get changed.
+ */
+static inline void
+ir3_upload_user_constbuf(struct fd_context *ctx, struct pipe_constant_buffer *cb)
+{
+   if (cb->user_buffer) {
+      struct pipe_context *pctx = &ctx->base;
+      u_upload_data_ref(pctx->stream_uploader, 0, cb->buffer_size, 64,
+                        cb->user_buffer, &cb->buffer_offset, &cb->buffer);
+      cb->user_buffer = NULL;
+   }
+}
+
+/* UBO base addresses for LDG-based UBO access (rather than LDC). */
 static inline void
 ir3_emit_ubos(struct fd_context *ctx, const struct ir3_shader_variant *v,
               struct fd_ringbuffer *ring, struct fd_constbuf_stateobj *constbuf)
@@ -193,14 +222,9 @@ ir3_emit_ubos(struct fd_context *ctx, const struct ir3_shader_variant *v,
    uint32_t offset =
       const_state->allocs.consts[IR3_CONST_ALLOC_UBO_PTRS].offset_vec4;
 
-   /* a6xx+ uses UBO state and ldc instead of pointers emitted in
-    * const state and ldg:
-    */
-   if (ctx->screen->gen >= 6)
-      return;
-
    if (ir3_const_can_upload(&const_state->allocs, IR3_CONST_ALLOC_UBO_PTRS,
                             v->constlen)) {
+      assert(!v->compiler->has_ldc_ubos);
       uint32_t params = const_state->num_ubos;
       uint32_t offsets[params];
       struct fd_bo *bos[params];
@@ -214,16 +238,7 @@ ir3_emit_ubos(struct fd_context *ctx, const struct ir3_shader_variant *v,
 
          struct pipe_constant_buffer *cb = &constbuf->cb[i];
 
-         /* If we have user pointers (constbuf 0, aka GL uniforms), upload
-          * them to a buffer now, and save it in the constbuf so that we
-          * don't have to reupload until they get changed.
-          */
-         if (cb->user_buffer) {
-            struct pipe_context *pctx = &ctx->base;
-            u_upload_data_ref(pctx->stream_uploader, 0, cb->buffer_size, 64,
-                          cb->user_buffer, &cb->buffer_offset, &cb->buffer);
-            cb->user_buffer = NULL;
-         }
+         ir3_upload_user_constbuf(ctx, cb);
 
          if ((constbuf->enabled_mask & (1 << i)) && cb->buffer) {
             offsets[i] = cb->buffer_offset;
@@ -237,62 +252,6 @@ ir3_emit_ubos(struct fd_context *ctx, const struct ir3_shader_variant *v,
       assert(offset * 4 + params <= v->constlen * 4);
 
       emit_const_ptrs(ring, v, offset * 4, params, bos, offsets);
-   }
-}
-
-static inline void
-ir3_emit_image_dims(struct fd_screen *screen,
-                    const struct ir3_shader_variant *v,
-                    struct fd_ringbuffer *ring,
-                    struct fd_shaderimg_stateobj *si)
-{
-   const struct ir3_const_state *const_state = ir3_const_state(v);
-   uint32_t offset =
-      const_state->allocs.consts[IR3_CONST_ALLOC_IMAGE_DIMS].offset_vec4;
-   if (ir3_const_can_upload(&const_state->allocs, IR3_CONST_ALLOC_IMAGE_DIMS,
-                            v->constlen)) {
-      uint32_t dims[align(const_state->image_dims.count, 4)];
-      unsigned mask = const_state->image_dims.mask;
-
-      while (mask) {
-         struct pipe_image_view *img;
-         struct fd_resource *rsc;
-         unsigned index = u_bit_scan(&mask);
-         unsigned off = const_state->image_dims.off[index];
-
-         img = &si->si[index];
-         rsc = fd_resource(img->resource);
-
-         dims[off + 0] = util_format_get_blocksize(img->format);
-         if (img->resource->target != PIPE_BUFFER) {
-            struct fdl_slice *slice = fd_resource_slice(rsc, img->u.tex.level);
-            /* note for 2d/cube/etc images, even if re-interpreted
-             * as a different color format, the pixel size should
-             * be the same, so use original dimensions for y and z
-             * stride:
-             */
-            dims[off + 1] = fd_resource_pitch(rsc, img->u.tex.level);
-            /* see corresponding logic in fd_resource_offset(): */
-            if (rsc->layout.layer_first) {
-               dims[off + 2] = rsc->layout.layer_size;
-            } else {
-               dims[off + 2] = slice->size0;
-            }
-         } else {
-            /* For buffer-backed images, the log2 of the format's
-             * bytes-per-pixel is placed on the 2nd slot. This is useful
-             * when emitting image_size instructions, for which we need
-             * to divide by bpp for image buffers. Since the bpp
-             * can only be power-of-two, the division is implemented
-             * as a SHR, and for that it is handy to have the log2 of
-             * bpp as a constant. (log2 = first-set-bit - 1)
-             */
-            dims[off + 1] = ffs(dims[off + 0]) - 1;
-         }
-      }
-      uint32_t size = MIN2(ARRAY_SIZE(dims), v->constlen * 4 - offset * 4);
-
-      emit_const_user(ring, v, offset * 4, size, dims);
    }
 }
 
@@ -420,12 +379,6 @@ emit_common_consts(const struct ir3_shader_variant *v,
       ir3_emit_ubos(ctx, v, ring, constbuf);
       if (shader_dirty)
          ir3_emit_immediates(v, ring);
-   }
-
-   if (dirty & (FD_DIRTY_SHADER_PROG | FD_DIRTY_SHADER_IMAGE)) {
-      struct fd_shaderimg_stateobj *si = &ctx->shaderimg[t];
-      ring_wfi(ctx->batch, ring);
-      ir3_emit_image_dims(ctx->screen, v, ring, si);
    }
 }
 
@@ -582,7 +535,7 @@ ir3_build_driver_params_cs(const struct ir3_shader_variant *v,
 static inline void
 ir3_emit_cs_driver_params(const struct ir3_shader_variant *v,
                           struct fd_ringbuffer *ring, struct fd_context *ctx,
-                          const struct pipe_grid_info *info)
+                          const struct pipe_grid_info *info, bool flush_writes)
    assert_dt
 {
    /* a3xx/a4xx can inject these directly */
@@ -621,6 +574,9 @@ ir3_emit_cs_driver_params(const struct ir3_shader_variant *v,
          ctx->screen->mem_to_mem(ring, buffer, buffer_offset, info->indirect,
                                  info->indirect_offset, 3);
 
+         if (flush_writes)
+            OUT_PKT7(ring, CP_WAIT_MEM_WRITES, 0);
+
          emit_const_prsc(ring, v, offset * 4, buffer_offset, size, buffer);
 
          pipe_resource_reference(&buffer, NULL);
@@ -640,5 +596,5 @@ ir3_emit_cs_consts(const struct ir3_shader_variant *v,
 
    emit_common_consts(v, ring, ctx, MESA_SHADER_COMPUTE);
 
-   ir3_emit_cs_driver_params(v, ring, ctx, info);
+   ir3_emit_cs_driver_params(v, ring, ctx, info, true);
 }

@@ -37,6 +37,7 @@
 #include "pan_samples.h"
 
 #include "util/bitscan.h"
+#include "poly/geometry.h"
 #include "vk_descriptor_update_template.h"
 #include "vk_format.h"
 #include "vk_synchronization.h"
@@ -275,7 +276,8 @@ panvk_per_arch(EndCommandBuffer)(VkCommandBuffer commandBuffer)
 }
 
 static void
-add_execution_dependency(uint32_t wait_masks[static PANVK_SUBQUEUE_COUNT],
+add_execution_dependency(struct panvk_device *dev,
+                         uint32_t wait_masks[static PANVK_SUBQUEUE_COUNT],
                          VkPipelineStageFlags2 src_stages,
                          VkPipelineStageFlags2 dst_stages)
 {
@@ -283,7 +285,8 @@ add_execution_dependency(uint32_t wait_masks[static PANVK_SUBQUEUE_COUNT],
    uint32_t src_subqueues = 0;
    uint32_t dst_subqueues = 0;
    for (uint32_t i = 0; i < PANVK_SUBQUEUE_COUNT; i++) {
-      const VkPipelineStageFlags2 subqueue_stages = panvk_get_subqueue_stages(i);
+      const VkPipelineStageFlags2 subqueue_stages =
+         panvk_get_subqueue_stages(dev, i);
       if (src_stages & subqueue_stages)
          src_subqueues |= BITFIELD_BIT(i);
       if (dst_stages & subqueue_stages)
@@ -306,7 +309,7 @@ add_execution_dependency(uint32_t wait_masks[static PANVK_SUBQUEUE_COUNT],
           * load/store operations are synchronized with the LS scoreboard
           * immediately after the read, so no need to wait in that case.
           */
-         if ((src_stages & panvk_get_subqueue_stages(i)) ==
+         if ((src_stages & panvk_get_subqueue_stages(dev, i)) ==
              VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT)
             wait_mask &= ~BITFIELD_BIT(i);
          break;
@@ -388,13 +391,14 @@ add_memory_dependency(struct panvk_cache_flush_info *cache_flush,
 }
 
 static void
-collect_cache_flush_info(enum panvk_subqueue_id subqueue,
+collect_cache_flush_info(struct panvk_device *dev,
+                         enum panvk_subqueue_id subqueue,
                          struct panvk_cache_flush_info *cache_flush,
                          VkAccessFlags2 src_access, VkAccessFlags2 dst_access)
 {
    /* limit access to the subqueue and host */
    const VkPipelineStageFlags2 subqueue_stages =
-      panvk_get_subqueue_stages(subqueue) | VK_PIPELINE_STAGE_2_HOST_BIT;
+      panvk_get_subqueue_stages(dev, subqueue) | VK_PIPELINE_STAGE_2_HOST_BIT;
    src_access = vk_filter_src_access_flags2(subqueue_stages, src_access);
    dst_access = vk_filter_dst_access_flags2(subqueue_stages, dst_access);
 
@@ -408,7 +412,7 @@ collect_cs_deps(struct panvk_cmd_buffer *cmdbuf, const VkDependencyInfo *info,
 {
    struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
    uint32_t wait_masks[PANVK_SUBQUEUE_COUNT] = {0};
-   add_execution_dependency(wait_masks, src.stages, dst.stages);
+   add_execution_dependency(dev, wait_masks, src.stages, dst.stages);
 
    if (cmdbuf->state.gfx.render.tiler || inherits_render_ctx(cmdbuf)) {
       if (info->dependencyFlags & VK_DEPENDENCY_BY_REGION_BIT) {
@@ -435,8 +439,23 @@ collect_cs_deps(struct panvk_cmd_buffer *cmdbuf, const VkDependencyInfo *info,
       /* skip the tiler subqueue self-wait because we use the same
        * scoreboard slot for the idvs jobs
        */
-      wait_masks[PANVK_SUBQUEUE_VERTEX_TILER] &=
-         ~BITFIELD_BIT(PANVK_SUBQUEUE_VERTEX_TILER);
+      if (wait_masks[PANVK_SUBQUEUE_VERTEX_TILER] &
+          BITFIELD_BIT(PANVK_SUBQUEUE_VERTEX_TILER)) {
+         /* the self-wait is still needed to synchronize across subqueues
+          * though, so we can't drop it if any other subqueues wait on the
+          * tiler subqueue
+          */
+         bool self_wait_needed = false;
+         for (uint32_t i = 0; i < PANVK_SUBQUEUE_COUNT; i++) {
+            if (i != PANVK_SUBQUEUE_VERTEX_TILER)
+               self_wait_needed |=
+                  wait_masks[i] & BITFIELD_BIT(PANVK_SUBQUEUE_VERTEX_TILER);
+         }
+
+         if (!self_wait_needed)
+            wait_masks[PANVK_SUBQUEUE_VERTEX_TILER] &=
+               ~BITFIELD_BIT(PANVK_SUBQUEUE_VERTEX_TILER);
+      }
    }
 
    for (uint32_t i = 0; i < PANVK_SUBQUEUE_COUNT; i++) {
@@ -448,7 +467,7 @@ collect_cs_deps(struct panvk_cmd_buffer *cmdbuf, const VkDependencyInfo *info,
          deps->src[i].wait_sb_mask |= dev->csf.sb.all_iters_mask;
       }
 
-      collect_cache_flush_info(i, &deps->src[i].cache_flush, src.access,
+      collect_cache_flush_info(dev, i, &deps->src[i].cache_flush, src.access,
                                dst.access);
 
       deps->dst[i].wait_subqueue_mask |= wait_masks[i];
@@ -721,6 +740,7 @@ panvk_per_arch(CmdPipelineBarrier2)(VkCommandBuffer commandBuffer,
                                     const VkDependencyInfo *pDependencyInfo)
 {
    VK_FROM_HANDLE(panvk_cmd_buffer, cmdbuf, commandBuffer);
+   struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
    struct panvk_cs_deps deps = {0};
 
    panvk_per_arch(add_cs_deps)(cmdbuf, pDependencyInfo, &deps, false);
@@ -736,12 +756,50 @@ panvk_per_arch(CmdPipelineBarrier2)(VkCommandBuffer commandBuffer,
       return;
    }
 
-   panvk_per_arch(collect_crc_invalidation_deps)(pDependencyInfo, &deps,
+   panvk_per_arch(collect_crc_invalidation_deps)(dev, pDependencyInfo, &deps,
                                                  crc_addrs);
 
    panvk_per_arch(emit_barrier)(cmdbuf, deps);
 
    STACK_ARRAY_FINISH(crc_addrs);
+}
+
+VkResult
+panvk_per_arch(cmd_init_poly_heap)(struct panvk_cmd_buffer *cmdbuf)
+{
+   struct panvk_device *dev = to_panvk_device(cmdbuf->vk.base.device);
+
+   /* The first time poly_heap is used in a primary command buffer, we need to
+    * reset the heap bottom position.
+    *
+    * For secondary command buffers, the heap may already have been
+    * initialized in the primary, so we don't want to reset it again. If not,
+    * it will be initialized in the primary before executing the secondary. */
+   if (cmdbuf->state.uses_poly_heap)
+      return VK_SUCCESS;
+
+   if (cmdbuf->vk.level == VK_COMMAND_BUFFER_LEVEL_SECONDARY) {
+      cmdbuf->state.uses_poly_heap = true;
+      return VK_SUCCESS;
+   }
+
+   VkResult result = panvk_per_arch(device_init_poly_heap)(dev);
+   if (result != VK_SUCCESS)
+      return result;
+
+   struct cs_builder *b = panvk_get_cs_builder(cmdbuf, PANVK_SUBQUEUE_COMPUTE);
+
+   struct cs_index addr = cs_scratch_reg64(b, 0);
+   struct cs_index zero = cs_scratch_reg32(b, 2);
+
+   cs_move64_to(b, addr, panvk_priv_mem_dev_addr(dev->poly_heap.state));
+   cs_move32_to(b, zero, 0);
+   cs_store32(b, zero, addr, offsetof(struct poly_heap, bottom));
+   cs_flush_stores(b);
+
+   cmdbuf->state.uses_poly_heap = true;
+
+   return VK_SUCCESS;
 }
 
 static struct cs_buffer
@@ -1024,6 +1082,14 @@ panvk_per_arch(CmdExecuteCommands)(VkCommandBuffer commandBuffer,
    for (uint32_t i = 0; i < commandBufferCount; i++) {
       VK_FROM_HANDLE(panvk_cmd_buffer, secondary, pCommandBuffers[i]);
 
+      if (secondary->state.uses_poly_heap) {
+         VkResult result = panvk_per_arch(cmd_init_poly_heap)(primary);
+         if (result != VK_SUCCESS) {
+            vk_command_buffer_set_error(&primary->vk, result);
+            break;
+         }
+      }
+
       /* make sure the CS context is setup properly
        * to inherit the primary command buffer state
        */
@@ -1190,7 +1256,8 @@ panvk_per_arch(image_barrier_crc_header_addr)(
 }
 
 void
-panvk_per_arch(collect_crc_invalidation_deps)(const VkDependencyInfo *info,
+panvk_per_arch(collect_crc_invalidation_deps)(struct panvk_device *dev,
+                                              const VkDependencyInfo *info,
                                               struct panvk_cs_deps *deps,
                                               uint64_t *crc_addrs)
 {
@@ -1228,9 +1295,9 @@ panvk_per_arch(collect_crc_invalidation_deps)(const VkDependencyInfo *info,
                            barrier->dstQueueFamilyIndex);
 
       deps->crc.src_subqueue_mask |=
-         vk_stages_to_subqueue_mask(src.stages, SYNC_SCOPE_FIRST);
+         vk_stages_to_subqueue_mask(dev, src.stages, SYNC_SCOPE_FIRST);
       deps->crc.dst_subqueue_mask |=
-         vk_stages_to_subqueue_mask(dst.stages, SYNC_SCOPE_SECOND);
+         vk_stages_to_subqueue_mask(dev, dst.stages, SYNC_SCOPE_SECOND);
    }
 }
 

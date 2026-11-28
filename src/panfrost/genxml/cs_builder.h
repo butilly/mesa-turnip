@@ -237,7 +237,6 @@ cs_builder_init(struct cs_builder *b, const struct cs_builder_conf *conf,
                 struct cs_buffer root_buffer)
 {
    memset(b, 0, sizeof(*b));
-   util_dynarray_init(&b->blocks.instrs, NULL);
    b->conf = *conf;
    b->root_chunk.buffer = root_buffer;
    b->cur_chunk.buffer = root_buffer;
@@ -958,6 +957,13 @@ cs_wait_slot(struct cs_builder *b, unsigned slot)
    cs_wait_slots(b, BITFIELD_BIT(slot));
 }
 
+/* Shorthand for `cs_wait_slot(b, b->conf.ls_sb_slot)` */
+static inline void
+cs_wait_ls(struct cs_builder *b)
+{
+   cs_wait_slot(b, b->conf.ls_sb_slot);
+}
+
 static inline void
 cs_flush_load_to(struct cs_builder *b, struct cs_index to, uint16_t mask)
 {
@@ -970,7 +976,7 @@ cs_flush_load_to(struct cs_builder *b, struct cs_index to, uint16_t mask)
    for (unsigned i = reg; i < reg + count; i++) {
       if ((mask & BITFIELD_BIT(i - reg)) &&
           BITSET_TEST(ls_tracker->pending_loads, i)) {
-         cs_wait_slots(b, BITFIELD_BIT(b->conf.ls_sb_slot));
+         cs_wait_ls(b);
          break;
       }
    }
@@ -983,7 +989,7 @@ cs_flush_loads(struct cs_builder *b)
    assert(ls_tracker != NULL);
 
    if (!BITSET_IS_EMPTY(ls_tracker->pending_loads))
-      cs_wait_slots(b, BITFIELD_BIT(b->conf.ls_sb_slot));
+      cs_wait_ls(b);
 }
 
 static inline void
@@ -993,7 +999,7 @@ cs_flush_stores(struct cs_builder *b)
    assert(ls_tracker != NULL);
 
    if (ls_tracker->pending_stores)
-      cs_wait_slots(b, BITFIELD_BIT(b->conf.ls_sb_slot));
+      cs_wait_ls(b);
 }
 
 static inline void
@@ -1415,7 +1421,7 @@ cs_maybe_end(struct cs_builder *b, struct cs_maybe_state *state,
    bool new_stores =
       b->cur_ls_tracker->pending_stores && !state->orig_ls_state->pending_stores;
    if (!BITSET_IS_EMPTY(new_loads) || new_stores)
-      cs_wait_slots(b, BITFIELD_BIT(b->conf.ls_sb_slot));
+      cs_wait_ls(b);
 
    /* Restore the original ls tracker state */
    b->cur_ls_tracker = state->orig_ls_state;
@@ -2253,6 +2259,12 @@ cs_req_res(struct cs_builder *b, uint32_t res_mask)
       I.tiler = res_mask & CS_TILER_RES;
       I.idvs = res_mask & CS_IDVS_RES;
       I.fragment = res_mask & CS_FRAG_RES;
+#if PAN_ARCH >= 11
+      I.rt = false;
+#endif
+#if PAN_ARCH >= 14
+      I.neural = false;
+#endif
    }
 }
 
@@ -2608,11 +2620,18 @@ struct cs_function_ctx {
 struct cs_function {
    struct cs_block block;
    struct cs_dirty_tracker dirty;
+   BITSET_DECLARE(dont_restore, 256);
    struct cs_function_ctx ctx;
    unsigned dump_size;
    uint64_t address;
    uint32_t length;
 };
+
+static inline void
+cs_function_dont_restore(struct cs_function *func, struct cs_index range)
+{
+   BITSET_SET_COUNT(func->dont_restore, range.reg, range.size);
+}
 
 static inline struct cs_function *
 cs_function_start(struct cs_builder *b,
@@ -2642,6 +2661,7 @@ cs_function_end(struct cs_builder *b,
    struct cs_index ranges[SAVE_RESTORE_MAX_OPS];
    uint16_t masks[SAVE_RESTORE_MAX_OPS];
    unsigned num_ranges = 0;
+
    uint32_t num_instrs =
       util_dynarray_num_elements(&b->blocks.instrs, uint64_t);
    struct cs_index addr_reg = {
@@ -2662,9 +2682,12 @@ cs_function_end(struct cs_builder *b,
 
    /* Try to minimize number of load/store by grouping them */
    unsigned nregs = b->conf.nr_registers - b->conf.nr_kernel_registers;
+   BITSET_DECLARE(save_regs, 256);
    unsigned pos, last = 0;
 
-   BITSET_FOREACH_SET(pos, function->dirty.regs, nregs) {
+   BITSET_ANDNOT(save_regs, function->dirty.regs, function->dont_restore);
+
+   BITSET_FOREACH_SET(pos, save_regs, nregs) {
       unsigned range = MIN2(nregs - pos, 16);
       unsigned word = BITSET_BITWORD(pos);
       unsigned bit = pos % BITSET_WORDBITS;
@@ -2673,9 +2696,9 @@ cs_function_end(struct cs_builder *b,
       if (pos < last)
          continue;
 
-      masks[num_ranges] = function->dirty.regs[word] >> bit;
+      masks[num_ranges] = save_regs[word] >> bit;
       if (remaining_bits < range)
-         masks[num_ranges] |= function->dirty.regs[word + 1] << remaining_bits;
+         masks[num_ranges] |= save_regs[word + 1] << remaining_bits;
       masks[num_ranges] &= BITFIELD_MASK(range);
 
       ranges[num_ranges] =
@@ -2684,13 +2707,11 @@ cs_function_end(struct cs_builder *b,
       last = pos + range;
    }
 
-   function->dump_size = BITSET_COUNT(function->dirty.regs) * sizeof(uint32_t);
+   function->dump_size = BITSET_COUNT(save_regs) * sizeof(uint32_t);
 
-   /* Make sure the current chunk is able to accommodate the block
-    * instructions as well as the preamble and postamble.
-    * Adding 4 instructions (2x wait_slot and the move for the address) as
-    * the move might actually be translated to two MOVE32 instructions. */
-   num_instrs += (num_ranges * 2) + 4;
+   /* (preamble + postamble) * (load_addr + wait + store_reg + wait) */
+   if (num_ranges)
+      num_instrs += 2 * (num_ranges + 3);
 
    /* Align things on a cache-line in case the buffer contains more than one
     * function (64 bytes = 8 instructions). */
@@ -2699,8 +2720,8 @@ cs_function_end(struct cs_builder *b,
    if (!cs_reserve_instrs(b, padded_num_instrs))
       return;
 
-   function->address =
-      b->cur_chunk.buffer.gpu + (b->cur_chunk.pos * sizeof(uint64_t));
+   const uint32_t start_pos = b->cur_chunk.pos;
+   function->address = b->cur_chunk.buffer.gpu + start_pos * sizeof(uint64_t);
 
    /* Preamble: backup modified registers */
    if (num_ranges > 0) {
@@ -2739,6 +2760,8 @@ cs_function_end(struct cs_builder *b,
 
       cs_flush_loads(b);
    }
+
+   assert(b->cur_chunk.pos - start_pos == num_instrs);
 
    /* Fill the rest of the buffer with NOPs. */
    for (; num_instrs < padded_num_instrs; num_instrs++)

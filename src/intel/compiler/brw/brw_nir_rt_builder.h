@@ -261,7 +261,7 @@ brw_nir_btd_return(struct nir_builder *b)
    brw_nir_btd_spawn(b, resume_addr);
 }
 
-static inline void
+static inline nir_def *
 brw_nir_trace_ray(nir_builder *b,
                   nir_def *globals,
                   nir_def *bvh_level,
@@ -275,31 +275,31 @@ brw_nir_trace_ray(nir_builder *b,
                                   nir_u2u32(b, trace_ray_control),
                                   nir_u2u32(b, bvh_level));
 
-   nir_trace_ray_intel(b,
-                       efficient_64bit ?
-                       /* BSpec 73321 */
-                       (synchronous ? globals : nir_ior_imm(b, globals, 0x1)) :
-                       globals,
-                       /* ATSM PRMs, Volume 2d: Command Reference: Structures, Trace Ray Message
-                        *    "The maximum number of StackIDs can be 2^11 - 1."
-                        * Xe2+, Bspec 64643:
-                        *    "StackID": The maximum number of StackIDs can be 2^12- 1.
-                        *
-                        * When doing synchronous traversal, the HW implicitly
-                        * computes the stack_id using the following formula :
-                        *
-                        *    EUID[3:0] & THREAD_ID[2:0] & SIMD_LANE_ID[3:0]
-                        *
-                        * Only in the asynchronous case we need to set the
-                        * stack_id given from the payload register.
-                        *
-                        */
-                       synchronous ? payload_ldw :
-                       nir_bfi(b,
-                               nir_imm_int(b, devinfo->ver >= 20 ? 0x0fff0000 : 0x07ff0000),
-                               nir_u2u32(b, nir_load_btd_stack_id_intel(b)),
-                               payload_ldw),
-                       .synchronous = synchronous);
+   return nir_trace_ray_intel(
+      b, devinfo->ver >= 35 ? 16 : 32,
+      efficient_64bit ?
+      /* BSpec 73321 */
+      (synchronous ? globals : nir_ior_imm(b, globals, 0x1)) :
+      globals,
+      /* ATSM PRMs, Volume 2d: Command Reference: Structures, Trace Ray Message
+       *    "The maximum number of StackIDs can be 2^11 - 1."
+       * Xe2+, Bspec 64643:
+       *    "StackID": The maximum number of StackIDs can be 2^12- 1.
+       *
+       * When doing synchronous traversal, the HW implicitly computes the
+       * stack_id using the following formula :
+       *
+       *    EUID[3:0] & THREAD_ID[2:0] & SIMD_LANE_ID[3:0]
+       *
+       * Only in the asynchronous case we need to set the stack_id given from
+       * the payload register.
+       */
+      synchronous ? payload_ldw :
+      nir_bfi(b,
+              nir_imm_int(b, devinfo->ver >= 20 ? 0x0fff0000 : 0x07ff0000),
+              nir_u2u32(b, nir_load_btd_stack_id_intel(b)),
+              payload_ldw),
+      .synchronous = synchronous);
 }
 
 static inline void
@@ -660,10 +660,9 @@ brw_nir_rt_load_tri_bary_from_addr(nir_builder *b,
    if (devinfo->ver >= 30) {
       nir_def *u = nir_iand_imm(b, nir_channel(b, data, 1), 0xffffff);
       nir_def *v = nir_iand_imm(b, nir_channel(b, data, 2), 0xffffff);
-      const unsigned bits[1] = {24};
       tri_bary = nir_vec2(b,
-                          nir_format_unorm_to_float_precise(b, u, bits),
-                          nir_format_unorm_to_float_precise(b, v, bits));
+                          nir_format_unorm24_to_float(b, u),
+                          nir_format_unorm24_to_float(b, v));
    } else {
       tri_bary = nir_channels(b, data, 0x6);
    }
@@ -869,7 +868,6 @@ brw_nir_rt_generate_hit_addr(nir_builder *b, nir_def *stack_addr, nir_def *t_val
     *   committed.leaf_type       = potential.leaf_type;
     *   committed.bvh_level       = BRW_RT_BVH_LEVEL_OBJECT;
     *   committed.front_face      = false;
-    *   committed.prim_leaf_index = 0;
     *   committed.done            = false;
     */
    nir_def *committed_hit_dwords_0_3 =
@@ -880,7 +878,7 @@ brw_nir_rt_generate_hit_addr(nir_builder *b, nir_def *stack_addr, nir_def *t_val
                nir_imm_float(b, 0.0f),
                nir_imm_float(b, 0.0f),
                nir_ior_imm(b,
-                           nir_iand_imm(b, nir_channel(b, potential_hit_dwords_0_3, 3), 0x000e0000) /* leaf type */,
+                           nir_iand_imm(b, nir_channel(b, potential_hit_dwords_0_3, 3), 0x00fe0000),
                            (0x1 << 16)                     /* valid */ |
                            (BRW_RT_BVH_LEVEL_OBJECT << 24) /* BVH level */));
    brw_nir_rt_store(b, committed_addr, 16, committed_hit_dwords_0_3, 0xf /* write_mask */);

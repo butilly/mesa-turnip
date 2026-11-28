@@ -42,15 +42,16 @@ create_mem_or_close_bo(struct nvkmd_nouveau_dev *dev,
    }
 
    /* It should be the caller's responsibility to ensure proper alignment and
-    * this function should be kept pretty simple. However, because dma_buf
+    * this function should be kept pretty simple. However, because some dma_buf
     * imports call this with 0 alignment, we need a minimum alignment for the
     * memory object initialization. For other cases, we just pass in the given
     * alignment along the chain. There's no need to re-align here because the
     * VA allocation at the end aligns the data to va_align_B.
     */
    va_align_B = MAX2(dev->base.pdev->bind_align_B, va_align_B);
+
    nvkmd_mem_init(&dev->base, &mem->base, &nvkmd_nouveau_mem_ops,
-                  mem_flags, size_B, va_align_B);
+                  mem_flags, size_B, dev->base.pdev->bind_align_B);
    mem->bo = bo;
 
    result = nvkmd_dev_alloc_va(&dev->base, log_obj,
@@ -179,7 +180,8 @@ nvkmd_nouveau_alloc_tiled_mem(struct nvkmd_dev *_dev,
 VkResult
 nvkmd_nouveau_import_dma_buf(struct nvkmd_dev *_dev,
                              struct vk_object_base *log_obj,
-                             int fd, struct nvkmd_mem **mem_out)
+                             int fd, uint64_t va_align_B,
+                             struct nvkmd_mem **mem_out)
 {
    struct nvkmd_nouveau_dev *dev = nvkmd_nouveau_dev(_dev);
 
@@ -207,7 +209,7 @@ nvkmd_nouveau_import_dma_buf(struct nvkmd_dev *_dev,
 
    return create_mem_or_close_bo(dev, log_obj, flags, bo,
                                  0 /* va_flags */,
-                                 0 /* va_align_B */,
+                                 va_align_B,
                                  mem_out);
 }
 

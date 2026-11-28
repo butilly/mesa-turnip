@@ -132,7 +132,7 @@ run_model(TfLiteModel *model, enum executor executor, void ***input, size_t *num
    TfLiteInterpreter *interpreter = TfLiteInterpreterCreateWithSelectedOps(model, options);
    assert(interpreter);
 
-   EXPECT_EQ(TfLiteInterpreterAllocateTensors(interpreter), kTfLiteOk);
+   ASSERT_EQ(TfLiteInterpreterAllocateTensors(interpreter), kTfLiteOk);
 
    *num_inputs = TfLiteInterpreterGetInputTensorCount(interpreter);
    if (*input == NULL)
@@ -215,6 +215,10 @@ run_model(TfLiteModel *model, enum executor executor, void ***input, size_t *num
       }
 
       switch (output_tensor->type) {
+      case kTfLiteInt64: {
+         (*output_sizes)[i] = output_tensor->bytes / 8;
+         break;
+      }
       case kTfLiteInt32:
       case kTfLiteUInt32:
       case kTfLiteFloat32: {

@@ -104,7 +104,7 @@ gather_fs_frag_pos(nir_builder *b, nir_intrinsic_instr *intr, void *data)
          ((comp_mask & 0x2 ? nir_def_bits_used(nir_scalar_resolved(&intr->def, 1)) == 0x1 : 0) << 1);
 
       state->has_pixel_coord = true;
-      state->frag_pos_integer_uses |= comp_mask;
+      state->frag_pos_integer_uses |= comp_mask & ~only_bit0_uses;
       state->frag_pos_only_bit0_uses |= only_bit0_uses;
       return false;
    }
@@ -129,8 +129,9 @@ get_quad_pos(nir_builder *b, bool is_float)
 
    /* quad_pos.x = subgroup_invocation & 0x1;
     * quad_pos.y = (subgroup_invocation >> 1) & 0x1;
+    * We only care about the lowest bit of the result, so the "& 0x1" can be skipped.
     */
-   nir_def *quad_pos = nir_iand_imm(b, nir_vec2(b, invoc_id, nir_ushr_imm(b, invoc_id, 1)), 0x1);
+   nir_def *quad_pos = nir_vec2(b, invoc_id, nir_ushr_imm(b, invoc_id, 1));
 
    return is_float ? nir_u2f32(b, quad_pos) : quad_pos;
 }
@@ -182,9 +183,6 @@ lower_fs_frag_pos(nir_builder *b, nir_intrinsic_instr *intr, void *data)
          nir_def_replace(&intr->def, select_frag_pos_bit0_or_sysval(state, b, nir_load_frag_coord_xy(b), true));
          return true;
       }
-
-      /* quad_pos requires a non-float use. */
-      assert(!state->dynamic_quad_pos_comp_mask);
       return false;
 
    case nir_intrinsic_load_sample_pos:
@@ -193,7 +191,6 @@ lower_fs_frag_pos(nir_builder *b, nir_intrinsic_instr *intr, void *data)
          nir_def_replace(&intr->def, nir_imm_vec2(b, 0, 0));
       } else {
          nir_def_replace(&intr->def, nir_ffract(b, nir_load_frag_coord_xy(b)));
-         assert(!state->dynamic_quad_pos_comp_mask);
       }
       return true;
 
@@ -202,18 +199,21 @@ lower_fs_frag_pos(nir_builder *b, nir_intrinsic_instr *intr, void *data)
          if (state->select_frag_coord_xy_dynamically) {
             nir_def_replace(&intr->def, nir_bcsel(b, nir_load_use_float_frag_coord_xy_amd(b),
                                                   nir_f2u16(b, nir_load_frag_coord_xy(b)), nir_load_pixel_coord(b)));
-         } else if (state->frag_pos_only_bit0_uses || state->dynamic_quad_pos_comp_mask) {
+         } else if (state->frag_pos_only_bit0_uses) {
             nir_def_replace(&intr->def,
                             select_frag_pos_bit0_or_sysval(state, b, nir_f2u16(b, nir_load_frag_coord_xy(b)), false));
          } else {
             nir_def_replace(&intr->def, nir_f2u16(b, nir_load_frag_coord_xy(b)));
          }
          return true;
-      } else if (state->frag_pos_only_bit0_uses == 0x3) {
+      } else if (state->frag_pos_only_bit0_uses && !state->frag_pos_integer_uses) {
          /* Replacing only one component isn't beneficial since pixel_coord gives us the second
           * component for free, which is why we replace either both components or neither.
           */
          nir_def_replace(&intr->def, get_quad_pos(b, false));
+         return true;
+      } else if (state->dynamic_quad_pos_comp_mask) {
+         nir_def_replace(&intr->def, select_frag_pos_bit0_or_sysval(state, b, nir_load_pixel_coord(b), false));
          return true;
       }
       return false;
@@ -234,6 +234,10 @@ radv_nir_lower_opt_fs_frag_pos(nir_shader *shader, bool vrs_may_be_enabled, bool
     */
    nir_shader_intrinsics_pass(shader, gather_fs_frag_pos, nir_metadata_all, &state);
 
+   /* Make the masks disjoint. */
+   state.frag_pos_only_bit0_uses &= ~(state.frag_pos_float_uses | state.frag_pos_integer_uses);
+   state.frag_pos_integer_uses &= ~state.frag_pos_float_uses;
+
    if (vrs_may_be_enabled) {
       /* VRS changes the size of fragment quads, which means we can't use the subgroup invocation ID
        * to get bit 0 of pixel_coord unconditionally.
@@ -247,18 +251,14 @@ radv_nir_lower_opt_fs_frag_pos(nir_shader *shader, bool vrs_may_be_enabled, bool
     * float or integer doesn't change the number of initialized PS VGPRs, but we can eliminate
     * the conversion from float to integer if we lower to pixel_coord.
     */
-   bool only_one_comp_used_as_integer = !state.frag_pos_float_uses && util_bitcount(state.frag_pos_integer_uses) == 1 &&
-                                        !state.frag_pos_only_bit0_uses;
+   bool only_one_comp_used_as_integer =
+      !state.frag_pos_float_uses && util_bitcount(state.frag_pos_integer_uses) == 1 && !state.frag_pos_only_bit0_uses;
 
    if (always_at_pixel_center) {
       /* fragcoord_xy will be lowered to pixel_coord + 0.5 when it's beneficial. */
       state.frag_pos_integer_uses |= state.frag_pos_float_uses;
       state.frag_pos_float_uses = 0;
    }
-
-   /* Make the masks disjoint. */
-   state.frag_pos_only_bit0_uses &= ~(state.frag_pos_float_uses | state.frag_pos_integer_uses);
-   state.frag_pos_integer_uses &= ~state.frag_pos_float_uses;
 
    /* Lower frag_coord_xy and sample_pos to pixel_coord only if both components are used as integer
     * (because it doesn't reduce initialized PS VGPRs if only one component is used) or if there is
@@ -296,9 +296,19 @@ radv_nir_lower_opt_fs_frag_pos(nir_shader *shader, bool vrs_may_be_enabled, bool
    if (state.dynamic_quad_pos_comp_mask && state.dynamic_quad_pos_comp_mask != state.frag_pos_integer_uses)
       state.dynamic_quad_pos_comp_mask = 0;
 
+   /* select_frag_coord_xy_dynamically is incompatible with dynamic_quad_pos_comp_mask. */
+   if (state.select_frag_coord_xy_dynamically)
+      state.dynamic_quad_pos_comp_mask = 0;
+
    if (!state.frag_pos_only_bit0_uses && !state.lower_to_pixel_coord && !state.lower_to_frag_coord_xy &&
        !state.select_frag_coord_xy_dynamically && !state.dynamic_quad_pos_comp_mask)
       return false;
+
+   /* If lower_to_pixel_coord is true, then frag_pos_only_bit0_uses must already be 0. If it's false,
+    * then sample_pos is lowered to frag_coord_xy and there's no point to frag_pos_only_bit0_uses.
+    */
+   if (state.has_sample_pos)
+      state.frag_pos_only_bit0_uses = 0;
 
    return nir_shader_intrinsics_pass(shader, lower_fs_frag_pos, nir_metadata_control_flow, &state);
 }

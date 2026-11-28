@@ -72,6 +72,9 @@ const VkExternalMemoryHandleTypeFlags opaque_external_flag =
 static const struct vk_instance_extension_table instance_extensions = {
    .KHR_get_physical_device_properties2      = true,
    .KHR_device_group_creation                = true,
+   .KHR_external_memory_capabilities         = true,
+   .KHR_external_semaphore_capabilities      = true,
+   .KHR_external_fence_capabilities          = true,
 #ifdef DZN_USE_WSI_PLATFORM
    .KHR_surface                              = true,
    .KHR_get_surface_capabilities2            = true,
@@ -110,6 +113,7 @@ dzn_physical_device_get_extensions(struct dzn_physical_device *pdev)
       .KHR_draw_indirect_count               = true,
       .KHR_driver_properties                 = true,
       .KHR_dynamic_rendering                 = true,
+      .KHR_external_fence                    = true,
       .KHR_external_memory                   = true,
       .KHR_external_semaphore                = true,
 #ifdef _WIN32
@@ -134,6 +138,7 @@ dzn_physical_device_get_extensions(struct dzn_physical_device *pdev)
       .KHR_shader_float16_int8               = pdev->options4.Native16BitShaderOpsSupported,
       .KHR_shader_float_controls             = true,
       .KHR_shader_integer_dot_product        = true,
+      .KHR_shader_subgroup_extended_types    = true,
       .KHR_spirv_1_4                         = true,
       .KHR_storage_buffer_storage_class      = true,
 #ifdef DZN_USE_WSI_PLATFORM
@@ -144,10 +149,13 @@ dzn_physical_device_get_extensions(struct dzn_physical_device *pdev)
       .KHR_uniform_buffer_standard_layout    = true,
       .EXT_buffer_device_address             = pdev->shader_model >= D3D_SHADER_MODEL_6_6,
       .EXT_debug_marker                      = true,
+      .EXT_depth_clip_control                = true,
       .EXT_descriptor_indexing               = pdev->shader_model >= D3D_SHADER_MODEL_6_6,
 #if defined(_WIN32)
       .EXT_external_memory_host              = pdev->dev13,
 #endif
+      .EXT_host_query_reset                  = true,
+      .EXT_private_data                      = true,
       .EXT_scalar_block_layout               = true,
       .EXT_separate_stencil_usage            = true,
       .EXT_shader_replicated_composites      = true,
@@ -391,7 +399,7 @@ const struct vk_pipeline_cache_object_ops *const dzn_pipeline_cache_import_ops[]
    NULL,
 };
 
-static void
+static bool
 dzn_physical_device_cache_caps(struct dzn_physical_device *pdev)
 {
    D3D_FEATURE_LEVEL checklist[] = {
@@ -407,12 +415,14 @@ dzn_physical_device_cache_caps(struct dzn_physical_device *pdev)
       .pFeatureLevelsRequested = checklist,
    };
 
-   ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_FEATURE_LEVELS, &levels, sizeof(levels));
+   if (FAILED(ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_FEATURE_LEVELS, &levels, sizeof(levels))))
+      return false;
    pdev->feature_level = levels.MaxSupportedFeatureLevel;
 
    static const D3D_SHADER_MODEL valid_shader_models[] = {
       D3D_SHADER_MODEL_6_8 ,D3D_SHADER_MODEL_6_7, D3D_SHADER_MODEL_6_6, D3D_SHADER_MODEL_6_5,
       D3D_SHADER_MODEL_6_4, D3D_SHADER_MODEL_6_3, D3D_SHADER_MODEL_6_2, D3D_SHADER_MODEL_6_1,
+      D3D_SHADER_MODEL_6_0,
    };
    for (UINT i = 0; i < ARRAY_SIZE(valid_shader_models); ++i) {
       D3D12_FEATURE_DATA_SHADER_MODEL shader_model = { valid_shader_models[i] };
@@ -433,6 +443,11 @@ dzn_physical_device_cache_caps(struct dzn_physical_device *pdev)
          break;
       }
    }
+
+   if (pdev->feature_level < D3D_FEATURE_LEVEL_11_0 ||
+       pdev->shader_model < D3D_SHADER_MODEL_6_0 ||
+       pdev->root_sig_version < D3D_ROOT_SIGNATURE_VERSION_1_1)
+      return false;
 
    ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_ARCHITECTURE1, &pdev->architecture, sizeof(pdev->architecture));
    ID3D12Device1_CheckFeatureSupport(pdev->dev, D3D12_FEATURE_D3D12_OPTIONS, &pdev->options, sizeof(pdev->options));
@@ -469,7 +484,7 @@ dzn_physical_device_cache_caps(struct dzn_physical_device *pdev)
                        VK_QUEUE_TRANSFER_BIT,
          .queueCount = 4,
          .timestampValidBits = 64,
-         .minImageTransferGranularity = { 0, 0, 0 },
+         .minImageTransferGranularity = { 1, 1, 1 },
       },
       .desc = {
          .Type = D3D12_COMMAND_LIST_TYPE_DIRECT,
@@ -482,7 +497,7 @@ dzn_physical_device_cache_caps(struct dzn_physical_device *pdev)
                        VK_QUEUE_TRANSFER_BIT,
          .queueCount = 8,
          .timestampValidBits = 64,
-         .minImageTransferGranularity = { 0, 0, 0 },
+         .minImageTransferGranularity = { 1, 1, 1 },
       },
       .desc = {
          .Type = D3D12_COMMAND_LIST_TYPE_COMPUTE,
@@ -498,15 +513,20 @@ dzn_physical_device_cache_caps(struct dzn_physical_device *pdev)
       .NodeMask = 0,
    };
 
-   ID3D12CommandQueue *cmdqueue;
-   ID3D12Device1_CreateCommandQueue(pdev->dev, &queue_desc,
-                                    &IID_ID3D12CommandQueue,
-                                    (void **)&cmdqueue);
+   ID3D12CommandQueue *cmdqueue = NULL;
+   if (FAILED(ID3D12Device1_CreateCommandQueue(pdev->dev, &queue_desc,
+                                               &IID_ID3D12CommandQueue,
+                                               (void **)&cmdqueue)))
+      return false;
 
-   uint64_t ts_freq;
-   ID3D12CommandQueue_GetTimestampFrequency(cmdqueue, &ts_freq);
-   pdev->timestamp_period = 1000000000.0f / ts_freq;
+   uint64_t ts_freq = 0;
+   HRESULT hr = ID3D12CommandQueue_GetTimestampFrequency(cmdqueue, &ts_freq);
    ID3D12CommandQueue_Release(cmdqueue);
+   if (FAILED(hr) || !ts_freq)
+      return false;
+
+   pdev->timestamp_period = 1000000000.0f / ts_freq;
+   return true;
 }
 
 static void
@@ -670,7 +690,7 @@ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
 
    *features = (struct vk_features) {
       .robustBufferAccess = true, /* This feature is mandatory */
-      .fullDrawIndexUint32 = false,
+      .fullDrawIndexUint32 = true,
       .imageCubeArray = true,
       .independentBlend = true,
       .geometryShader = true,
@@ -681,6 +701,7 @@ dzn_physical_device_get_features(const struct dzn_physical_device *pdev,
       .multiDrawIndirect = true,
       .drawIndirectFirstInstance = true,
       .depthClamp = true,
+      .depthClipControl = true,
       .depthBiasClamp = true,
       .fillModeNonSolid = true,
       .depthBounds = pdev->options2.DepthBoundsTestSupported,
@@ -818,6 +839,10 @@ dzn_physical_device_get_properties(const struct dzn_physical_device *pdev,
    struct dzn_instance *instance = container_of(pdev->vk.instance, struct dzn_instance, vk);
    /* minimum from the D3D and Vulkan specs */
    const VkSampleCountFlags supported_sample_counts = VK_SAMPLE_COUNT_1_BIT | VK_SAMPLE_COUNT_4_BIT;
+   const uint32_t max_view_descs = pdev->options19.MaxViewDescriptorHeapSize;
+   const uint32_t max_sampler_descs =
+      pdev->options19.MaxSamplerDescriptorHeapSizeWithStaticSamplers;
+   const uint32_t max_uab_descs = MAX2(max_view_descs, max_sampler_descs);
 
    VkPhysicalDeviceType devtype = VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
    if (pdev->desc.is_warp)
@@ -844,7 +869,7 @@ dzn_physical_device_get_properties(const struct dzn_physical_device *pdev,
       /* from here on, we simply use the minimum values from the spec for now */
       .maxTexelBufferElements = 1 << D3D12_REQ_BUFFER_RESOURCE_TEXEL_COUNT_2_TO_EXP,
       .maxUniformBufferRange = D3D12_REQ_CONSTANT_BUFFER_ELEMENT_COUNT * D3D12_STANDARD_VECTOR_SIZE * sizeof(float),
-      .maxStorageBufferRange = 1 << D3D12_REQ_BUFFER_RESOURCE_TEXEL_COUNT_2_TO_EXP,
+      .maxStorageBufferRange = (1u << D3D12_REQ_BUFFER_RESOURCE_TEXEL_COUNT_2_TO_EXP) * sizeof(uint32_t),
       .maxPushConstantsSize = 128,
       .maxMemoryAllocationCount = 4096,
       .maxSamplerAllocationCount = 4000,
@@ -853,31 +878,31 @@ dzn_physical_device_get_properties(const struct dzn_physical_device *pdev,
       .maxBoundDescriptorSets = MAX_SETS,
       .maxPerStageDescriptorSamplers =
          pdev->options.ResourceBindingTier == D3D12_RESOURCE_BINDING_TIER_1 ?
-         16u : MAX_DESCS_PER_SAMPLER_HEAP,
+         16u : max_sampler_descs,
       .maxPerStageDescriptorUniformBuffers =
          pdev->options.ResourceBindingTier <= D3D12_RESOURCE_BINDING_TIER_2 ?
-         14u : MAX_DESCS_PER_CBV_SRV_UAV_HEAP,
+         14u : max_view_descs,
       .maxPerStageDescriptorStorageBuffers =
          pdev->options.ResourceBindingTier <= D3D12_RESOURCE_BINDING_TIER_2 ?
-         64u : MAX_DESCS_PER_CBV_SRV_UAV_HEAP,
+         64u : max_view_descs,
       .maxPerStageDescriptorSampledImages =
          pdev->options.ResourceBindingTier == D3D12_RESOURCE_BINDING_TIER_1 ?
-         128u : MAX_DESCS_PER_CBV_SRV_UAV_HEAP,
+         128u : max_view_descs,
       .maxPerStageDescriptorStorageImages =
          pdev->options.ResourceBindingTier <= D3D12_RESOURCE_BINDING_TIER_2 ?
-         64u : MAX_DESCS_PER_CBV_SRV_UAV_HEAP,
+         64u : max_view_descs,
       .maxPerStageDescriptorInputAttachments =
          pdev->options.ResourceBindingTier == D3D12_RESOURCE_BINDING_TIER_1 ?
-         128u : MAX_DESCS_PER_CBV_SRV_UAV_HEAP,
-      .maxPerStageResources = MAX_DESCS_PER_CBV_SRV_UAV_HEAP,
-      .maxDescriptorSetSamplers = MAX_DESCS_PER_SAMPLER_HEAP,
-      .maxDescriptorSetUniformBuffers = MAX_DESCS_PER_CBV_SRV_UAV_HEAP,
+         128u : max_view_descs,
+      .maxPerStageResources = max_view_descs,
+      .maxDescriptorSetSamplers = max_sampler_descs,
+      .maxDescriptorSetUniformBuffers = max_view_descs,
       .maxDescriptorSetUniformBuffersDynamic = MAX_DYNAMIC_UNIFORM_BUFFERS,
-      .maxDescriptorSetStorageBuffers = MAX_DESCS_PER_CBV_SRV_UAV_HEAP,
+      .maxDescriptorSetStorageBuffers = max_view_descs,
       .maxDescriptorSetStorageBuffersDynamic = MAX_DYNAMIC_STORAGE_BUFFERS,
-      .maxDescriptorSetSampledImages = MAX_DESCS_PER_CBV_SRV_UAV_HEAP,
-      .maxDescriptorSetStorageImages = MAX_DESCS_PER_CBV_SRV_UAV_HEAP,
-      .maxDescriptorSetInputAttachments = MAX_DESCS_PER_CBV_SRV_UAV_HEAP,
+      .maxDescriptorSetSampledImages = max_view_descs,
+      .maxDescriptorSetStorageImages = max_view_descs,
+      .maxDescriptorSetInputAttachments = max_view_descs,
       .maxVertexInputAttributes = MIN2(D3D12_STANDARD_VERTEX_ELEMENT_COUNT, MAX_VERTEX_GENERIC_ATTRIBS),
       .maxVertexInputBindings = MAX_VBS,
       .maxVertexInputAttributeOffset = D3D12_REQ_MULTI_ELEMENT_STRUCTURE_SIZE_IN_BYTES - 1,
@@ -909,7 +934,7 @@ dzn_physical_device_get_properties(const struct dzn_physical_device *pdev,
       .subPixelPrecisionBits = D3D12_SUBPIXEL_FRACTIONAL_BIT_COUNT,
       .subTexelPrecisionBits = D3D12_SUBTEXEL_FRACTIONAL_BIT_COUNT,
       .mipmapPrecisionBits = D3D12_MIP_LOD_FRACTIONAL_BIT_COUNT,
-      .maxDrawIndexedIndexValue = 0x00ffffff,
+      .maxDrawIndexedIndexValue = UINT32_MAX,
       .maxDrawIndirectCount = UINT32_MAX,
       .maxSamplerLodBias = D3D12_MIP_LOD_BIAS_MAX,
       .maxSamplerAnisotropy = D3D12_REQ_MAXANISOTROPY,
@@ -1006,7 +1031,7 @@ dzn_physical_device_get_properties(const struct dzn_physical_device *pdev,
       .denormBehaviorIndependence = VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_ALL,
       .roundingModeIndependence = VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_ALL,
       .shaderSignedZeroInfNanPreserveFloat16 = false,
-      .shaderSignedZeroInfNanPreserveFloat32 = false,
+      .shaderSignedZeroInfNanPreserveFloat32 = true,
       .shaderSignedZeroInfNanPreserveFloat64 = false,
       .shaderDenormPreserveFloat16 = true,
       .shaderDenormPreserveFloat32 = pdev->shader_model >= D3D_SHADER_MODEL_6_2,
@@ -1027,22 +1052,22 @@ dzn_physical_device_get_properties(const struct dzn_physical_device *pdev,
       .shaderInputAttachmentArrayNonUniformIndexingNative = true,
       .robustBufferAccessUpdateAfterBind = true,
       .quadDivergentImplicitLod = false,
-      .maxUpdateAfterBindDescriptorsInAllPools = MAX_DESCS_PER_CBV_SRV_UAV_HEAP,
-      .maxPerStageDescriptorUpdateAfterBindSamplers = MAX_DESCS_PER_CBV_SRV_UAV_HEAP,
-      .maxPerStageDescriptorUpdateAfterBindUniformBuffers = MAX_DESCS_PER_CBV_SRV_UAV_HEAP,
-      .maxPerStageDescriptorUpdateAfterBindStorageBuffers = MAX_DESCS_PER_CBV_SRV_UAV_HEAP,
-      .maxPerStageDescriptorUpdateAfterBindSampledImages = MAX_DESCS_PER_CBV_SRV_UAV_HEAP,
-      .maxPerStageDescriptorUpdateAfterBindStorageImages = MAX_DESCS_PER_CBV_SRV_UAV_HEAP,
-      .maxPerStageDescriptorUpdateAfterBindInputAttachments = MAX_DESCS_PER_CBV_SRV_UAV_HEAP,
-      .maxPerStageUpdateAfterBindResources = MAX_DESCS_PER_CBV_SRV_UAV_HEAP,
-      .maxDescriptorSetUpdateAfterBindSamplers = MAX_DESCS_PER_CBV_SRV_UAV_HEAP,
-      .maxDescriptorSetUpdateAfterBindUniformBuffers = MAX_DESCS_PER_CBV_SRV_UAV_HEAP,
+      .maxUpdateAfterBindDescriptorsInAllPools = max_uab_descs,
+      .maxPerStageDescriptorUpdateAfterBindSamplers = max_uab_descs,
+      .maxPerStageDescriptorUpdateAfterBindUniformBuffers = max_view_descs,
+      .maxPerStageDescriptorUpdateAfterBindStorageBuffers = max_view_descs,
+      .maxPerStageDescriptorUpdateAfterBindSampledImages = max_view_descs,
+      .maxPerStageDescriptorUpdateAfterBindStorageImages = max_view_descs,
+      .maxPerStageDescriptorUpdateAfterBindInputAttachments = max_view_descs,
+      .maxPerStageUpdateAfterBindResources = max_view_descs,
+      .maxDescriptorSetUpdateAfterBindSamplers = max_uab_descs,
+      .maxDescriptorSetUpdateAfterBindUniformBuffers = max_view_descs,
       .maxDescriptorSetUpdateAfterBindUniformBuffersDynamic = MAX_DYNAMIC_UNIFORM_BUFFERS,
-      .maxDescriptorSetUpdateAfterBindStorageBuffers = MAX_DESCS_PER_CBV_SRV_UAV_HEAP,
+      .maxDescriptorSetUpdateAfterBindStorageBuffers = max_view_descs,
       .maxDescriptorSetUpdateAfterBindStorageBuffersDynamic = MAX_DYNAMIC_STORAGE_BUFFERS,
-      .maxDescriptorSetUpdateAfterBindSampledImages = MAX_DESCS_PER_CBV_SRV_UAV_HEAP,
-      .maxDescriptorSetUpdateAfterBindStorageImages = MAX_DESCS_PER_CBV_SRV_UAV_HEAP,
-      .maxDescriptorSetUpdateAfterBindInputAttachments = MAX_DESCS_PER_CBV_SRV_UAV_HEAP,
+      .maxDescriptorSetUpdateAfterBindSampledImages = max_view_descs,
+      .maxDescriptorSetUpdateAfterBindStorageImages = max_view_descs,
+      .maxDescriptorSetUpdateAfterBindInputAttachments = max_view_descs,
 
       .supportedDepthResolveModes = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT | VK_RESOLVE_MODE_AVERAGE_BIT |
          VK_RESOLVE_MODE_MIN_BIT | VK_RESOLVE_MODE_MAX_BIT,
@@ -1068,8 +1093,15 @@ dzn_physical_device_get_properties(const struct dzn_physical_device *pdev,
       /* VkPhysicalDeviceVertexAttributeDivisorPropertiesEXT */
       .maxVertexAttribDivisor = UINT32_MAX,
 
-      /* VkPhysicalDeviceExternalMemoryHostPropertiesEXT */
-      .minImportedHostPointerAlignment = 65536,
+      /* VkPhysicalDeviceExternalMemoryHostPropertiesEXT
+       *
+       * Heaps opened from a host address are cross-adapter heaps. D3D12
+       * requires resources placed in cross-adapter heaps to use the default
+       * 64KB placement alignment, and a 4KB-aligned address gives the heap
+       * only 4KB alignment, after which CreatePlacedResource() rejects every
+       * buffer or linear image. So 64KB really is the minimum here.
+       */
+      .minImportedHostPointerAlignment = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT,
 
       /* VkPhysicalDeviceLayeredDriverPropertiesMSFT */
       .underlyingAPI = VK_LAYERED_DRIVER_UNDERLYING_API_D3D12_MSFT,
@@ -1129,9 +1161,6 @@ dzn_physical_device_create(struct vk_instance *instance,
    pdev->desc = *desc;
    pdev->adapter = adapter;
    IUnknown_AddRef(adapter);
-   list_addtail(&pdev->vk.link, &instance->physical_devices.list);
-
-   vk_warn_non_conformant_implementation("dzn");
 
    struct dzn_instance *dzn_instance = container_of(instance, struct dzn_instance, vk);
 
@@ -1150,9 +1179,8 @@ dzn_physical_device_create(struct vk_instance *instance,
                                    dzn_instance->factory,
                                    !dzn_instance->dxil_validator);
    if (!pdev->dev) {
-      list_del(&pdev->vk.link);
-      dzn_physical_device_destroy(&pdev->vk);
-      return vk_error(instance, VK_ERROR_INITIALIZATION_FAILED);
+      result = VK_ERROR_INCOMPATIBLE_DRIVER;
+      goto fail_clean;
    }
 
    if (FAILED(ID3D12Device1_QueryInterface(pdev->dev, &IID_ID3D12Device10, (void **)&pdev->dev10)))
@@ -1163,7 +1191,11 @@ dzn_physical_device_create(struct vk_instance *instance,
       pdev->dev12 = NULL;
    if (FAILED(ID3D12Device1_QueryInterface(pdev->dev, &IID_ID3D12Device13, (void **)&pdev->dev13)))
       pdev->dev13 = NULL;
-   dzn_physical_device_cache_caps(pdev);
+   if (!dzn_physical_device_cache_caps(pdev)) {
+      result = VK_ERROR_INCOMPATIBLE_DRIVER;
+      goto fail_clean;
+   }
+
    dzn_physical_device_init_memory(pdev);
    dzn_physical_device_init_uuids(pdev);
 
@@ -1180,15 +1212,19 @@ dzn_physical_device_create(struct vk_instance *instance,
    dzn_physical_device_get_properties(pdev, &pdev->vk.properties);
 
    result = dzn_wsi_init(pdev);
-   if (result != VK_SUCCESS || !pdev->dev) {
-      list_del(&pdev->vk.link);
-      dzn_physical_device_release(pdev);
-      vk_physical_device_finish(&pdev->vk);
-      vk_free(&instance->alloc, pdev);
-      return result;
-   }
+   if (result != VK_SUCCESS || !pdev->dev)
+      goto fail_clean;
+
+   vk_warn_non_conformant_implementation("dzn");
+   list_addtail(&pdev->vk.link, &instance->physical_devices.list);
 
    return VK_SUCCESS;
+
+fail_clean:
+   dzn_physical_device_release(pdev);
+   vk_physical_device_finish(&pdev->vk);
+   vk_free(&instance->alloc, pdev);
+   return result;
 }
 
 static DXGI_FORMAT
@@ -1730,10 +1766,11 @@ dzn_GetPhysicalDeviceExternalBufferProperties(VkPhysicalDevice physicalDevice,
 #if defined(_WIN32)
    case VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT:
       if (pdev->dev13) {
-         pExternalBufferProperties->externalMemoryProperties.compatibleHandleTypes =
-            pExternalBufferProperties->externalMemoryProperties.exportFromImportedHandleTypes =
-            VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_HEAP_BIT | opaque_external_flag;
-         pExternalBufferProperties->externalMemoryProperties.externalMemoryFeatures = import_export_feature_flags;
+         pExternalBufferProperties->externalMemoryProperties = (VkExternalMemoryProperties) {
+            .externalMemoryFeatures = VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT,
+            .exportFromImportedHandleTypes = 0,
+            .compatibleHandleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
+         };
          break;
       }
       FALLTHROUGH;
@@ -1752,19 +1789,40 @@ dzn_instance_add_physical_device(struct vk_instance *instance,
    struct dzn_instance *dzn_instance = container_of(instance, struct dzn_instance, vk);
    if ((dzn_instance->debug_flags & DZN_DEBUG_WARP) &&
        !desc->is_warp)
-      return VK_SUCCESS;
+      return VK_ERROR_INCOMPATIBLE_DRIVER;
 
    return dzn_physical_device_create(instance, adapter, desc);
+}
+
+void
+dzn_instance_destroy_physical_devices(struct vk_instance *instance)
+{
+   list_for_each_entry_safe(struct vk_physical_device, pdevice,
+                            &instance->physical_devices.list, link) {
+      list_del(&pdevice->link);
+      dzn_physical_device_destroy(pdevice);
+   }
 }
 
 static VkResult
 dzn_enumerate_physical_devices(struct vk_instance *instance)
 {
+   struct dzn_instance *dzn_instance =
+      container_of(instance, struct dzn_instance, vk);
+   if (!dzn_instance->d3d12_mod)
+      return VK_SUCCESS;
+
    VkResult result = dzn_enumerate_physical_devices_dxcore(instance);
 #ifdef _WIN32
-   if (result != VK_SUCCESS)
+   if (result == VK_ERROR_INCOMPATIBLE_DRIVER ||
+       result == VK_ERROR_INITIALIZATION_FAILED)
       result = dzn_enumerate_physical_devices_dxgi(instance);
 #endif
+   if (result == VK_ERROR_INCOMPATIBLE_DRIVER)
+      return VK_SUCCESS;
+
+   if (result != VK_SUCCESS)
+      dzn_instance_destroy_physical_devices(instance);
 
    return result;
 }
@@ -1842,36 +1900,34 @@ dzn_instance_create(const VkInstanceCreateInfo *pCreateInfo,
    }
 #endif
 
-   if (missing_validator) {
-      dzn_instance_destroy(instance, pAllocator);
-      return vk_error(NULL, VK_ERROR_INITIALIZATION_FAILED);
+   if (!missing_validator) {
+      instance->d3d12_mod = util_dl_open(UTIL_DL_PREFIX "d3d12" UTIL_DL_EXT);
+      if (instance->d3d12_mod) {
+         instance->d3d12.serialize_root_sig =
+            d3d12_get_serialize_root_sig(instance->d3d12_mod);
+         if (!instance->d3d12.serialize_root_sig) {
+            util_dl_close(instance->d3d12_mod);
+            instance->d3d12_mod = NULL;
+         }
+      }
    }
 
-   instance->d3d12_mod = util_dl_open(UTIL_DL_PREFIX "d3d12" UTIL_DL_EXT);
-   if (!instance->d3d12_mod) {
-      dzn_instance_destroy(instance, pAllocator);
-      return vk_error(NULL, VK_ERROR_INCOMPATIBLE_DRIVER);
-   }
+   if (instance->d3d12_mod) {
+      dzn_init_dri_config(instance);
 
-   instance->d3d12.serialize_root_sig = d3d12_get_serialize_root_sig(instance->d3d12_mod);
-   if (!instance->d3d12.serialize_root_sig) {
-      dzn_instance_destroy(instance, pAllocator);
-      return vk_error(NULL, VK_ERROR_INCOMPATIBLE_DRIVER);
-   }
+      if (instance->drirc.debug.disable) {
+         dzn_instance_destroy(instance, pAllocator);
+         return vk_errorf(NULL, VK_ERROR_INITIALIZATION_FAILED, "dzn_disable set, failing instance creation");
+      }
 
-   instance->factory = try_create_device_factory(instance->d3d12_mod);
+      instance->factory = try_create_device_factory(instance->d3d12_mod);
 
-   if (instance->debug_flags & DZN_DEBUG_D3D12)
-      d3d12_enable_debug_layer(instance->d3d12_mod, instance->factory);
-   if (instance->debug_flags & DZN_DEBUG_GBV)
-      d3d12_enable_gpu_validation(instance->d3d12_mod, instance->factory);
+      if (instance->debug_flags & DZN_DEBUG_D3D12)
+         d3d12_enable_debug_layer(instance->d3d12_mod, instance->factory);
+      if (instance->debug_flags & DZN_DEBUG_GBV)
+         d3d12_enable_gpu_validation(instance->d3d12_mod, instance->factory);
 
-   instance->sync_binary_type = vk_sync_binary_get_type(&dzn_sync_type);
-   dzn_init_dri_config(instance);
-
-   if (instance->drirc.debug.disable) {
-      dzn_instance_destroy(instance, pAllocator);
-      return vk_errorf(NULL, VK_ERROR_INITIALIZATION_FAILED, "dzn_disable set, failing instance creation");
+      instance->sync_binary_type = vk_sync_binary_get_type(&dzn_sync_type);
    }
 
    *out = dzn_instance_to_handle(instance);
@@ -2761,7 +2817,15 @@ dzn_device_memory_create(struct dzn_device *device,
       if (!device->dev13)
          goto cleanup;
 
-      if (FAILED(ID3D12Device13_OpenExistingHeapFromAddress1(device->dev13, host_pointer, heap_desc.SizeInBytes, &IID_ID3D12Heap, (void**)&mem->heap)))
+      /* heap_desc.SizeInBytes has been rounded up to the heap alignment,
+       * which is 4MB for large non-dedicated allocations. Ask D3D12 to wrap
+       * exactly the range the application handed over instead.
+       */
+      if (FAILED(ID3D12Device13_OpenExistingHeapFromAddress1(device->dev13,
+                                                             host_pointer,
+                                                             mem->size,
+                                                             &IID_ID3D12Heap,
+                                                             (void**)&mem->heap)))
          goto cleanup;
 
       D3D12_HEAP_DESC desc = dzn_ID3D12Heap_GetDesc(mem->heap);
@@ -3137,7 +3201,10 @@ dzn_buffer_create(struct dzn_device *device,
 
    const VkExternalMemoryBufferCreateInfo *external_info =
       vk_find_struct_const(pCreateInfo->pNext, EXTERNAL_MEMORY_BUFFER_CREATE_INFO);
-   if (external_info && external_info->handleTypes != 0)
+   const VkExternalMemoryHandleTypeFlags shared_handle_types =
+      VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_HEAP_BIT |
+      VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT | opaque_external_flag;
+   if (external_info && (external_info->handleTypes & shared_handle_types))
       buf->shared = true;
 
    *out = dzn_buffer_to_handle(buf);
@@ -3332,7 +3399,7 @@ dzn_BindBufferMemory2(VkDevice _device,
          desc.Flags |= mem->res_flags;
          if (FAILED(ID3D12Device1_CreatePlacedResource(device->dev, mem->heap,
                                                        pBindInfos[i].memoryOffset,
-                                                       &buffer->desc,
+                                                       &desc,
                                                        D3D12_RESOURCE_STATE_COMMON,
                                                        NULL,
                                                        &IID_ID3D12Resource,
@@ -3724,8 +3791,8 @@ dzn_GetBufferDeviceAddress(VkDevice device,
 {
    struct dzn_buffer *buffer = dzn_buffer_from_handle(pInfo->buffer);
 
-   /* Insert a pointer tag so we never return null */
-   return ((uint64_t)buffer->uav_bindless_slot << 32ull) | (0xD3ull << 56);
+   /* Tag bits 52-63 so slot zero also has a non-null address. */
+   return ((uint64_t)buffer->uav_bindless_slot << 32ull) | (0xfffull << 52);
 }
 
 VKAPI_ATTR uint64_t VKAPI_CALL

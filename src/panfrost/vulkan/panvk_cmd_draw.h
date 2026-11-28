@@ -22,6 +22,7 @@
 #include "vk_command_buffer.h"
 #include "vk_format.h"
 #include "vk_meta.h"
+#include "poly/geometry.h"
 #include "util/u_tristate.h"
 
 #include "pan_fb.h"
@@ -137,12 +138,18 @@ struct panvk_rendering_state {
 enum panvk_cmd_graphics_dirty_state {
    PANVK_CMD_GRAPHICS_DIRTY_BASE_INSTANCE,
    PANVK_CMD_GRAPHICS_DIRTY_VS,
+   PANVK_CMD_GRAPHICS_DIRTY_TCS,
+   PANVK_CMD_GRAPHICS_DIRTY_TES,
+   PANVK_CMD_GRAPHICS_DIRTY_GS,
    PANVK_CMD_GRAPHICS_DIRTY_FS,
    PANVK_CMD_GRAPHICS_DIRTY_VB,
    PANVK_CMD_GRAPHICS_DIRTY_OQ,
    PANVK_CMD_GRAPHICS_DIRTY_DESC_STATE,
    PANVK_CMD_GRAPHICS_DIRTY_RENDER_STATE,
    PANVK_CMD_GRAPHICS_DIRTY_VS_PUSH_UNIFORMS,
+   PANVK_CMD_GRAPHICS_DIRTY_TCS_PUSH_UNIFORMS,
+   PANVK_CMD_GRAPHICS_DIRTY_TES_PUSH_UNIFORMS,
+   PANVK_CMD_GRAPHICS_DIRTY_GS_PUSH_UNIFORMS,
    PANVK_CMD_GRAPHICS_DIRTY_FS_PUSH_UNIFORMS,
    PANVK_CMD_GRAPHICS_DIRTY_IDVS,
    PANVK_CMD_GRAPHICS_DIRTY_STATE_COUNT,
@@ -183,15 +190,40 @@ struct panvk_cmd_graphics_state {
    } idvs;
 
    struct {
+      uint64_t push_uniforms;
+   } hw_vs;
+
+   struct {
       const struct panvk_shader *shader;
       struct panvk_shader_desc_state desc;
-      uint64_t push_uniforms;
+   } gs;
+
+   struct {
+      const struct panvk_shader *shader;
+      struct panvk_shader_desc_state desc;
+   } tes;
+
+   struct {
+      const struct panvk_shader *shader;
+      struct panvk_shader_desc_state desc;
+   } tcs;
+
+   struct {
+      struct poly_vertex_params vp;
+      uint64_t vp_addr;
+
+      struct poly_geometry_params gp;
+      uint64_t gp_addr;
+   } poly;
+
+   struct {
+      const struct panvk_shader *shader;
+      struct panvk_shader_desc_state desc;
 #if PAN_ARCH < 9
       uint64_t attribs;
       uint64_t attrib_bufs;
       uint64_t indirect_attribs_infos;
       uint64_t indirect_attrib_bufs_infos;
-      uint64_t indirect_varying_bufs_infos;
 #else
       /* The number of times desc is repeated.  Zero means that it is not
        * repeated but also that it's re-usable across draws and we're not
@@ -308,6 +340,48 @@ panvk_select_tiler_hierarchy_mask(const struct panvk_physical_device *phys_dev,
 
    return hierarchy_mask;
 }
+
+static inline const struct panvk_shader_variant *
+panvk_gfx_state_get_vs_variant(const struct panvk_cmd_graphics_state *gfx)
+{
+   if (gfx->gs.shader || gfx->tes.shader)
+      return &gfx->vs.shader->variants[PANVK_VS_VARIANT_SW];
+   else
+      return &gfx->vs.shader->variants[PANVK_VS_VARIANT_HW];
+}
+
+#define get_vs_variant(__cmdbuf)                                               \
+   panvk_gfx_state_get_vs_variant(&(__cmdbuf)->state.gfx)
+
+/* Anything that might change the value returned by get_vs_variant() makes
+ * users of the vertex shader dirty.
+ */
+#define vs_user_dirty(__cmdbuf)                                                \
+   (gfx_state_dirty(cmdbuf, VS) ||                                             \
+    gfx_state_dirty(cmdbuf, TES) ||                                            \
+    gfx_state_dirty(cmdbuf, GS))
+
+static inline const struct panvk_shader_variant *
+panvk_gfx_state_get_hw_vs(const struct panvk_cmd_graphics_state *gfx)
+{
+   if (gfx->gs.shader)
+      return panvk_rast_gs_variant(gfx->gs.shader);
+   else if (gfx->tes.shader)
+      UNREACHABLE("Tessellation not yet supported");
+   else
+      return panvk_hw_vs_variant(gfx->vs.shader);
+}
+
+/* Anything that might change the value returned by get_hw_vs() makes
+ * users of the vertex shader dirty.
+ */
+#define hw_vs_user_dirty(__cmdbuf)                                             \
+   (gfx_state_dirty(cmdbuf, VS) ||                                             \
+    gfx_state_dirty(cmdbuf, TES) ||                                            \
+    gfx_state_dirty(cmdbuf, GS))
+
+#define get_hw_vs(__cmdbuf)                                               \
+   panvk_gfx_state_get_hw_vs(&(__cmdbuf)->state.gfx)
 
 static inline bool
 fs_required(const struct panvk_cmd_graphics_state *state,

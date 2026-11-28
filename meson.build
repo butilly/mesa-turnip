@@ -6,7 +6,7 @@ project(
   ['c', 'cpp'],
   version : files('VERSION'),
   license : 'MIT',
-  meson_version : '>= 1.4.0',
+  meson_version : '>= 1.7.0',
   default_options : [
     'buildtype=debugoptimized',
     'b_ndebug=if-release',
@@ -14,6 +14,7 @@ project(
     'cpp_std=c++17',
     'rust_std=2021',
     'build.rust_std=2021',
+    'b_vscrt=mt',
   ],
 )
 
@@ -54,7 +55,8 @@ if get_option('b_lto')
 endif
 
 with_llvm = get_option('llvm')
-amd_with_llvm = with_llvm.allowed() and get_option('amd-use-llvm')
+amd_options = get_option('amd-options')
+amd_with_llvm = with_llvm.allowed() and amd_options.contains('use-llvm')
 
 with_mesa_debug = get_option('buildtype') == 'debug'
 
@@ -111,7 +113,6 @@ with_vulkan_overlay_layer = get_option('vulkan-layers').contains('overlay')
 with_vulkan_device_select_layer = get_option('vulkan-layers').contains('device-select')
 with_vulkan_screenshot_layer = get_option('vulkan-layers').contains('screenshot')
 with_vulkan_vram_report_limit_layer = get_option('vulkan-layers').contains('vram-report-limit')
-with_vulkan_anti_lag_layer = get_option('vulkan-layers').contains('anti-lag')
 with_tools = get_option('tools')
 if with_tools.contains('all')
   with_tools = [
@@ -206,11 +207,12 @@ elif gallium_drivers.contains('all')
    gallium_drivers = [
      'r300', 'r600', 'radeonsi', 'crocus', 'v3d', 'vc4', 'freedreno', 'etnaviv', 'i915',
      'nouveau', 'svga', 'tegra', 'virgl', 'lima', 'panfrost', 'llvmpipe', 'softpipe', 'iris',
-     'zink', 'd3d12', 'asahi', 'rocket', 'ethosu'
+     'zink', 'd3d12', 'asahi', 'rocket', 'ethosu', 'earthqaic_experimental'
    ]
 endif
 
-with_amdgpu_virtio = get_option('amdgpu-virtio')
+with_amdgpu_virtio = amd_options.contains('virtio')
+with_panfrost_vdrm = get_option('panfrost-virtio')
 
 with_gallium_radeonsi = gallium_drivers.contains('radeonsi')
 with_gallium_r300 = gallium_drivers.contains('r300')
@@ -235,6 +237,7 @@ with_gallium_d3d12 = gallium_drivers.contains('d3d12')
 with_gallium_asahi = gallium_drivers.contains('asahi')
 with_gallium_rocket = gallium_drivers.contains('rocket')
 with_gallium_ethosu = gallium_drivers.contains('ethosu')
+with_gallium_earthqaic = gallium_drivers.contains('earthqaic_experimental')
 foreach gallium_driver : gallium_drivers
   pre_args += '-DHAVE_@0@'.format(gallium_driver.to_upper())
 endforeach
@@ -247,7 +250,8 @@ with_llvm = with_llvm \
   .enable_if(with_gallium_i915, error_message : 'i915 Gallium driver requires LLVM for vertex shaders') \
   .enable_if(with_gallium_llvmpipe, error_message : 'LLVMPipe Gallium driver requires LLVM') \
   .enable_if(with_gallium_r300 and r300_needs_draw and draw_with_llvm, error_message : 'R300 Gallium driver requires LLVM for vertex shaders on IGP parts') \
-  .enable_if(with_gallium_radeonsi and amd_with_llvm, error_message : 'RadeonSI Gallium driver configured to require LLVM')
+  .enable_if(with_gallium_radeonsi and amd_with_llvm, error_message : 'RadeonSI Gallium driver configured to require LLVM') \
+  .enable_if(with_gallium_earthqaic, error_message : 'Earthqaic Gallium driver requires LLVM')
 
 # compatibility for "swrast" as an internal-ish driver name
 with_gallium_swrast = with_gallium_softpipe or with_gallium_llvmpipe
@@ -355,6 +359,7 @@ with_vdrm = [
   with_amdgpu_virtio,
   freedreno_kmds.contains('virtio'),
   with_gallium_asahi,
+  with_panfrost_vdrm,
   with_asahi_vk,
   with_intel_virtio,
 ].contains(true)
@@ -397,6 +402,11 @@ with_any_intel = [
   with_intel_vk,
 ].contains(true)
 with_any_nouveau = with_gallium_nouveau or with_nouveau_vk
+with_any_panfrost = [
+  with_gallium_panfrost,
+  with_panfrost_vk,
+  with_tools.contains('panfrost'),
+].contains(true)
 
 # needed in the loader
 if with_nouveau_vk
@@ -432,8 +442,8 @@ elif system_has_kms_drm
 elif host_machine.system() == 'gnu' or (freedreno_kmds.contains('kgsl') and with_gallium_zink)
   with_dri_platform = 'pseudo-drm'
 else
-  # FIXME: haiku doesn't use dri, and xlib doesn't use dri, probably should
-  # assert here that one of those cases has been met.
+  # FIXME: haiku doesn't use dri, probably should
+  # assert here that this case has been met.
   # FIXME: illumos ends up here as well
   with_dri_platform = 'none'
 endif
@@ -443,8 +453,10 @@ if host_machine.system() == 'darwin'
   #macOS seems to need beta extensions to build for now:
   with_vulkan_beta = true
 endif
+vulkan_gen_beta_arg = []
 if with_vulkan_beta
   pre_args += '-DVK_ENABLE_BETA_EXTENSIONS'
+  vulkan_gen_beta_arg = '--beta'
 endif
 
 _codecs = get_option('video-codecs')
@@ -494,6 +506,7 @@ with_platform_wayland = _platforms.contains('wayland')
 with_platform_haiku = _platforms.contains('haiku')
 with_platform_windows = _platforms.contains('windows')
 with_platform_macos = _platforms.contains('macos')
+with_platform_display = system_has_kms_drm and not cc.has_define('__ANDROID__')
 
 with_gfxstream_emulated_android = with_gfxstream_vk and with_platform_android and host_machine.system() == 'linux'
 if with_gfxstream_emulated_android
@@ -531,10 +544,6 @@ if with_glx == 'auto'
   elif with_gallium
     # Even when building just gallium drivers the user probably wants dri
     with_glx = 'dri'
-  elif with_platform_x11 and with_any_opengl and not with_any_vk
-    # The automatic behavior should not be to turn on xlib based glx when
-    # building only vulkan drivers
-    with_glx = 'xlib'
   else
     with_glx = 'disabled'
   endif
@@ -567,7 +576,6 @@ with_xlib_lease = get_option('xlib-lease') \
 
 with_egl = get_option('egl') \
   .require(with_platform_windows or with_platform_haiku or with_dri or with_platform_android, error_message : 'EGL requires DRI, Haiku, Windows or Android') \
-  .require(with_glx != 'xlib', error_message :'EGL requires DRI, but GLX is being built with xlib support') \
   .disable_auto_if(with_platform_haiku) \
   .allowed()
 
@@ -675,22 +683,12 @@ endif
 if with_glx != 'disabled'
   if not (with_platform_x11 and with_any_opengl)
     error('Cannot build GLX support without X11 platform support and at least one OpenGL API')
-  elif with_glx == 'xlib'
-    if not with_gallium
-      error('xlib based GLX requires at least one gallium driver')
-    elif not with_gallium_swrast
-      error('xlib based GLX requires softpipe or llvmpipe.')
-    elif with_dri
-      error('xlib conflicts with any dri driver')
-    endif
   endif
 endif
 
 _glvnd = get_option('glvnd') \
   .require(not with_platform_windows,
            error_message: 'glvnd cannot be used on Windows') \
-  .require(with_glx != 'xlib',
-           error_message: 'Cannot build glvnd support for GLX that is not DRI based.') \
   .require(with_glx != 'disabled' or with_egl,
            error_message: 'glvnd requires DRI based GLX and/or EGL') \
   .require(get_option('egl-lib-suffix') == '',
@@ -852,12 +850,13 @@ _va_drivers = [
   with_gallium_r600,
   with_gallium_radeonsi,
   with_gallium_virgl,
+  with_gallium_zink,
 ]
 
 allow_fallback_for_libva = get_option('allow-fallback-for').contains('libva')
 _va = get_option('gallium-va') \
   .require(_va_drivers.contains(true),
-           error_message : 'VA state tracker requires at least one of the following gallium drivers: r600, radeonsi, nouveau, d3d12 (with option gallium-d3d12-video), virgl.')
+           error_message : 'VA state tracker requires at least one of the following gallium drivers: r600, radeonsi, nouveau, zink, d3d12 (with option gallium-d3d12-video), virgl.')
 _dep_va_name = host_machine.system() == 'windows' ? 'libva-win32' : 'libva'
 dep_va = dependency(
   _dep_va_name, version : '>= 1.8.0',
@@ -926,7 +925,7 @@ endif
 
 _rtti = get_option('cpp_rtti')
 
-with_panfrost_rust = (with_gallium_panfrost or with_panfrost_vk) and get_option('panfrost-rust')
+with_panfrost_rust = with_any_panfrost and get_option('panfrost-rust')
 
 with_gallium_rusticl = get_option('gallium-rusticl')
 if with_gallium_rusticl
@@ -943,14 +942,10 @@ with_any_rust = [
   with_panfrost_rust,
   with_tools.contains('etnaviv'),
   with_virtgpu_kumquat,
+  with_gallium_earthqaic,
 ].contains(true)
 
 if with_any_rust
-  # rust.bindgen() does not pass `--rust-target` to bindgen until 1.7.0.
-  if meson.version().version_compare('< 1.7.0')
-    error('Mesa Rust support requires Meson 1.7.0 or newer')
-  endif
-
   add_languages('rust', required: true)
   rustc = meson.get_compiler('rust')
   rust = import('rust')
@@ -987,6 +982,10 @@ if with_any_rust
     '--raw-line', '#![allow(warnings)]',
     # Required for bindgen 0.71.1
     '--raw-line', '#![allow(unsafe_op_in_unsafe_fn)]',
+  ]
+
+  bindgen_c_args = [
+    '-DMESA_BINDGEN=1'
   ]
 
   rust_global_args = [
@@ -1054,7 +1053,7 @@ with_llvm = with_llvm \
 
 with_poly = [
   with_gallium_asahi, with_asahi_vk, with_tools.contains('asahi'),
-  with_kosmickrisp_vk,
+  with_kosmickrisp_vk, with_panfrost_vk
 ].contains(true)
 
 dep_clc = null_dep
@@ -1082,21 +1081,17 @@ endif
 gl_pkgconfig_c_flags = []
 with_glx_indirect_rendering = false
 if with_platform_x11
-  if with_glx == 'xlib'
-    pre_args += '-DUSE_XSHM'
-  else
-    with_glx_indirect_rendering = true
-    pre_args += '-DGLX_INDIRECT_RENDERING'
-    if with_glx_direct
-      pre_args += '-DGLX_DIRECT_RENDERING'
-    endif
-    if with_dri_platform == 'drm'
-      pre_args += '-DGLX_USE_DRM'
-    elif with_dri_platform == 'apple'
-      pre_args += '-DGLX_USE_APPLEGL'
-    elif with_dri_platform == 'windows'
-      pre_args += '-DGLX_USE_WINDOWSGL'
-    endif
+  with_glx_indirect_rendering = true
+  pre_args += '-DGLX_INDIRECT_RENDERING'
+  if with_glx_direct
+    pre_args += '-DGLX_DIRECT_RENDERING'
+  endif
+  if with_dri_platform == 'drm'
+    pre_args += '-DGLX_USE_DRM'
+  elif with_dri_platform == 'apple'
+    pre_args += '-DGLX_USE_APPLEGL'
+  elif with_dri_platform == 'windows'
+    pre_args += '-DGLX_USE_WINDOWSGL'
   endif
 endif
 
@@ -1169,57 +1164,85 @@ python_version_req = '>= 3.10'
 python_exec_list = ['python3.16', 'python3.15', 'python3.14', 'python3.13',
                     'python3.12', 'python3.11', 'python3.10', 'python3', 'python']
 
+# Tuples of version required for that module, and optional condition without
+# which the module is not required. If any version will do, use the special
+# version ''.
+python_required_modules = {
+  'docutils': { 'version': '', 'required_if': get_option('html-docs').enabled() },
+  'hawkmoth': { 'version': '0.16', 'required_if': get_option('html-docs').enabled() },
+  'mako': { 'version': '0.8', 'required_if': true },
+  'pycparser': { 'version': '2.20', 'required_if': with_gallium_etnaviv },
+  'sphinx': { 'version': '', 'required_if': get_option('html-docs').enabled() },
+  'yaml': { 'version': '', 'required_if': true },
+}
+
+any_python_found = false
 foreach p : python_exec_list
   prog_python = find_program(p, required : false, version : python_version_req)
   if not prog_python.found()
     continue
   endif
 
-  has_mako = run_command(
+  any_python_found = true
+
+  has_version_module = run_command(
     prog_python, '-c',
     '''
-import sys
-
 try:
-    try:
-        from packaging.version import Version
-    except:
-        from distutils.version import StrictVersion as Version
+    from packaging.version import Version
 except:
-    sys.exit(2)
-
-try:
-    import mako
-except:
-    sys.exit(1)
-
-if Version(mako.__version__) < Version("0.8.0"):
-    sys.exit(1)
+    from distutils.version import StrictVersion as Version
 ''', check: false)
-  if has_mako.returncode() != 0
+  if has_version_module.returncode() != 0
     continue
   endif
 
-  has_yaml = run_command(prog_python, '-c', 'import yaml', check: false)
-  if has_yaml.returncode() != 0
+  missing_modules = []
+  foreach module_name, module : python_required_modules
+    if not module['required_if']
+      continue
+    endif
+    if module['version'] == ''
+      if run_command(prog_python, '-c', 'import '+ module_name, check: false).returncode() != 0
+        missing_modules += module_name
+      endif
+    else
+      if run_command(prog_python, '-c', '''
+try:
+    from packaging.version import Version
+except:
+    from distutils.version import StrictVersion as Version
+
+import @0@
+assert Version(@0@.__version__) >= Version("@1@")
+      '''.format(module_name, module['version']), check: false).returncode() != 0
+        missing_modules += module_name + ' >= ' + module['version']
+      endif
+      # }}
+    endif
+  endforeach
+
+  if missing_modules.length() > 0
     continue
   endif
 
   break
 endforeach
 
-if not prog_python.found()
+if not any_python_found
   error('Python ' + python_version_req + ' not found')
 endif
 
-if has_mako.returncode() == 1
-  error('Python (3.x) mako module >= 0.8.0 required to build mesa.')
-elif has_mako.returncode() == 2
-  error('One of Python (3.x) packaging or distutils module is required.')
+if has_version_module.returncode() != 0
+  error('One of Python ' + python_version_req + ' packaging or distutils module is required.')
 endif
 
-if has_yaml.returncode() != 0
-  error('Python (3.x) yaml module (PyYAML) required to build mesa.')
+if missing_modules.length() > 0
+  warning('Python ' + python_version_req + ' found but is missing some required modules:')
+  foreach module : missing_modules
+    warning('- ' + module)
+  endforeach
+  error('Please install the missing modules and try again')
 endif
 
 # Support systems without ETIME (e.g. FreeBSD)
@@ -1238,7 +1261,7 @@ with_split_debug = get_option('split-debug') \
     error_message : 'split-debug requires the linker argument -Wl,--gdb-index')
 
 if with_split_debug.allowed() and get_option('debug')
-  add_project_arguments('-gsplit-dwarf', language : ['c', 'cpp'])
+  add_global_arguments('-gsplit-dwarf', language : ['c', 'cpp'])
   add_project_link_arguments('-Wl,--gdb-index', language : ['c', 'cpp'])
 endif
 
@@ -1313,9 +1336,6 @@ if cc.compiles('__uint128_t foo(void) { return 0; }',
   pre_args += '-DHAVE_UINT128'
 endif
 
-if cc.has_function('reallocarray')
-   pre_args += '-DHAVE_REALLOCARRAY'
-endif
 if cc.has_function('fmemopen')
    pre_args += '-DHAVE_FMEMOPEN'
 endif
@@ -1332,21 +1352,20 @@ elif host_machine.system() == 'windows'
   pre_args += [
     '-D_WIN32_WINNT=0x0A00',
     '-DWINVER=0x0A00',
+    '-D_USE_MATH_DEFINES',
+    '-D_CRT_NONSTDC_NO_DEPRECATE',
+    '-D_CRT_SECURE_NO_WARNINGS',
+    '-D_CRT_SECURE_NO_DEPRECATE',
+    '-D_SCL_SECURE_NO_WARNINGS',
+    '-D_SCL_SECURE_NO_DEPRECATE',
+    '-D_ALLOW_KEYWORD_MACROS',
+    '-D_HAS_EXCEPTIONS=0', # Tell C++ STL to not use exceptions
+    '-DNOMINMAX',
+    '-D_UCRT_NOISY_NAN', # https://developercommunity.visualstudio.com/t/NAN-is-no-longer-compile-time-constant-i/10688907?viewtype=all
+    '-DWIN32_LEAN_AND_MEAN', # http://msdn2.microsoft.com/en-us/library/6dwk3a1z.aspx
   ]
-  if cc.get_argument_syntax() == 'msvc'
-    pre_args += [
-      '-D_USE_MATH_DEFINES',
-      '-D_CRT_NONSTDC_NO_DEPRECATE',
-      '-D_CRT_SECURE_NO_WARNINGS',
-      '-D_CRT_SECURE_NO_DEPRECATE',
-      '-D_SCL_SECURE_NO_WARNINGS',
-      '-D_SCL_SECURE_NO_DEPRECATE',
-      '-D_ALLOW_KEYWORD_MACROS',
-      '-D_HAS_EXCEPTIONS=0', # Tell C++ STL to not use exceptions
-      '-DNOMINMAX',
-      '-D_UCRT_NOISY_NAN', # https://developercommunity.visualstudio.com/t/NAN-is-no-longer-compile-time-constant-i/10688907?viewtype=all
-    ]
-  else
+
+  if cc.get_argument_syntax() != 'msvc'
     # MINGW also accept _GNU_SOURCE
     pre_args += '-D_GNU_SOURCE'
 
@@ -1419,9 +1438,11 @@ else
     '-Qunused-arguments',
     '-fno-common',
     '-Wno-unknown-pragmas',
+    '-fzero-init-padding-bits=unions',
     # Clang
     '-Wno-microsoft-enum-value',
     '-Wno-unused-function',
+    '-fansi-escape-codes',
   ]
   _trial_cpp = [
     '-Werror=return-type',
@@ -1440,8 +1461,10 @@ else
     # For now we disable this optimization.
     '-flifetime-dse=1',
     '-Wno-unknown-pragmas',
+    '-fzero-init-padding-bits=unions',
     # Clang
     '-Wno-microsoft-enum-value',
+    '-fansi-escape-codes',
   ]
 
   # MinGW chokes on format specifiers and I can't get it all working
@@ -1688,7 +1711,7 @@ endif
 
 foreach h : ['xlocale.h', 'linux/futex.h', 'endian.h', 'dlfcn.h', 'sys/shm.h',
              'cet.h', 'pthread_np.h', 'poll.h', 'sys/inotify.h',
-             'linux/udmabuf.h']
+             'linux/udmabuf.h', 'fenv.h']
   if cc.check_header(h)
     pre_args += '-DHAVE_@0@'.format(h.to_upper().underscorify())
   endif
@@ -1720,6 +1743,8 @@ if cc.has_header_symbol('unistd.h', '_SC_PHYS_PAGES')
   pre_args += '-DHAVE_SC_PHYS_PAGES'
 endif
 
+# Meson adds -fpermissive to GCC C++ checks, which would allow GNU qsort_r to
+# compile against a BSD prototype (not good)
 if cpp.links('''
     #define _GNU_SOURCE
     #include <stdlib.h>
@@ -1732,7 +1757,7 @@ if cpp.links('''
       qsort_r((void*)&arr[0], 1, 1, dcomp, t);
       return (0);
     }''',
-    args : pre_args,
+    args : pre_args + cpp.get_supported_arguments('-fno-permissive'),
     name : 'GNU qsort_r')
   pre_args += '-DHAVE_GNU_QSORT_R'
 elif cpp.links('''
@@ -1821,6 +1846,10 @@ ld_args_bsymbolic = []
 if cc.links('int main() { return 0; }', args : '-Wl,-Bsymbolic', name : 'Bsymbolic')
   ld_args_bsymbolic += '-Wl,-Bsymbolic'
 endif
+ld_args_nodelete = []
+if cc.links('int main() { return 0; }', args : '-Wl,-z,nodelete', name : 'z nodelete')
+  ld_args_nodelete += '-Wl,-z,nodelete'
+endif
 with_ld_version_script = false
 if host_machine.system() != 'windows' and cc.links('int main() { return 0; }',
             args : '-Wl,--version-script=@0@'.format(
@@ -1875,7 +1904,7 @@ if dep_zlib.found()
   pre_args += '-DHAVE_ZLIB'
 endif
 
-if host_machine.system() == 'windows' or with_platform_android
+if not with_platform_display
   dep_display_info = null_dep
 else
   dep_display_info = dependency('libdisplay-info', version : '>= 0.1.1',
@@ -1935,10 +1964,6 @@ use_xmlconfig = get_option('xmlconfig') \
            error_message : 'requires expat') \
   .allowed()
 
-# Predefined macros for windows
-if host_machine.system() == 'windows'
-  pre_args += '-DWIN32_LEAN_AND_MEAN' # http://msdn2.microsoft.com/en-us/library/6dwk3a1z.aspx
-endif
 # this only exists on linux so either this is linux and it will be found, or
 # it's not linux and wont
 dep_m = cc.find_library('m', required : false)
@@ -1970,7 +1995,7 @@ if dep_libudev.found()
   pre_args += '-DHAVE_LIBUDEV'
 endif
 
-llvm_modules = ['bitwriter', 'engine', 'mcdisassembler', 'mcjit', 'core', 'executionengine', 'scalaropts', 'transformutils', 'instcombine']
+llvm_modules = ['bitwriter', 'engine', 'mcdisassembler', 'core', 'executionengine', 'scalaropts', 'transformutils', 'instcombine']
 llvm_optional_modules = ['coroutines']
 if with_amd_vk or with_gallium_radeonsi
   llvm_modules += ['amdgpu', 'bitreader', 'ipo']
@@ -1999,6 +2024,12 @@ endif
 # ORCJIT for llvmpipe functionality.
 llvm_has_mcjit = host_machine.cpu_family() in ['aarch64', 'arm', 'mips', 'mips64', 'ppc', 'ppc64', 's390x', 'x86', 'x86_64']
 llvm_with_orcjit = get_option('llvm-orcjit') or not llvm_has_mcjit
+
+if llvm_with_orcjit
+  llvm_modules += ['orcjit']
+else
+  llvm_modules += ['mcjit']
+endif
 
 if (with_amd_vk or with_gallium_radeonsi) and amd_with_llvm
   _llvm_version = '>= 18.0.0'
@@ -2256,6 +2287,7 @@ endif
 
 with_wayland_bind_display = with_platform_wayland and get_option('legacy-wayland').contains('bind-wayland-display')
 if with_platform_wayland
+  dep_wl_protocols = dependency('wayland-protocols', version : '>= 1.50', default_options: [ 'tests=false' ])
   dep_wayland_client = dependency('wayland-client', version : '>=1.18')
   dep_wayland_server = dependency('wayland-server', version : '>=1.18')
   if with_egl
@@ -2318,10 +2350,7 @@ with_xcb_keysyms = false
 if with_platform_x11
   dep_xcb = dependency('xcb')
   dep_xcb_xrandr = dependency('xcb-randr')
-  if with_glx == 'xlib'
-    dep_x11 = dependency('x11', version : dep_xlib_version)
-    dep_xext = dependency('xext')
-  elif with_glx == 'dri'
+  if with_glx == 'dri'
     dep_x11 = dependency('x11', version : dep_xlib_version)
     dep_xext = dependency('xext')
     dep_xcb_glx = dependency('xcb-glx', version : dep_xcb_glx_version)
@@ -2357,10 +2386,8 @@ if with_platform_x11
     dep_xshmfence = dependency('xshmfence', version : dep_xshmfence_version)
     pre_args += '-DHAVE_X11_DRM'
   endif
-  if with_glx == 'dri' or with_glx == 'xlib'
-    dep_glproto = dependency('glproto', version : dep_glproto_version)
-  endif
   if with_glx == 'dri'
+    dep_glproto = dependency('glproto', version : dep_glproto_version)
     if with_dri_platform == 'drm' or with_dri_platform == 'pseudo-drm'
       if with_glx_direct
         dep_xxf86vm = dependency('xxf86vm')
@@ -2414,6 +2441,125 @@ else
   pre_args += '-DCUSTOM_SHADER_REPLACEMENT'
 endif
 
+with_apitrace = get_option('apitrace')
+dep_apitrace = []
+# the tracer keeps pointers into the libraries with traced entry points, which
+# must not be unloaded
+ld_args_apitrace = with_apitrace and not with_platform_windows ? ['-Wl,-z,nodelete'] : []
+if with_apitrace
+  if host_machine.system() == 'darwin'
+    error('The apitrace option is not supported on this platform')
+  endif
+  if with_glx == 'xlib'
+    error('The apitrace option is not supported with xlib-based GLX')
+  endif
+  if with_platform_windows and with_egl
+    error('The apitrace option traces only WGL on Windows, build with -Degl=disabled')
+  endif
+  cmake = import('cmake')
+  apitrace_opts = cmake.subproject_options()
+  apitrace_opts.add_cmake_defines({'ENABLE_TESTS': false})
+  apitrace_opts.add_cmake_defines({'ENABLE_WAFFLE': false})
+  apitrace_opts.add_cmake_defines({'ENABLE_CLI': false})
+  apitrace_opts.add_cmake_defines({'ENABLE_GUI': false})
+  apitrace_opts.add_cmake_defines({'ENABLE_X11': with_glx == 'dri'})
+  apitrace_opts.add_cmake_defines({'ENABLE_EGL': with_egl})
+  apitrace_opts.add_cmake_defines({'CMAKE_POSITION_INDEPENDENT_CODE': true})
+  # apitrace enables LTO by default; the objects can't be linked into Mesa's
+  # non-LTO libraries (see cmake-lto-optout.patch)
+  apitrace_opts.add_cmake_defines({'CMAKE_INTERPROCEDURAL_OPTIMIZATION': false})
+  if meson.is_cross_build()
+    apitrace_opts.add_cmake_defines({
+      'CMAKE_C_FLAGS' : '',
+      'CMAKE_CXX_FLAGS' : '',
+      'CMAKE_EXE_LINKER_FLAGS' : '',
+      'CMAKE_MODULE_LINKER_FLAGS' : '',
+      'CMAKE_SHARED_LINKER_FLAGS' : '',
+      'CMAKE_DISABLE_FIND_PACKAGE_PkgConfig' : true,
+    })
+  endif
+  if with_platform_android
+    apitrace_ndk = ''
+    foreach arg : cc.cmd_array()
+      if arg.contains('/toolchains/llvm/')
+        apitrace_ndk = arg.split('/toolchains/llvm/')[0]
+      endif
+    endforeach
+    if apitrace_ndk == ''
+      error('The apitrace option needs an NDK compiler to locate the NDK')
+    endif
+    apitrace_android_abi = {
+      'aarch64' : 'arm64-v8a',
+      'arm' : 'armeabi-v7a',
+      'x86' : 'x86',
+      'x86_64' : 'x86_64',
+    }
+    apitrace_opts.add_cmake_defines({
+      'CMAKE_ANDROID_NDK' : apitrace_ndk,
+      'CMAKE_ANDROID_ARCH_ABI' : apitrace_android_abi[host_machine.cpu_family()],
+      'CMAKE_SYSTEM_VERSION' : get_option('platform-sdk-version').to_string(),
+    })
+  endif
+  apitrace_opts.set_install(false)
+  apitrace = cmake.subproject('apitrace', options: apitrace_opts)
+  pre_args += '-DHAVE_APITRACE'
+  dep_apitrace_headers = []
+  foreach t : ['gltrace_common', 'glproc']
+    dep_apitrace += apitrace.dependency(t)
+    dep_apitrace_headers += apitrace.dependency(t).partial_dependency(includes : true)
+  endforeach
+  apitrace_libs = ['glhelpers', 'trace', 'common', 'os', 'crc32c', 'snappy',
+                   'guids', 'highlight', 'zstd_seekable']
+  # apitrace builds libbacktrace only for ELF
+  if not with_platform_windows
+    apitrace_libs += 'backtrace'
+  endif
+  # apitrace uses the system Brotli when pkg-config finds it, otherwise it
+  # builds its bundled copy, which has to be linked explicitly
+  dep_brotlidec = dependency('libbrotlidec', version : '>= 1.0.7', required : false)
+  if dep_brotlidec.found()
+    dep_apitrace += dep_brotlidec
+  else
+    apitrace_libs += ['brotli_dec', 'brotli_common']
+  endif
+  foreach t : apitrace_libs
+    dep_apitrace += apitrace.dependency(t)
+  endforeach
+  # meson doesn't order users of a cmake dependency after the targets that
+  # generate its headers, so depend on glproc here; drop this and
+  # cmake-glproc-header-sources.patch once this is fixed:
+  # https://github.com/mesonbuild/meson/issues/16275
+  apitrace_glproc_h = custom_target(
+    'apitrace_glproc.h',
+    output : 'apitrace_glproc.h',
+    command : [
+      prog_python, '-c', 'import sys; open(sys.argv[1], "w").close()',
+      '@OUTPUT@',
+    ],
+    depends : apitrace.target('glproc'),
+  )
+  apitrace_gen_py = files('src/mesa/main/apitrace_gen.py')
+  apitrace_mesa_xml = files('src/mesa/glapi/glapi/gen/gl_and_es_API.xml')
+  apitrace_source_dir = meson.project_source_root() / 'subprojects' / 'apitrace'
+  apitrace_gen_args = []
+  apitrace_cpp_args = ['-DNDEBUG'] + cpp.get_supported_arguments(
+    '-Wno-sign-compare', '-fno-strict-aliasing')
+  # msvc has no gnu++17
+  apitrace_override_options = ['cpp_std=gnu++17,c++17']
+  if with_egl
+    apitrace_gen_args += '--egl'
+  endif
+  if with_glx == 'dri'
+    apitrace_gen_args += '--glx'
+    apitrace_cpp_args += '-DHAVE_X11'
+  else
+    apitrace_cpp_args += '-DEGL_NO_X11'
+  endif
+  if with_platform_windows
+    apitrace_gen_args += '--wgl'
+  endif
+endif
+
 allow_fallback_for_perfetto = get_option('allow-fallback-for').contains('perfetto')
 with_perfetto = get_option('perfetto')
 with_datasources = get_option('datasources')
@@ -2442,7 +2588,7 @@ with_teflon = get_option('teflon')
 
 with_torx = get_option('torx')
 dep_executorch = null_dep
-dep_executorch_portable_ops = null_dep
+dep_executorch_cpu_ops = null_dep
 dep_executorch_quantized_ops = null_dep
 if with_torx
   py_mod = import('python')
@@ -2451,8 +2597,12 @@ if with_torx
   _et_libdir = dep_executorch.get_variable(pkgconfig : 'libdir', default_value : '')
   # The Torx test suite needs the operators registered by these libraries, but libexecutorch
   # doesn't link to them, so Torx needs to link to them explicitly.
-  dep_executorch_portable_ops = cc.find_library('executorch_portable_ops',
-    dirs : _et_libdir)
+  dep_executorch_cpu_ops = cc.find_library('executorch_kernels_optimized',
+    dirs : _et_libdir, required : false)
+  if not dep_executorch_cpu_ops.found()
+    dep_executorch_cpu_ops = cc.find_library('executorch_portable_ops',
+      dirs : _et_libdir)
+  endif
   dep_executorch_quantized_ops = cc.find_library('executorch_kernels_quantized',
     dirs : _et_libdir, required : false)
   if not dep_executorch_quantized_ops.found()
@@ -2483,9 +2633,7 @@ add_project_arguments(cpp_args, language : ['cpp'])
 
 gl_priv_reqs = []
 
-if with_glx == 'xlib'
-  gl_priv_reqs += ['x11', 'xext', 'xcb']
-elif with_glx == 'dri'
+if with_glx == 'dri'
   gl_priv_reqs += [
     'x11', 'xext', 'xfixes', 'x11-xcb', 'xcb',
     'xcb-glx >= 1.8.1']

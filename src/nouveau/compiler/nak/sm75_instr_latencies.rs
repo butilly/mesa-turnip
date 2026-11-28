@@ -38,11 +38,7 @@ enum RegLatencySM75 {
 }
 
 pub const fn pred(has_pred: bool, a: u32, b: u32) -> u32 {
-    if has_pred {
-        a + b
-    } else {
-        b
-    }
+    if has_pred { a + b } else { b }
 }
 
 impl RegLatencySM75 {
@@ -199,6 +195,10 @@ impl RegLatencySM75 {
             Op::Shfl(_) => Decoupled,
             Op::Ldsm(_) => Decoupled,
             Op::Nanosleep(_) => Decoupled,
+            Op::TtuOpen(_) | Op::TtuGo(_) | Op::TtuLd(_) | Op::TtuSt(_) => {
+                Decoupled
+            }
+            Op::TtuMacroFuse(_) => CoupledAlu,
             x => {
                 panic!("Illegal instuction in reg category {}", x);
             }
@@ -792,7 +792,7 @@ impl RegLatencySM75 {
                 RedirectedFP16 => pred(has_pred, 3, 1),
                 Decoupled => 1,
                 _ => {
-                    panic!("Illegal RAW in Predicate");
+                    panic!("Illegal WAW in Predicate");
                 }
             },
             IMADWideUpper | IMADWideLower => match writer1 {
@@ -803,7 +803,7 @@ impl RegLatencySM75 {
                 RedirectedFP16 => pred(has_pred, 3, 3),
                 Decoupled => 1,
                 _ => {
-                    panic!("Illegal RAW in Predicate");
+                    panic!("Illegal WAW in Predicate");
                 }
             },
             RedirectedFP64 => match writer1 {
@@ -813,7 +813,7 @@ impl RegLatencySM75 {
                 RedirectedFP16 => pred(has_pred, 2, 4),
                 Decoupled => 1,
                 _ => {
-                    panic!("Illegal RAW in Predicate");
+                    panic!("Illegal WAW in Predicate");
                 }
             },
             RedirectedFP16 => match writer1 {
@@ -823,7 +823,7 @@ impl RegLatencySM75 {
                 RedirectedFP16 => 1,
                 Decoupled => 1,
                 _ => {
-                    panic!("Illegal RAW in Predicate");
+                    panic!("Illegal WAW in Predicate");
                 }
             },
             Decoupled => match writer1 {
@@ -832,11 +832,11 @@ impl RegLatencySM75 {
                 | RedirectedFP16 => 2,
                 Decoupled => 1,
                 _ => {
-                    panic!("Illegal RAW in Predicate");
+                    panic!("Illegal WAW in Predicate");
                 }
             },
             _ => {
-                panic!("Illegal WAR category in Predicates");
+                panic!("Illegal WAW category in Predicates");
             }
         }
     }

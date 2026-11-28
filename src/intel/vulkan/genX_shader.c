@@ -70,7 +70,7 @@ get_scratch_address(struct anv_device *device, struct anv_shader *shader)
    return (struct anv_address) {
       .bo = anv_scratch_pool_alloc(device, &device->scratch_pool,
                                    shader->vk.stage,
-                                   shader->prog_data->total_scratch),
+                                   shader->bin->info.total_scratch),
       .offset = 0,
    };
 }
@@ -78,7 +78,7 @@ get_scratch_address(struct anv_device *device, struct anv_shader *shader)
 static UNUSED uint32_t
 get_scratch_space(const struct anv_shader *shader)
 {
-   return ffs(shader->prog_data->total_scratch / 2048);
+   return ffs(shader->bin->info.total_scratch / 2048);
 }
 
 static UNUSED uint32_t
@@ -92,7 +92,7 @@ get_scratch_surface(struct anv_batch *batch,
       return 0;
 
    return anv_shader_get_scratch_surf(batch, device, shader->vk.stage,
-                                      shader->prog_data->total_scratch,
+                                      shader->bin->info.total_scratch,
                                       protected);
 }
 
@@ -108,8 +108,7 @@ emit_3dstate_streamout(struct anv_batch *batch,
    }
 
    const struct nir_xfb_info *xfb_info = shader->xfb_info;
-   const struct intel_vue_map *vue_map =
-      &brw_vue_prog_data_const(shader->prog_data)->vue_map;
+   const struct intel_vue_map *vue_map = &shader->bin->info.vue.vue_map;
 
    struct GENX(SO_DECL) so_decl[MAX_XFB_STREAMS][128];
    int next_offset[MAX_XFB_BUFFERS] = {0, 0, 0, 0};
@@ -243,12 +242,11 @@ emit_3dstate_streamout(struct anv_batch *batch,
 /* Stage specific packing */
 
 static uint32_t
-get_vs_input_elements(const struct brw_vs_prog_data *vs_prog_data)
+get_vs_input_elements(const struct intel_shader_info *info)
 {
-   /* Pull inputs_read out of the VS prog data */
-   const uint64_t inputs_read = vs_prog_data->inputs_read;
+   const uint64_t inputs_read = info->vs.inputs_read;
    const uint64_t double_inputs_read =
-      vs_prog_data->double_inputs_read & inputs_read;
+      info->vs.double_inputs_read & inputs_read;
    assert((inputs_read & ((1 << VERT_ATTRIB_GENERIC0) - 1)) == 0);
    const uint32_t elements = inputs_read >> VERT_ATTRIB_GENERIC0;
    const uint32_t elements_double = double_inputs_read >> VERT_ATTRIB_GENERIC0;
@@ -324,11 +322,9 @@ emit_ves_vf_instancing(struct anv_batch *batch,
                        struct anv_shader *shader,
                        const struct vk_vertex_input_state *vi)
 {
-   const struct brw_vs_prog_data *vs_prog_data =
-      get_shader_vs_prog_data(shader);
-   const uint64_t inputs_read = vs_prog_data->inputs_read;
+   const uint64_t inputs_read = shader->bin->info.vs.inputs_read;
    const uint64_t double_inputs_read =
-      vs_prog_data->double_inputs_read & inputs_read;
+      shader->bin->info.vs.double_inputs_read & inputs_read;
    assert((inputs_read & ((1 << VERT_ATTRIB_GENERIC0) - 1)) == 0);
    const uint32_t elements = inputs_read >> VERT_ATTRIB_GENERIC0;
    const uint32_t elements_double = double_inputs_read >> VERT_ATTRIB_GENERIC0;
@@ -435,19 +431,17 @@ emit_vs_shader(struct anv_batch *batch,
                struct anv_shader *shader)
 {
    const struct intel_device_info *devinfo = device->info;
-   const struct brw_vs_prog_data *vs_prog_data =
-      get_shader_vs_prog_data(shader);
 
-   shader->vs.input_elements = get_vs_input_elements(vs_prog_data);
+   shader->vs.input_elements = get_vs_input_elements(&shader->bin->info);
 
    shader->vs.sgvs_count =
-      (vs_prog_data->uses_vertexid ||
-       vs_prog_data->uses_instanceid ||
-       vs_prog_data->uses_firstvertex ||
-       vs_prog_data->uses_baseinstance) + vs_prog_data->uses_drawid;
+      (shader->bin->info.vs.uses_vertexid ||
+       shader->bin->info.vs.uses_instanceid ||
+       shader->bin->info.vs.uses_firstvertex ||
+       shader->bin->info.vs.uses_baseinstance) + shader->bin->info.vs.uses_drawid;
 
    const bool needs_sgvs_elem = shader->vs.sgvs_count > 1 ||
-                                !vs_prog_data->uses_drawid;
+                                !shader->bin->info.vs.uses_drawid;
    const uint32_t id_slot = shader->vs.input_elements;
    const uint32_t drawid_slot = id_slot + needs_sgvs_elem;
    if (shader->vs.sgvs_count > 0) {
@@ -464,8 +458,8 @@ emit_vs_shader(struct anv_batch *batch,
           * This means, that if we have BaseInstance, we need BaseVertex as
           * well.  Just do all or nothing.
           */
-         uint32_t base_ctrl = (vs_prog_data->uses_firstvertex ||
-                               vs_prog_data->uses_baseinstance) ?
+         uint32_t base_ctrl = (shader->bin->info.vs.uses_firstvertex ||
+                               shader->bin->info.vs.uses_baseinstance) ?
                               VFCOMP_STORE_SRC : VFCOMP_STORE_0;
 #endif
 
@@ -495,7 +489,7 @@ emit_vs_shader(struct anv_batch *batch,
          }
       }
 
-      if (vs_prog_data->uses_drawid) {
+      if (shader->bin->info.vs.uses_drawid) {
          struct GENX(VERTEX_ELEMENT_STATE) element = {
             .VertexBufferIndex = ANV_DRAWID_VB_INDEX,
             .Valid = true,
@@ -523,10 +517,10 @@ emit_vs_shader(struct anv_batch *batch,
    }
 
    anv_shader_emit(batch, shader, vs.vf_sgvs, GENX(3DSTATE_VF_SGVS), sgvs) {
-      sgvs.VertexIDEnable              = vs_prog_data->uses_vertexid;
+      sgvs.VertexIDEnable              = shader->bin->info.vs.uses_vertexid;
       sgvs.VertexIDComponentNumber     = 2;
       sgvs.VertexIDElementOffset       = id_slot;
-      sgvs.InstanceIDEnable            = vs_prog_data->uses_instanceid;
+      sgvs.InstanceIDEnable            = shader->bin->info.vs.uses_instanceid;
       sgvs.InstanceIDComponentNumber   = 3;
       sgvs.InstanceIDElementOffset     = id_slot;
    }
@@ -534,19 +528,19 @@ emit_vs_shader(struct anv_batch *batch,
 #if GFX_VER >= 11
    anv_shader_emit(batch, shader, vs.vf_sgvs_2, GENX(3DSTATE_VF_SGVS_2), sgvs) {
       /* gl_BaseVertex */
-      sgvs.XP0Enable                   = vs_prog_data->uses_firstvertex;
+      sgvs.XP0Enable                   = shader->bin->info.vs.uses_firstvertex;
       sgvs.XP0SourceSelect             = XP0_PARAMETER;
       sgvs.XP0ComponentNumber          = 0;
       sgvs.XP0ElementOffset            = id_slot;
 
       /* gl_BaseInstance */
-      sgvs.XP1Enable                   = vs_prog_data->uses_baseinstance;
+      sgvs.XP1Enable                   = shader->bin->info.vs.uses_baseinstance;
       sgvs.XP1SourceSelect             = StartingInstanceLocation;
       sgvs.XP1ComponentNumber          = 1;
       sgvs.XP1ElementOffset            = id_slot;
 
       /* gl_DrawID */
-      sgvs.XP2Enable                   = vs_prog_data->uses_drawid;
+      sgvs.XP2Enable                   = shader->bin->info.vs.uses_drawid;
       sgvs.XP2ComponentNumber          = 0;
       sgvs.XP2ElementOffset            = drawid_slot;
    }
@@ -555,10 +549,10 @@ emit_vs_shader(struct anv_batch *batch,
    if (device->physical->drirc.perf.vf_comp_packing) {
       anv_shader_emit(batch, shader, vs.vf_component_packing,
                       GENX(3DSTATE_VF_COMPONENT_PACKING), vfc) {
-         vfc.VertexElementEnablesDW[0] = vs_prog_data->vf_component_packing[0];
-         vfc.VertexElementEnablesDW[1] = vs_prog_data->vf_component_packing[1];
-         vfc.VertexElementEnablesDW[2] = vs_prog_data->vf_component_packing[2];
-         vfc.VertexElementEnablesDW[3] = vs_prog_data->vf_component_packing[3];
+         vfc.VertexElementEnablesDW[0] = shader->bin->info.vs.vf_component_packing[0];
+         vfc.VertexElementEnablesDW[1] = shader->bin->info.vs.vf_component_packing[1];
+         vfc.VertexElementEnablesDW[2] = shader->bin->info.vs.vf_component_packing[2];
+         vfc.VertexElementEnablesDW[3] = shader->bin->info.vs.vf_component_packing[3];
       }
    }
 
@@ -569,7 +563,7 @@ emit_vs_shader(struct anv_batch *batch,
       vs.KernelStartPointer   = anv_shader_get_pointer(device, &shader->kernel);
 #if GFX_VER < 20
       vs.SIMD8DispatchEnable  =
-         vs_prog_data->base.dispatch_mode == DISPATCH_MODE_SIMD8;
+         shader->bin->info.vue.dispatch_mode == DISPATCH_MODE_SIMD8;
 #endif
 
 #if GFX_VER < 11
@@ -583,19 +577,19 @@ emit_vs_shader(struct anv_batch *batch,
       vs.SoftwareExceptionEnable    = false;
       vs.MaximumNumberofThreads     = devinfo->max_vs_threads - 1;
 
-      vs.VertexURBEntryReadLength      = vs_prog_data->base.urb_read_length;
+      vs.VertexURBEntryReadLength      = shader->bin->info.vue.urb_read_length;
       vs.VertexURBEntryReadOffset      = 0;
       vs.DispatchGRFStartRegisterForURBData =
-         vs_prog_data->base.base.dispatch_grf_start_reg;
+         shader->bin->info.dispatch_grf_start_reg;
 
       vs.UserClipDistanceClipTestEnableBitmask =
-         vs_prog_data->base.clip_distance_mask;
+         shader->bin->info.vue.clip_distance_mask;
       vs.UserClipDistanceCullTestEnableBitmask =
-         vs_prog_data->base.cull_distance_mask;
+         shader->bin->info.vue.cull_distance_mask;
 
 #if GFX_VER >= 30
       vs.RegistersPerThread =
-         intel_register_blocks(devinfo, vs_prog_data->base.base.grf_used);
+         intel_register_blocks(devinfo, shader->bin->info.grf_used);
 #endif
    }
 
@@ -626,8 +620,6 @@ emit_hs_shader(struct anv_batch *batch,
                struct anv_shader *shader)
 {
    const struct intel_device_info *devinfo = device->info;
-   const struct brw_tcs_prog_data *tcs_prog_data =
-      get_shader_tcs_prog_data(shader);
 
    uint32_t hs_dwords[GENX(3DSTATE_HS_length)];
    anv_shader_emit_tmp(batch, hs_dwords, GENX(3DSTATE_HS), hs) {
@@ -644,37 +636,37 @@ emit_hs_shader(struct anv_batch *batch,
        *    the number of instance count. The number of max threads must be
        *    more than 2 times the number of instance count.
        */
-      assert((devinfo->max_tcs_threads / 2) > tcs_prog_data->instances);
+      assert((devinfo->max_tcs_threads / 2) > shader->bin->info.tcs.instances);
 #endif
 
       hs.MaximumNumberofThreads = devinfo->max_tcs_threads - 1;
       hs.IncludeVertexHandles = true;
-      hs.InstanceCount = tcs_prog_data->instances - 1;
+      hs.InstanceCount = shader->bin->info.tcs.instances - 1;
 
       hs.VertexURBEntryReadLength = 0;
       hs.VertexURBEntryReadOffset = 0;
       hs.DispatchGRFStartRegisterForURBData =
-         tcs_prog_data->base.base.dispatch_grf_start_reg & 0x1f;
+         shader->bin->info.dispatch_grf_start_reg & 0x1f;
 #if GFX_VER >= 12
       hs.DispatchGRFStartRegisterForURBData5 =
-         tcs_prog_data->base.base.dispatch_grf_start_reg >> 5;
+         shader->bin->info.dispatch_grf_start_reg >> 5;
 #endif
 
 #if GFX_VER == 12
       /*  Patch Count threshold specifies the maximum number of patches that
        *  will be accumulated before a thread dispatch is forced.
        */
-      hs.PatchCountThreshold = tcs_prog_data->patch_count_threshold;
+      hs.PatchCountThreshold = shader->bin->info.tcs.patch_count_threshold;
 #endif
 
 #if GFX_VER < 20
-      hs.DispatchMode = tcs_prog_data->base.dispatch_mode;
+      hs.DispatchMode = shader->bin->info.vue.dispatch_mode;
 #endif
-      hs.IncludePrimitiveID = tcs_prog_data->include_primitive_id;
+      hs.IncludePrimitiveID = shader->bin->info.tcs.include_primitive_id;
 
 #if GFX_VER >= 30
       hs.RegistersPerThread =
-         intel_register_blocks(devinfo, tcs_prog_data->base.base.grf_used);
+         intel_register_blocks(devinfo, shader->bin->info.grf_used);
 #endif
    };
 
@@ -705,8 +697,6 @@ emit_ds_shader(struct anv_batch *batch,
                struct anv_shader *shader)
 {
    const struct intel_device_info *devinfo = device->info;
-   const struct brw_tes_prog_data *tes_prog_data =
-      get_shader_tes_prog_data(shader);
 
    anv_shader_emit(batch, shader, ds.te, GENX(3DSTATE_TE), te) {
       te.TEEnable = true;
@@ -743,25 +733,25 @@ emit_ds_shader(struct anv_batch *batch,
       ds.BindingTableEntryCount = get_surface_count(device, shader);
       ds.MaximumNumberofThreads = devinfo->max_tes_threads - 1;
 
-      ds.PatchURBEntryReadLength = tes_prog_data->base.urb_read_length;
+      ds.PatchURBEntryReadLength = shader->bin->info.vue.urb_read_length;
       ds.PatchURBEntryReadOffset = 0;
       ds.DispatchGRFStartRegisterForURBData =
-         tes_prog_data->base.base.dispatch_grf_start_reg;
+         shader->bin->info.dispatch_grf_start_reg;
 
       ds.DispatchMode = DISPATCH_MODE_SIMD8_SINGLE_PATCH;
 
       ds.UserClipDistanceClipTestEnableBitmask =
-         tes_prog_data->base.clip_distance_mask;
+         shader->bin->info.vue.clip_distance_mask;
       ds.UserClipDistanceCullTestEnableBitmask =
-         tes_prog_data->base.cull_distance_mask;
+         shader->bin->info.vue.cull_distance_mask;
 
 #if GFX_VER >= 12
-      ds.PrimitiveIDNotRequired = !tes_prog_data->include_primitive_id;
+      ds.PrimitiveIDNotRequired = !shader->bin->info.tes.include_primitive_id;
 #endif
 
 #if GFX_VER >= 30
       ds.RegistersPerThread =
-         intel_register_blocks(devinfo, tes_prog_data->base.base.grf_used);
+         intel_register_blocks(devinfo, shader->bin->info.grf_used);
 #endif
    }
 
@@ -792,8 +782,6 @@ emit_gs_shader(struct anv_batch *batch,
                struct anv_shader *shader)
 {
    const struct intel_device_info *devinfo = device->info;
-   const struct brw_gs_prog_data *gs_prog_data =
-      get_shader_gs_prog_data(shader);
 
    uint32_t gs_dwords[GENX(3DSTATE_GS_length)];
    anv_shader_emit_tmp(batch, gs_dwords, GENX(3DSTATE_GS), gs) {
@@ -801,42 +789,42 @@ emit_gs_shader(struct anv_batch *batch,
       gs.StatisticsEnable        = true;
       gs.KernelStartPointer      = anv_shader_get_pointer(device, &shader->kernel);
 #if GFX_VER < 20
-      gs.DispatchMode            = gs_prog_data->base.dispatch_mode;
+      gs.DispatchMode            = shader->bin->info.vue.dispatch_mode;
 #endif
 
       gs.SingleProgramFlow       = false;
       gs.VectorMaskEnable        = false;
       gs.SamplerCount            = get_sampler_count(device, shader);
       gs.BindingTableEntryCount  = get_surface_count(device, shader);
-      gs.IncludeVertexHandles    = gs_prog_data->base.include_vue_handles;
-      gs.IncludePrimitiveID      = gs_prog_data->include_primitive_id;
+      gs.IncludeVertexHandles    = shader->bin->info.vue.include_vue_handles;
+      gs.IncludePrimitiveID      = shader->bin->info.gs.include_primitive_id;
 
       gs.MaximumNumberofThreads  = devinfo->max_gs_threads - 1;
 
-      gs.OutputVertexSize        = gs_prog_data->output_vertex_size_hwords * 2 - 1;
-      gs.OutputTopology          = gs_prog_data->output_topology;
-      gs.ControlDataFormat       = gs_prog_data->control_data_format;
-      gs.ControlDataHeaderSize   = gs_prog_data->control_data_header_size_hwords;
-      gs.InstanceControl         = MAX2(gs_prog_data->invocations, 1) - 1;
+      gs.OutputVertexSize        = shader->bin->info.gs.output_vertex_size_hwords * 2 - 1;
+      gs.OutputTopology          = shader->bin->info.gs.output_topology;
+      gs.ControlDataFormat       = shader->bin->info.gs.control_data_format;
+      gs.ControlDataHeaderSize   = shader->bin->info.gs.control_data_header_size_hwords;
+      gs.InstanceControl         = MAX2(shader->bin->info.gs.invocations, 1) - 1;
 
-      gs.ExpectedVertexCount     = gs_prog_data->vertices_in;
-      gs.StaticOutput            = gs_prog_data->static_vertex_count >= 0;
-      gs.StaticOutputVertexCount = gs_prog_data->static_vertex_count >= 0 ?
-                                   gs_prog_data->static_vertex_count : 0;
+      gs.ExpectedVertexCount     = shader->bin->info.gs.vertices_in;
+      gs.StaticOutput            = shader->bin->info.gs.static_vertex_count >= 0;
+      gs.StaticOutputVertexCount = shader->bin->info.gs.static_vertex_count >= 0 ?
+                                   shader->bin->info.gs.static_vertex_count : 0;
 
       gs.VertexURBEntryReadOffset = 0;
-      gs.VertexURBEntryReadLength = gs_prog_data->base.urb_read_length;
+      gs.VertexURBEntryReadLength = shader->bin->info.vue.urb_read_length;
       gs.DispatchGRFStartRegisterForURBData =
-         gs_prog_data->base.base.dispatch_grf_start_reg;
+         shader->bin->info.dispatch_grf_start_reg;
 
       gs.UserClipDistanceClipTestEnableBitmask =
-         gs_prog_data->base.clip_distance_mask;
+         shader->bin->info.vue.clip_distance_mask;
       gs.UserClipDistanceCullTestEnableBitmask =
-         gs_prog_data->base.cull_distance_mask;
+         shader->bin->info.vue.cull_distance_mask;
 
 #if GFX_VER >= 30
       gs.RegistersPerThread =
-         intel_register_blocks(devinfo, gs_prog_data->base.base.grf_used);
+         intel_register_blocks(devinfo, shader->bin->info.grf_used);
 #endif
    }
 
@@ -868,10 +856,8 @@ emit_task_shader(struct anv_batch *batch,
                  struct anv_shader *shader)
 {
    const struct intel_device_info *devinfo = device->info;
-   const struct brw_task_prog_data *task_prog_data =
-      get_shader_task_prog_data(shader);
    const struct intel_cs_dispatch_info task_dispatch =
-      brw_cs_get_dispatch_info(devinfo, &task_prog_data->base, NULL);
+      brw_cs_get_dispatch_info(devinfo, &shader->bin->info, NULL);
 
    uint32_t task_control_dwords[GENX(3DSTATE_TASK_CONTROL_length)];
    anv_shader_emit_tmp(batch, task_control_dwords, GENX(3DSTATE_TASK_CONTROL), tc) {
@@ -900,23 +886,23 @@ emit_task_shader(struct anv_batch *batch,
       task.LocalXMaximum                     = task_dispatch.group_size - 1;
       task.EmitLocalIDX                      = true;
 
-      task.NumberofBarriers                  = task_prog_data->base.uses_barrier;
+      task.NumberofBarriers                  = shader->bin->info.wg.uses_barrier;
       task.SharedLocalMemorySize             =
-         intel_compute_slm_encode_size(GFX_VER, task_prog_data->base.base.total_shared);
+         intel_compute_slm_encode_size(GFX_VER, shader->bin->info.total_shared);
       task.PreferredSLMAllocationSize        =
          intel_compute_preferred_slm_calc_encode_size(devinfo,
-                                                      task_prog_data->base.base.total_shared,
+                                                      shader->bin->info.total_shared,
                                                       task_dispatch.group_size,
                                                       task_dispatch.simd_size);
 
       task.EmitInlineParameter = shader->bind_map.inline_dwords_count > 0;
       task.IndirectDataLength = align(shader->bind_map.push_ranges[0].length * 32, 64);
 
-      task.XP0Required = task_prog_data->uses_drawid;
+      task.XP0Required = shader->bin->info.task.uses_drawid;
 
 #if GFX_VER >= 30
       task.RegistersPerThread =
-         intel_register_blocks(devinfo, task_prog_data->base.base.grf_used);
+         intel_register_blocks(devinfo, shader->bin->info.grf_used);
 #endif
    }
 
@@ -937,10 +923,8 @@ emit_mesh_shader(struct anv_batch *batch,
                  struct anv_shader *shader)
 {
    const struct intel_device_info *devinfo = device->info;
-   const struct brw_mesh_prog_data *mesh_prog_data =
-      get_shader_mesh_prog_data(shader);
    const struct intel_cs_dispatch_info mesh_dispatch =
-      brw_cs_get_dispatch_info(devinfo, &mesh_prog_data->base, NULL);
+      brw_cs_get_dispatch_info(devinfo, &shader->bin->info, NULL);
 
    uint32_t mesh_control_dwords[GENX(3DSTATE_MESH_CONTROL_length)];
    anv_shader_emit_tmp(batch, mesh_control_dwords, GENX(3DSTATE_MESH_CONTROL), mc) {
@@ -948,7 +932,7 @@ emit_mesh_shader(struct anv_batch *batch,
       mc.StatisticsEnable = true;
       mc.MaximumNumberofThreadGroups = 511;
 #if GFX_VER >= 20
-      mc.VPandRTAIndexAutostripEnable = mesh_prog_data->autostrip_enable;
+      mc.VPandRTAIndexAutostripEnable = shader->bin->info.mesh.autostrip_enable;
 #endif
    }
 
@@ -964,12 +948,12 @@ emit_mesh_shader(struct anv_batch *batch,
    }
 
    const unsigned output_topology =
-      mesh_prog_data->primitive_type == MESA_PRIM_POINTS ? OUTPUT_POINT :
-      mesh_prog_data->primitive_type == MESA_PRIM_LINES  ? OUTPUT_LINE :
+      shader->bin->info.mesh.primitive_type == MESA_PRIM_POINTS ? OUTPUT_POINT :
+      shader->bin->info.mesh.primitive_type == MESA_PRIM_LINES  ? OUTPUT_LINE :
                                                              OUTPUT_TRI;
 
    uint32_t index_format;
-   switch (mesh_prog_data->index_format) {
+   switch (shader->bin->info.mesh.index_format) {
    case BRW_INDEX_FORMAT_U32:
       index_format = INDEX_U32;
       break;
@@ -989,30 +973,30 @@ emit_mesh_shader(struct anv_batch *batch,
       mesh.LocalXMaximum                     = mesh_dispatch.group_size - 1;
       mesh.EmitLocalIDX                      = true;
 
-      mesh.MaximumPrimitiveCount             = MAX2(mesh_prog_data->map.max_primitives, 1) - 1;
+      mesh.MaximumPrimitiveCount             = MAX2(shader->bin->info.mesh.map.max_primitives, 1) - 1;
       mesh.OutputTopology                    = output_topology;
-      mesh.PerVertexDataPitch                = mesh_prog_data->map.per_vertex_stride / 32;
-      mesh.PerPrimitiveDataPresent           = mesh_prog_data->map.per_primitive_stride > 0;
-      mesh.PerPrimitiveDataPitch             = mesh_prog_data->map.per_primitive_stride / 32;
+      mesh.PerVertexDataPitch                = shader->bin->info.mesh.map.per_vertex_stride / 32;
+      mesh.PerPrimitiveDataPresent           = shader->bin->info.mesh.map.per_primitive_stride > 0;
+      mesh.PerPrimitiveDataPitch             = shader->bin->info.mesh.map.per_primitive_stride / 32;
       mesh.IndexFormat                       = index_format;
 
-      mesh.NumberofBarriers                  = mesh_prog_data->base.uses_barrier;
+      mesh.NumberofBarriers                  = shader->bin->info.wg.uses_barrier;
       mesh.SharedLocalMemorySize             =
-         intel_compute_slm_encode_size(GFX_VER, mesh_prog_data->base.base.total_shared);
+         intel_compute_slm_encode_size(GFX_VER, shader->bin->info.total_shared);
       mesh.PreferredSLMAllocationSize        =
          intel_compute_preferred_slm_calc_encode_size(devinfo,
-                                                      mesh_prog_data->base.base.total_shared,
+                                                      shader->bin->info.total_shared,
                                                       mesh_dispatch.group_size,
                                                       mesh_dispatch.simd_size);
 
       mesh.EmitInlineParameter = shader->bind_map.inline_dwords_count > 0;
       mesh.IndirectDataLength = align(shader->bind_map.push_ranges[0].length * 32, 64);
 
-      mesh.XP0Required = mesh_prog_data->uses_drawid;
+      mesh.XP0Required = shader->bin->info.mesh.uses_drawid;
 
 #if GFX_VER >= 30
       mesh.RegistersPerThread =
-         intel_register_blocks(devinfo, mesh_prog_data->base.base.grf_used);
+         intel_register_blocks(devinfo, shader->bin->info.grf_used);
 #endif
    }
 
@@ -1024,9 +1008,9 @@ emit_mesh_shader(struct anv_batch *batch,
    }
 
    anv_shader_emit(batch, shader, ms.clip, GENX(3DSTATE_CLIP_MESH), clip_mesh) {
-      clip_mesh.PrimitiveHeaderEnable = mesh_prog_data->map.has_per_primitive_header;
-      clip_mesh.UserClipDistanceClipTestEnableBitmask = mesh_prog_data->clip_distance_mask;
-      clip_mesh.UserClipDistanceCullTestEnableBitmask = mesh_prog_data->cull_distance_mask;
+      clip_mesh.PrimitiveHeaderEnable = shader->bin->info.mesh.map.has_per_primitive_header;
+      clip_mesh.UserClipDistanceClipTestEnableBitmask = shader->bin->info.mesh.clip_distance_mask;
+      clip_mesh.UserClipDistanceCullTestEnableBitmask = shader->bin->info.mesh.cull_distance_mask;
    }
 
    /* Disable streamout */
@@ -1040,15 +1024,15 @@ emit_ps_shader(struct anv_batch *batch,
                struct anv_shader *shader)
 {
    const struct intel_device_info *devinfo = device->info;
-   const struct brw_fs_prog_data *fs_prog_data =
-      get_shader_fs_prog_data(shader);
+   const struct intel_shader_info *info = &shader->bin->info;
 
    uint32_t ps_dwords[GENX(3DSTATE_PS_length)];
    anv_shader_emit_tmp(batch, ps_dwords, GENX(3DSTATE_PS), ps) {
 #if GFX_VER == 12
-      assert(fs_prog_data->dispatch_multi == 0 ||
-             (fs_prog_data->dispatch_multi == 16 && fs_prog_data->max_polygons == 2));
-      ps.DualSIMD8DispatchEnable = fs_prog_data->dispatch_multi;
+      assert(shader->bin->info.fs.dispatch_multi == 0 ||
+             (shader->bin->info.fs.dispatch_multi == 16 &&
+              shader->bin->info.fs.max_polygons == 2));
+      ps.DualSIMD8DispatchEnable = shader->bin->info.fs.dispatch_multi;
       /* XXX - No major improvement observed from enabling
        *       overlapping subspans, but it could be helpful
        *       in theory when the requirements listed on the
@@ -1058,18 +1042,18 @@ emit_ps_shader(struct anv_batch *batch,
 #endif
 
       ps.SingleProgramFlow          = false;
-      ps.VectorMaskEnable           = fs_prog_data->uses_vmask;
+      ps.VectorMaskEnable           = info->fs.uses_vmask;
       ps.SamplerCount               = get_sampler_count(device, shader);
       ps.BindingTableEntryCount     = get_surface_count(device, shader);
 #if GFX_VER < 20
-      ps.PushConstantEnable         = fs_prog_data->base.push_sizes[0] > 0;
+      ps.PushConstantEnable         = shader->bin->info.push_layout.push_sizes[0] > 0;
 #endif
 
       ps.MaximumNumberofThreadsPerPSD = devinfo->max_threads_per_psd - 1;
 
 #if GFX_VER >= 30
       ps.RegistersPerThread =
-         intel_register_blocks(devinfo, fs_prog_data->base.grf_used);
+         intel_register_blocks(devinfo, shader->bin->info.grf_used);
 #endif
    }
 
@@ -1096,29 +1080,29 @@ emit_ps_shader(struct anv_batch *batch,
    anv_shader_emit(batch, shader, ps.ps_extra, GENX(3DSTATE_PS_EXTRA), ps) {
       ps.PixelShaderValid              = true;
 #if GFX_VER < 20
-      ps.AttributeEnable               = fs_prog_data->num_varying_inputs > 0;
+      ps.AttributeEnable               = info->fs.num_varying_inputs > 0;
 #endif
-      ps.oMaskPresenttoRenderTarget    = fs_prog_data->uses_omask;
-      ps.PixelShaderComputedDepthMode  = fs_prog_data->computed_depth_mode;
-      ps.PixelShaderUsesSourceDepth    = fs_prog_data->uses_src_depth;
-      ps.PixelShaderUsesSourceW        = fs_prog_data->uses_src_w;
+      ps.oMaskPresenttoRenderTarget    = info->fs.uses_omask;
+      ps.PixelShaderComputedDepthMode  = info->fs.computed_depth_mode;
+      ps.PixelShaderUsesSourceDepth    = info->fs.uses_src_depth;
+      ps.PixelShaderUsesSourceW        = info->fs.uses_src_w;
 
-      ps.PixelShaderComputesStencil    = fs_prog_data->computed_stencil;
+      ps.PixelShaderComputesStencil    = info->fs.computed_stencil;
 #if GFX_VER >= 20
-      assert(!fs_prog_data->pulls_bary);
+      assert(!info->fs.pulls_bary);
 #else
-      ps.PixelShaderPullsBary          = fs_prog_data->pulls_bary;
+      ps.PixelShaderPullsBary          = info->fs.pulls_bary;
 #endif
 
 #if GFX_VER >= 11
       ps.PixelShaderRequiresSubpixelSampleOffsets =
-         fs_prog_data->uses_sample_offsets;
+         info->fs.uses_sample_offsets;
       ps.PixelShaderRequiresNonPerspectiveBaryPlaneCoefficients =
-         fs_prog_data->uses_npc_bary_coefficients;
+         info->fs.uses_npc_bary_coefficients;
       ps.PixelShaderRequiresPerspectiveBaryPlaneCoefficients =
-         fs_prog_data->uses_pc_bary_coefficients;
+         info->fs.uses_pc_bary_coefficients;
       ps.PixelShaderRequiresSourceDepthandorWPlaneCoefficients =
-         fs_prog_data->uses_depth_w_coefficients;
+         info->fs.uses_depth_w_coefficients;
 #endif
    }
 
@@ -1128,9 +1112,9 @@ emit_ps_shader(struct anv_batch *batch,
       wm.LineAntialiasingRegionWidth         = _10pixels;
       wm.PointRasterizationRule              = RASTRULE_UPPER_LEFT;
 
-      if (fs_prog_data->early_fragment_tests) {
+      if (info->fs.early_fragment_tests) {
          wm.EarlyDepthStencilControl         = EDSC_PREPS;
-      } else if (fs_prog_data->has_side_effects) {
+      } else if (info->fs.has_side_effects) {
          wm.EarlyDepthStencilControl         = EDSC_PSEXEC;
       } else {
          wm.EarlyDepthStencilControl         = EDSC_NORMAL;
@@ -1144,10 +1128,12 @@ emit_cs_shader(struct anv_batch *batch,
                struct anv_shader *shader)
 {
    const struct intel_device_info *devinfo = device->info;
-   const struct brw_cs_prog_data *cs_prog_data =
-      get_shader_cs_prog_data(shader);
+   const intel_shader_bin *bin = shader->bin;
    const struct intel_cs_dispatch_info dispatch =
-      brw_cs_get_dispatch_info(devinfo, cs_prog_data, NULL);
+      brw_cs_get_dispatch_info(devinfo, &bin->info, NULL);
+   UNUSED const enum intel_compute_walk_order walk_order =
+      anv_compute_walk_order(device->physical->drirc.perf.force_preferred_walk_order,
+                             bin->info.cs.walk_order);
 
    if (GFX_VERx10 >= 350 && device->physical->uses_efficient_64bit) {
 #if GFX_VERx10 >= 350
@@ -1155,12 +1141,11 @@ emit_cs_shader(struct anv_batch *batch,
       uint8_t z_pass_async_compute_thread_limit;
       uint8_t np_z_async_throttle_settings;
       const bool slm_or_barrier_enabled =
-         cs_prog_data->base.total_shared != 0 ||
-         cs_prog_data->uses_barrier;
+         bin->info.total_shared != 0 || bin->info.wg.uses_barrier;
 
       intel_compute_engine_async_threads_limit(device->info, dispatch.threads,
                                                slm_or_barrier_enabled,
-                                               cs_prog_data->uses_fence,
+                                               bin->info.cs.uses_fence,
                                                &pixel_async_compute_thread_limit,
                                                &z_pass_async_compute_thread_limit,
                                                &np_z_async_throttle_settings);
@@ -1170,32 +1155,36 @@ emit_cs_shader(struct anv_batch *batch,
          .StackIDControl         = genX(compute_walker2_get_stack_id_control_value)(device),
          .SIMDSize               = dispatch.simd_size / 16,
          .MessageSIMD            = dispatch.simd_size / 16,
-         .GenerateLocalID        = cs_prog_data->generate_local_id != 0,
-         .EmitLocal              = cs_prog_data->generate_local_id,
+         .GenerateLocalID        = bin->info.cs.generate_local_id != 0,
+         .EmitLocal              = bin->info.cs.generate_local_id,
          .EmitInlineParameter    = true,
-         .WalkOrder              = cs_prog_data->walk_order,
-         .TileLayout             = cs_prog_data->walk_order == INTEL_WALK_ORDER_YXZ ?
+         .WalkOrder              = walk_order,
+         .TileLayout             = walk_order == INTEL_WALK_ORDER_YXZ ?
                                    TL_TileY32bpe : TL_Linear,
-         .DispatchWalkOrder      = cs_prog_data->uses_sampler ? DWO_Morton2x2XYWalk : DWO_LinearWalk,
-         .ThreadGroupBatchSize   = cs_prog_data->uses_sampler ? TGBS_TG_BATCH_4 : TGBS_TG_BATCH_1,
+         .DispatchWalkOrder      = bin->info.cs.uses_sampler ?
+                                   DWO_Morton2x2XYWalk : DWO_LinearWalk,
+         .ThreadGroupBatchSize   = bin->info.cs.uses_sampler ?
+                                   TGBS_TG_BATCH_4 : TGBS_TG_BATCH_1,
          .ExecutionMask          = dispatch.right_mask,
-         .LocalXMaximum          = cs_prog_data->local_size[0] - 1,
-         .LocalYMaximum          = cs_prog_data->local_size[1] - 1,
-         .LocalZMaximum          = cs_prog_data->local_size[2] - 1,
+         .LocalXMaximum          = bin->info.wg.local_size[0] - 1,
+         .LocalYMaximum          = bin->info.wg.local_size[1] - 1,
+         .LocalZMaximum          = bin->info.wg.local_size[2] - 1,
          .Post_sync_opn0.MOCS    = anv_mocs(device, NULL, 0),
          .Post_sync_opn1.MOCS    = anv_mocs(device, NULL, 0),
          .Post_sync_opn2.MOCS    = anv_mocs(device, NULL, 0),
          .Post_sync_opn3.MOCS    = anv_mocs(device, NULL, 0),
          .InterfaceDescriptor    = (struct GENX(INTERFACE_DESCRIPTOR_DATA_2)) {
             .KernelStartPointer                 = anv_shader_get_pointer(device, &shader->kernel),
-            .RegistersPerThread                 = intel_register_blocks(devinfo,
-                                                                        cs_prog_data->base.grf_used),
+            .RegistersPerThread                 =
+               intel_register_blocks(devinfo, bin->info.grf_used),
             .NumberofThreadsinGPGPUThreadGroup  = dispatch.threads,
             .ThreadGroupDispatchSize            = intel_compute_threads_group_dispatch_size_walker_2(dispatch.threads),
-            .SharedLocalMemorySize              = intel_compute_slm_encode_size(GFX_VER, cs_prog_data->base.total_shared),
+            .SharedLocalMemorySize              = intel_compute_slm_encode_size(
+               GFX_VER, bin->info.total_shared),
             .PreferredSLMAllocationSize         = intel_compute_preferred_slm_calc_encode_size(
-               devinfo, cs_prog_data->base.total_shared, dispatch.group_size, dispatch.simd_size),
-            .NumberOfBarriers                   = cs_prog_data->uses_barrier,
+               devinfo, bin->info.total_shared,
+               dispatch.group_size, dispatch.simd_size),
+            .NumberOfBarriers                   = bin->info.wg.uses_barrier,
             .PSAsyncThreadLimit                 = pixel_async_compute_thread_limit,
             .ZPassAsyncComputeThreadLimit       = z_pass_async_compute_thread_limit,
             .NP_ZAsyncThrottlesettings          = np_z_async_throttle_settings,
@@ -1216,21 +1205,21 @@ emit_cs_shader(struct anv_batch *batch,
           * increasing sample address locality within a subslice.
           */
 #if GFX_VER >= 30
-         .DispatchWalkOrder        = cs_prog_data->uses_sampler ?
-         MortonWalk : LinearWalk,
-         .ThreadGroupBatchSize     = cs_prog_data->uses_sampler ?
-         TG_BATCH_4 : TG_BATCH_1,
+         .DispatchWalkOrder              = bin->info.cs.uses_sampler ?
+                                           MortonWalk : LinearWalk,
+         .ThreadGroupBatchSize           = bin->info.cs.uses_sampler ?
+                                           TG_BATCH_4 : TG_BATCH_1,
 #endif
          .SIMDSize                       = dispatch.simd_size / 16,
          .MessageSIMD                    = dispatch.simd_size / 16,
-         .GenerateLocalID                = cs_prog_data->generate_local_id != 0,
-         .EmitLocal                      = cs_prog_data->generate_local_id,
-         .WalkOrder                      = cs_prog_data->walk_order,
-         .TileLayout                     = cs_prog_data->walk_order == INTEL_WALK_ORDER_YXZ ?
-         TileY32bpe : Linear,
-         .LocalXMaximum                  = cs_prog_data->local_size[0] - 1,
-         .LocalYMaximum                  = cs_prog_data->local_size[1] - 1,
-         .LocalZMaximum                  = cs_prog_data->local_size[2] - 1,
+         .GenerateLocalID                = bin->info.cs.generate_local_id != 0,
+         .EmitLocal                      = bin->info.cs.generate_local_id,
+         .WalkOrder                      = walk_order,
+         .TileLayout                     = walk_order == INTEL_WALK_ORDER_YXZ ?
+                                           TileY32bpe : Linear,
+         .LocalXMaximum                  = bin->info.wg.local_size[0] - 1,
+         .LocalYMaximum                  = bin->info.wg.local_size[1] - 1,
+         .LocalZMaximum                  = bin->info.wg.local_size[2] - 1,
          .PostSync                       = {
             .MOCS                        = anv_mocs(device, NULL, 0),
          },
@@ -1240,14 +1229,14 @@ emit_cs_shader(struct anv_batch *batch,
             .BindingTableEntryCount            = MIN2(get_surface_count(device, shader), 31),
             .NumberofThreadsinGPGPUThreadGroup = dispatch.threads,
             .SharedLocalMemorySize             = intel_compute_slm_encode_size(
-               GFX_VER, cs_prog_data->base.total_shared),
+               GFX_VER, bin->info.total_shared),
             .PreferredSLMAllocationSize        = intel_compute_preferred_slm_calc_encode_size(
-               devinfo, cs_prog_data->base.total_shared,
+               devinfo, bin->info.total_shared,
                dispatch.group_size, dispatch.simd_size),
-            .NumberOfBarriers                  = cs_prog_data->uses_barrier,
+            .NumberOfBarriers                  = bin->info.wg.uses_barrier,
 #if GFX_VER >= 30
             .RegistersPerThread                =
-            intel_register_blocks(devinfo, cs_prog_data->base.grf_used),
+               intel_register_blocks(devinfo, bin->info.grf_used),
 #endif
          },
          .EmitInlineParameter            = shader->bind_map.inline_dwords_count > 0,
@@ -1260,8 +1249,8 @@ emit_cs_shader(struct anv_batch *batch,
                                      &walker);
 #else
       const uint32_t vfe_curbe_allocation =
-         align(cs_prog_data->push.per_thread.regs * dispatch.threads +
-               cs_prog_data->push.cross_thread.regs, 2);
+         align(bin->info.cs.push.per_thread.regs * dispatch.threads +
+               bin->info.cs.push.cross_thread.regs, 2);
 
       anv_shader_emit(batch, shader, cs.gfx9.vfe, GENX(MEDIA_VFE_STATE), vfe) {
          vfe.StackSize              = 0;
@@ -1273,11 +1262,11 @@ emit_cs_shader(struct anv_batch *batch,
          vfe.URBEntryAllocationSize = 2;
          vfe.CURBEAllocationSize    = vfe_curbe_allocation;
 
-         if (cs_prog_data->base.total_scratch) {
+         if (bin->info.total_scratch) {
             /* Broadwell's Per Thread Scratch Space is in the range [0, 11]
              * where 0 = 1k, 1 = 2k, 2 = 4k, ..., 11 = 2M.
              */
-            vfe.PerThreadScratchSpace = ffs(cs_prog_data->base.total_scratch) - 11;
+            vfe.PerThreadScratchSpace = ffs(bin->info.total_scratch) - 11;
             vfe.ScratchSpaceBasePointer = get_scratch_address(device, shader);
          }
       }
@@ -1285,18 +1274,18 @@ emit_cs_shader(struct anv_batch *batch,
       struct GENX(INTERFACE_DESCRIPTOR_DATA) desc = {
          .KernelStartPointer     =
             anv_shader_get_pointer(device, &shader->kernel) +
-            brw_cs_prog_data_prog_offset(cs_prog_data, dispatch.simd_size),
+            intel_shader_info_cs_prog_offset(&bin->info, dispatch.simd_size),
 
          .SamplerCount           = get_sampler_count(device, shader),
          .BindingTableEntryCount = MIN2(get_surface_count(device, shader), 31),
-         .BarrierEnable          = cs_prog_data->uses_barrier,
+         .BarrierEnable          = bin->info.wg.uses_barrier,
          .SharedLocalMemorySize  = intel_compute_slm_encode_size(
-            GFX_VER, cs_prog_data->base.total_shared),
+            GFX_VER, bin->info.total_shared),
 
          .ConstantURBEntryReadOffset = 0,
-         .ConstantURBEntryReadLength = cs_prog_data->push.per_thread.regs,
+         .ConstantURBEntryReadLength = bin->info.cs.push.per_thread.regs,
          .CrossThreadConstantDataReadLength =
-         cs_prog_data->push.cross_thread.regs,
+            bin->info.cs.push.cross_thread.regs,
 #if GFX_VER >= 12
          /* TODO: Check if we are missing workarounds and enable mid-thread
           * preemption.
@@ -1336,35 +1325,52 @@ genX(write_cs_descriptor)(struct anv_dgc_cs_descriptor *desc,
                                 push_range->start : 0),
    };
 
-   const struct brw_cs_prog_data *prog_data =
-      brw_cs_prog_data_const(shader->prog_data);
    const struct intel_cs_dispatch_info dispatch =
-      brw_cs_get_dispatch_info(device->info, prog_data, NULL);
+      brw_cs_get_dispatch_info(device->info, &shader->bin->info, NULL);
 
    desc->right_mask = dispatch.right_mask;
    desc->threads = dispatch.threads;
    desc->simd_size = dispatch.simd_size;
 
 #if GFX_VERx10 >= 125
-   GENX(COMPUTE_WALKER_pack)(NULL, desc->gfx125.compute_walker,
-                             &(struct GENX(COMPUTE_WALKER)) {
-                                GENX(COMPUTE_WALKER_header),
-                                .body = {
-                                   .PostSync.MOCS = anv_mocs(device, NULL, 0),
-                                },
-                             });
+   if (GFX_VERx10 >= 350 && device->physical->uses_efficient_64bit) {
+#if GFX_VERx10 >= 350
+      GENX(COMPUTE_WALKER_2_pack)(NULL, desc->gfx350.compute_walker_2,
+                                  &(struct GENX(COMPUTE_WALKER_2)) {
+                                     GENX(COMPUTE_WALKER_2_header),
+                                     .body = {
+                                        .Post_sync_opn0.MOCS = anv_mocs(device, NULL, 0),
+                                        .Post_sync_opn1.MOCS = anv_mocs(device, NULL, 0),
+                                        .Post_sync_opn2.MOCS = anv_mocs(device, NULL, 0),
+                                        .Post_sync_opn3.MOCS = anv_mocs(device, NULL, 0),
+                                     },
+                                  });
 
-   assert(sizeof(desc->gfx125.compute_walker) >
-          sizeof(shader->cs.gfx125.compute_walker_body));
-   for (uint32_t i = 0; i < ARRAY_SIZE(shader->cs.gfx125.compute_walker_body); i++)
-      desc->gfx125.compute_walker[1 + i] |= shader->cs.gfx125.compute_walker_body[i];
-   desc->gfx125.inline_dwords_count = bind_map->inline_dwords_count;
-   assert(sizeof(desc->gfx125.inline_dwords) ==
-          sizeof(bind_map->inline_dwords));
-   memcpy(desc->gfx125.inline_dwords,
-          bind_map->inline_dwords,
-          sizeof(bind_map->inline_dwords));
+      assert(sizeof(desc->gfx350.compute_walker_2) >
+             sizeof(shader->cs.gfx350.compute_walker_body_2));
+      for (uint32_t i = 0; i < ARRAY_SIZE(shader->cs.gfx350.compute_walker_body_2); i++)
+         desc->gfx350.compute_walker_2[1 + i] |= shader->cs.gfx350.compute_walker_body_2[i];
+      assert(sizeof(desc->gfx350.inline_dwords) >= bind_map->inline_dwords_count);
+      memcpy(desc->gfx350.inline_dwords, bind_map->inline_dwords,
+             bind_map->inline_dwords_count);
+#endif
+   } else {
+      GENX(COMPUTE_WALKER_pack)(NULL, desc->gfx125.compute_walker,
+                                &(struct GENX(COMPUTE_WALKER)) {
+                                   GENX(COMPUTE_WALKER_header),
+                                   .body = {
+                                      .PostSync.MOCS = anv_mocs(device, NULL, 0),
+                                   },
+                                });
 
+      assert(sizeof(desc->gfx125.compute_walker) >
+             sizeof(shader->cs.gfx125.compute_walker_body));
+      for (uint32_t i = 0; i < ARRAY_SIZE(shader->cs.gfx125.compute_walker_body); i++)
+         desc->gfx125.compute_walker[1 + i] |= shader->cs.gfx125.compute_walker_body[i];
+      assert(sizeof(desc->gfx125.inline_dwords) >= bind_map->inline_dwords_count);
+      memcpy(desc->gfx125.inline_dwords, bind_map->inline_dwords,
+             bind_map->inline_dwords_count);
+   }
 #else
    assert(sizeof(desc->gfx9.media_vfe_state) ==
           shader->cs.gfx9.vfe.len * 4);
@@ -1379,11 +1385,11 @@ genX(write_cs_descriptor)(struct anv_dgc_cs_descriptor *desc,
           sizeof(desc->gfx9.interface_descriptor_data));
 
    desc->gfx9.n_threads = dispatch.threads;
-   desc->gfx9.cross_thread_push_size = prog_data->push.cross_thread.size;
-   desc->gfx9.per_thread_push_size = prog_data->push.per_thread.size;
+   desc->gfx9.cross_thread_push_size = shader->bin->info.cs.push.cross_thread.size;
+   desc->gfx9.per_thread_push_size = shader->bin->info.cs.push.per_thread.size;
    desc->gfx9.subgroup_id_offset =
       offsetof(struct anv_push_constants, subgroup_id) -
-      (32 * push_range->start + prog_data->push.cross_thread.size);
+      (32 * push_range->start + shader->bin->info.cs.push.cross_thread.size);
 
    GENX(GPGPU_WALKER_pack)(NULL, desc->gfx9.gpgpu_walker,
                            &(struct GENX(GPGPU_WALKER)) {

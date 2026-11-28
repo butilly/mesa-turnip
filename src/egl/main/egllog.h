@@ -29,7 +29,7 @@
 #ifndef EGLLOG_INCLUDED
 #define EGLLOG_INCLUDED
 
-#include "egltypedefs.h"
+#include <EGL/egl.h>
 
 #ifdef __cplusplus
 extern "C" {

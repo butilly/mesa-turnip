@@ -20,8 +20,9 @@ issues:
         'drirc': 'drirc'
         'dzn': 'dozen'
         'egl': 'EGL'
+        'ethosu': 'ethosu'
+        'earthqaic': 'earthqaic'
         'etnaviv': 'etnaviv'
-        'etnaviv/nn': ['etnaviv', 'teflon']
         'freedreno': 'freedreno'
         'freedreno/ir3': ['freedreno', 'ir3']
         'gallium': 'gallium'
@@ -42,6 +43,7 @@ issues:
         'iris': 'iris'
         'isl': 'ISL'
         'kk': 'KosmicKrisp'
+        'kosmickrisp': 'KosmicKrisp'
         'kraid': 'Kraid'
         'lima': 'lima'
         'lima/ppir': 'lima'
@@ -68,6 +70,7 @@ issues:
         'radeonsi': 'radeonsi'
         'radv': 'RADV'
         'radv/aco': ['RADV', 'ACO']
+        'rocket': 'rocket'
         'rust': 'Rust'
         'rusticl': 'Rusticl'
         'softpipe': 'softpipe'
@@ -76,6 +79,7 @@ issues:
         'teflon': 'teflon'
         'tegra': 'tegra'
         'tgsi': 'TGSI'
+        'torx': 'torx'
         'turnip': 'turnip'
         'util': 'util'
         'v3d': 'v3d'
@@ -145,7 +149,9 @@ merge_requests:
         '^bin/symbols-check.py$': ['meson']
         '^clippy.toml': ['Rust']
         '^docs/': ['docs']
+        '^include/drm-uapi/ethosu_accel.h': ['ethosu']
         '^include/drm-uapi/i915_drm.h': ['intel']
+        '^include/drm-uapi/rocket_accel.h': ['rocket']
         '^include/drm-uapi/xe_drm.h': ['intel']
         '^include/vulkan/': ['vulkan']
         '^meson.options': ['meson']
@@ -191,8 +197,9 @@ merge_requests:
         '^src/gallium/drivers/asahi/': ['asahi']
         '^src/gallium/drivers/crocus/': ['crocus']
         '^src/gallium/drivers/d3d12/': ['d3d12']
+        '^src/gallium/drivers/ethosu/': ['ethosu']
+        '^src/gallium/drivers/earthqaic/': ['earthqaic']
         '^src/gallium/drivers/etnaviv/': ['etnaviv']
-        '^src/gallium/drivers/etnaviv/etnaviv_ml_.*': ['teflon']
         '^src/gallium/drivers/freedreno/': ['freedreno']
         '^src/gallium/drivers/grate/': ['tegra']
         '^src/gallium/drivers/i915/': ['i915g']
@@ -207,6 +214,7 @@ merge_requests:
         '^src/gallium/drivers/r300/': ['r300']
         '^src/gallium/drivers/r600/': ['r600']
         '^src/gallium/drivers/radeonsi': ['radeonsi']
+        '^src/gallium/drivers/rocket/': ['rocket']
         '^src/gallium/drivers/softpipe': ['softpipe']
         '^src/gallium/drivers/svga/': ['svga']
         '^src/gallium/drivers/tegra/': ['tegra']
@@ -215,11 +223,11 @@ merge_requests:
         '^src/gallium/drivers/virgl/': ['virgl']
         '^src/gallium/drivers/zink/': ['zink']
         '^src/gallium/frontends/dri/': ['gallium']
-        '^src/gallium/frontends/glx/': ['GLX']
         '^src/gallium/frontends/hgl/': ['haiku']
         '^src/gallium/frontends/lavapipe/': ['lavapipe']
         '^src/gallium/frontends/rusticl/': ['Rusticl']
         '^src/gallium/frontends/teflon/': ['teflon']
+        '^src/gallium/frontends/torx/': ['torx']
         '^src/gallium/frontends/va/': ['VA-API']
         '^src/gallium/frontends/wgl/': ['wgl']
         '^src/gallium/frontends/mediafoundation/': ['mediafoundation']
@@ -227,12 +235,15 @@ merge_requests:
         '^src/gallium/include/': ['gallium']
         '^src/gallium/targets/': ['gallium']
         '^src/gallium/targets/rusticl/': ['Rusticl']
+        '^src/gallium/targets/teflon/': ['teflon']
+        '^src/gallium/targets/torx/': ['torx']
         '^src/gallium/targets/mediafoundation/': ['mediafoundation']
         '^src/gallium/tests/': ['gallium']
         '^src/gallium/tools/': ['gallium']
         '^src/gallium/winsys/amdgpu/': ['radeonsi']
         '^src/gallium/winsys/crocus/': ['crocus']
         '^src/gallium/winsys/d3d12/': ['d3d12']
+        '^src/gallium/winsys/ethosu/': ['ethosu']
         '^src/gallium/winsys/etnaviv/': ['etnaviv']
         '^src/gallium/winsys/freedreno/': ['freedreno']
         '^src/gallium/winsys/grate/': ['tegra']
@@ -243,6 +254,7 @@ merge_requests:
         '^src/gallium/winsys/nouveau/': ['nouveau']
         '^src/gallium/winsys/panfrost/': ['panfrost']
         '^src/gallium/winsys/radeon/': ['r300', 'r600', 'radeonsi']
+        '^src/gallium/winsys/rocket/': ['rocket']
         '^src/gallium/winsys/svga/': ['svga']
         # '^src/gallium/winsys/sw/': ['']
         '^src/gallium/winsys/sw/gdi/': ['wgl']
@@ -253,6 +265,7 @@ merge_requests:
         '^src/gbm/': ['gbm']
         '^src/gfxstream/': ['gfxstream']
         '^src/glx/': ['GLX']
+        '^src/glx/apple/': ['macOS']
         '^src/imagination/': ['powervr']
         '^src/intel/blorp/': ['blorp']
         '^src/intel/common/': ['intel']

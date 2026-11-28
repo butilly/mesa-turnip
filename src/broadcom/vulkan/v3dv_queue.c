@@ -26,7 +26,6 @@
 #include "v3dv_cmd_buffer.h"
 #include "v3dv_image.h"
 #include "v3dv_entrypoints.h"
-#include "v3dv_tracepoints.h"
 #include "v3dv_version_dispatch.h"
 #include <xf86drm.h>
 
@@ -34,7 +33,6 @@
 #include "broadcom/common/v3d_submit_util.h"
 #include "util/libsync.h"
 #include "util/perf/cpu_trace.h"
-#include "util/perf/u_trace.h"
 #include "vulkan/vulkan_core.h"
 #include "vk_drm_syncobj.h"
 
@@ -308,8 +306,7 @@ handle_reset_query_cpu_job(struct v3dv_queue *queue,
     * submitted work to complete before executing (which we accomplish by using
     * V3DV_BARRIER_ALL on them) and that includes reset jobs submitted to the CPU queue.
     */
-   int ret = v3d_ioctl(device->pdevice->render_fd,
-                        DRM_IOCTL_V3D_SUBMIT_CPU, &submit);
+   int ret = v3d_ioctl(device->fd, DRM_IOCTL_V3D_SUBMIT_CPU, &submit);
 
    free(syncs);
    free(kperfmon_ids);
@@ -336,7 +333,7 @@ export_perfmon_last_job_sync(struct v3dv_queue *queue, struct v3dv_job *job, int
       enum v3dv_queue_type queue_type = queues_to_sync[i];
       int tmp_fd = -1;
 
-      err = drmSyncobjExportSyncFile(job->device->pdevice->render_fd,
+      err = drmSyncobjExportSyncFile(job->device->fd,
                                      queue->last_job_syncs.syncs[queue_type],
                                      &tmp_fd);
 
@@ -389,9 +386,8 @@ handle_end_query_cpu_job(struct v3dv_queue *queue, struct v3dv_job *job, uint32_
 
       if (info->pool->query_type == VK_QUERY_TYPE_PERFORMANCE_QUERY_KHR) {
          uint32_t syncobj = vk_sync_as_drm_syncobj(query->perf.last_job_sync)->syncobj;
-         err = drmSyncobjImportSyncFile(job->device->pdevice->render_fd,
-                                        syncobj, fd);
 
+         err = drmSyncobjImportSyncFile(job->device->fd, syncobj, fd);
          if (err) {
             result = vk_errorf(queue, VK_ERROR_UNKNOWN,
                                "sync file import failed: %m");
@@ -542,8 +538,7 @@ handle_copy_query_results_cpu_job(struct v3dv_queue *queue,
    submit.flags |= DRM_V3D_SUBMIT_EXTENSION;
    submit.extensions = (uintptr_t)(void *)&ms;
 
-   int ret = v3d_ioctl(device->pdevice->render_fd,
-                        DRM_IOCTL_V3D_SUBMIT_CPU, &submit);
+   int ret = v3d_ioctl(device->fd, DRM_IOCTL_V3D_SUBMIT_CPU, &submit);
 
    free(kperfmon_ids);
    free(bo_handles);
@@ -598,9 +593,10 @@ handle_timestamp_query_cpu_job(struct v3dv_queue *queue,
       return vk_error(device->instance, VK_ERROR_OUT_OF_HOST_MEMORY);
    }
 
-   int ret = v3d_submit_timestamp_query_ioctl(
-      device->pdevice->render_fd, info->pool->timestamp.bo->handle,
-      offsets, syncs, info->count, &ms.ext.base);
+   int ret = v3d_submit_timestamp_query_ioctl(device->fd,
+                                              info->pool->timestamp.bo->handle,
+                                              offsets, syncs,
+                                              info->count, &ms.ext.base);
 
    free(offsets);
    free(syncs);
@@ -680,8 +676,7 @@ handle_csd_indirect_cpu_job(struct v3dv_queue *queue,
    submit.flags |= DRM_V3D_SUBMIT_EXTENSION;
    submit.extensions = (uintptr_t)(void *)&ms.ext;
 
-   int ret = v3d_ioctl(device->pdevice->render_fd,
-			DRM_IOCTL_V3D_SUBMIT_CPU, &submit);
+   int ret = v3d_ioctl(device->fd, DRM_IOCTL_V3D_SUBMIT_CPU, &submit);
 
    free(bo_handles);
    v3d_multisync_free(&ms);
@@ -824,8 +819,7 @@ handle_cl_job(struct v3dv_queue *queue,
    submit.out_sync = 0;
 
    v3dv_clif_dump(device, job, &submit);
-   int ret = v3d_ioctl(device->pdevice->render_fd,
-                       DRM_IOCTL_V3D_SUBMIT_CL, &submit);
+   int ret = v3d_ioctl(device->fd, DRM_IOCTL_V3D_SUBMIT_CL, &submit);
 
    static bool warned = false;
    if (ret && !warned) {
@@ -870,8 +864,7 @@ handle_tfu_job(struct v3dv_queue *queue,
    job->tfu.in_sync = 0;
    job->tfu.out_sync = 0;
 
-   int ret = v3d_ioctl(device->pdevice->render_fd,
-                       DRM_IOCTL_V3D_SUBMIT_TFU, &job->tfu);
+   int ret = v3d_ioctl(device->fd, DRM_IOCTL_V3D_SUBMIT_TFU, &job->tfu);
 
    v3d_multisync_free(&ms);
    queue->last_job_syncs.first[V3DV_QUEUE_TFU] = false;
@@ -931,8 +924,7 @@ handle_csd_job(struct v3dv_queue *queue,
    device->last_perfmon_id = submit->perfmon_id;
    mtx_unlock(&device->queue_mutex);
 
-   int ret = v3d_ioctl(device->pdevice->render_fd,
-                       DRM_IOCTL_V3D_SUBMIT_CSD, submit);
+   int ret = v3d_ioctl(device->fd, DRM_IOCTL_V3D_SUBMIT_CSD, submit);
 
    static bool warned = false;
    if (ret && !warned) {
@@ -984,62 +976,23 @@ queue_handle_job(struct v3dv_queue *queue,
       job->needs_bcl_sync = job->type == V3DV_JOB_TYPE_GPU_CL;
    }
 
-   job->queue = queue;
-   struct u_trace *trace = job->cmd_buffer ? &job->cmd_buffer->trace : NULL;
-   VkResult result;
-
    switch (job->type) {
    case V3DV_JOB_TYPE_GPU_CL:
-      job->cmd_buffer->trace_queue_mask |= 1 << V3DV_QUEUE_CL;
-      trace_begin_job_cl(trace, job);
-      result = handle_cl_job(queue, job, counter_pass_idx, sync_info);
-      trace_end_job_cl(trace, job, job->id, job->serialize,
-                       job->draw_count, job->tmu_dirty_rcl);
-      return result;
+      return handle_cl_job(queue, job, counter_pass_idx, sync_info);
    case V3DV_JOB_TYPE_GPU_TFU:
-      job->cmd_buffer->trace_queue_mask |= 1 << V3DV_QUEUE_TFU;
-      trace_begin_job_tfu(trace, job);
-      result = handle_tfu_job(queue, job, sync_info);
-      trace_end_job_tfu(trace, job, job->id, job->serialize);
-      return result;
+      return handle_tfu_job(queue, job, sync_info);
    case V3DV_JOB_TYPE_GPU_CSD:
-      job->cmd_buffer->trace_queue_mask |= 1 << V3DV_QUEUE_CSD;
-      trace_begin_job_csd(trace, job);
-      result = handle_csd_job(queue, job, counter_pass_idx, sync_info);
-      trace_end_job_csd(trace, job, job->id, job->serialize,
-                        job->csd.submit.cfg[1],   /* wg_x */
-                        job->csd.submit.cfg[2],   /* wg_y */
-                        job->csd.submit.cfg[3]);  /* wg_z */
-      return result;
+      return handle_csd_job(queue, job, counter_pass_idx, sync_info);
    case V3DV_JOB_TYPE_CPU_RESET_QUERIES:
-      job->cmd_buffer->trace_queue_mask |= 1 << V3DV_QUEUE_CPU;
-      trace_begin_job_cpu_reset_queries(trace, job);
-      result = handle_reset_query_cpu_job(queue, job, sync_info);
-      trace_end_job_cpu_reset_queries(trace, job, job->id, job->serialize);
-      return result;
+      return handle_reset_query_cpu_job(queue, job, sync_info);
    case V3DV_JOB_TYPE_CPU_END_QUERY:
-      /* V3DV_JOB_TYPE_END_QUERY doesn't involve any submission to the kernel,
-       * so we don't trace it.
-       */
       return handle_end_query_cpu_job(queue, job, counter_pass_idx);
    case V3DV_JOB_TYPE_CPU_COPY_QUERY_RESULTS:
-      job->cmd_buffer->trace_queue_mask |= 1 << V3DV_QUEUE_CPU;
-      trace_begin_job_cpu_copy_query_results(trace, job);
-      result = handle_copy_query_results_cpu_job(queue, job, sync_info);
-      trace_end_job_cpu_copy_query_results(trace, job, job->id, job->serialize);
-      return result;
+      return handle_copy_query_results_cpu_job(queue, job, sync_info);
    case V3DV_JOB_TYPE_CPU_CSD_INDIRECT:
-      job->cmd_buffer->trace_queue_mask |= 1 << V3DV_QUEUE_CPU;
-      trace_begin_job_cpu_csd_indirect(trace, job);
-      result = handle_csd_indirect_cpu_job(queue, job, sync_info);
-      trace_end_job_cpu_csd_indirect(trace, job, job->id, job->serialize);
-      return result;
+      return handle_csd_indirect_cpu_job(queue, job, sync_info);
    case V3DV_JOB_TYPE_CPU_TIMESTAMP_QUERY:
-      job->cmd_buffer->trace_queue_mask |= 1 << V3DV_QUEUE_CPU;
-      trace_begin_job_cpu_timestamp_query(trace, job);
-      result = handle_timestamp_query_cpu_job(queue, job, sync_info);
-      trace_end_job_cpu_timestamp_query(trace, job, job->id, job->serialize);
-      return result;
+      return handle_timestamp_query_cpu_job(queue, job, sync_info);
    default:
       UNREACHABLE("Unhandled job type");
    }
@@ -1052,20 +1005,19 @@ merge_syncobjs(struct v3dv_device *device,
                     uint32_t src_count,
                     uint32_t dst_syncobj)
 {
-   int drm_fd = device->pdevice->render_fd;
    int accum_fd = -1;
 
    if (src_count == 0) {
       /* If there are no jobs and no wait dependencies, the signal semaphores/fences
        * must trigger immediately to satisfy the Vulkan spec.
        */
-      drmSyncobjSignal(drm_fd, &dst_syncobj, 1);
+      drmSyncobjSignal(device->fd, &dst_syncobj, 1);
       return VK_SUCCESS;
    }
 
    for (uint32_t i = 0; i < src_count; i++) {
       int queue_fd = -1;
-      if (drmSyncobjExportSyncFile(drm_fd, src_syncobjs[i], &queue_fd) != 0)
+      if (drmSyncobjExportSyncFile(device->fd, src_syncobjs[i], &queue_fd) != 0)
          goto ioctl_error;
 
       if (accum_fd == -1) {
@@ -1083,8 +1035,7 @@ merge_syncobjs(struct v3dv_device *device,
    }
 
    /* Import the final accumulated fence fd back into the destination syncobj */
-   assert(accum_fd != -1);
-   if (drmSyncobjImportSyncFile(drm_fd, dst_syncobj, accum_fd) != 0)
+   if (drmSyncobjImportSyncFile(device->fd, dst_syncobj, accum_fd) != 0)
       goto ioctl_error;
 
    close(accum_fd);
@@ -1115,20 +1066,6 @@ v3dv_queue_driver_submit(struct vk_queue *vk_queue,
    for (int i = 0; i < V3DV_QUEUE_COUNT; i++)
       queue->last_job_syncs.first[i] = true;
 
-   /* Reset every cmd_buffer's trace up front. Trace events for a job may
-    * be recorded against a different cmd_buffer than the one currently
-    * being walked below (see the suspend/resume handling), so all traces
-    * must be ready to receive events before any job is submitted.
-    */
-   for (uint32_t i = 0; i < submit->command_buffer_count; i++) {
-      struct v3dv_cmd_buffer *cmd_buffer =
-         container_of(submit->command_buffers[i], struct v3dv_cmd_buffer, vk);
-
-      u_trace_fini(&cmd_buffer->trace);
-      u_trace_init(&cmd_buffer->trace, &queue->device->utrace.utrace_ctx);
-
-      cmd_buffer->trace_queue_mask = 0;
-   }
    struct v3dv_barrier_state pending_barrier = { 0 };
    struct v3dv_job *first_suspend_job = NULL;
    struct v3dv_job *current_suspend_job = NULL;
@@ -1136,8 +1073,6 @@ v3dv_queue_driver_submit(struct vk_queue *vk_queue,
    for (uint32_t i = 0; i < submit->command_buffer_count; i++) {
       struct v3dv_cmd_buffer *cmd_buffer =
          container_of(submit->command_buffers[i], struct v3dv_cmd_buffer, vk);
-      cmd_buffer->trace_marker_job.queue = queue;
-      trace_begin_cmdbuf(&cmd_buffer->trace, &cmd_buffer->trace_marker_job);
       list_for_each_entry_safe(struct v3dv_job, job,
                                &cmd_buffer->jobs, list_link) {
          if (job->suspending) {
@@ -1180,9 +1115,6 @@ v3dv_queue_driver_submit(struct vk_queue *vk_queue,
          }
       }
 
-      trace_end_cmdbuf(&cmd_buffer->trace, &cmd_buffer->trace_marker_job,
-                       cmd_buffer->usage_flags);
-
       /* If the command buffer ends with a barrier, save the pending barrier
        * state so we can apply it on the next command buffer.
        */
@@ -1191,22 +1123,6 @@ v3dv_queue_driver_submit(struct vk_queue *vk_queue,
 
    assert(!first_suspend_job);
    assert(!current_suspend_job);
-
-   /* Now that every chain is fully resolved, regardless of which cmd_buffer(s)
-    * it spanned, it is safe to flush all traces.
-    */
-   for (uint32_t i = 0; i < submit->command_buffer_count; i++) {
-      struct v3dv_cmd_buffer *cmd_buffer =
-         container_of(submit->command_buffers[i], struct v3dv_cmd_buffer, vk);
-      mtx_lock(&queue->device->utrace.process_mutex);
-      u_trace_flush(&cmd_buffer->trace, queue->device,
-                    queue->device->vk.current_frame, false);
-      mtx_unlock(&queue->device->utrace.process_mutex);
-   }
-
-   mtx_lock(&queue->device->utrace.process_mutex);
-   u_trace_context_process(&queue->device->utrace.utrace_ctx, false /* eof */);
-   mtx_unlock(&queue->device->utrace.process_mutex);
 
    /* Handle signaling now */
    if (submit->signal_count > 0) {

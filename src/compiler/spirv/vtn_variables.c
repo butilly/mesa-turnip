@@ -687,6 +687,20 @@ _vtn_variable_load_store(struct vtn_builder *b, bool load,
                          enum gl_access_qualifier access,
                          struct vtn_ssa_value **inout)
 {
+   if (ptr->type->pointed->base_type == vtn_base_type_accel_struct &&
+       ptr->var && ptr->var->var &&
+       ptr->var->var->data.mode == nir_var_resource_heap) {
+      /* Acceleration structures loaded from the resource heap are
+       * descriptors, not raw data.
+       */
+      vtn_assert(load);
+      nir_deref_instr *deref = vtn_pointer_to_deref(b, ptr);
+      (*inout)->def = nir_load_heap_descriptor_deref(&b->nb, 1, 64, &deref->def,
+                                                     .access = access,
+                                                     .resource_type = nir_resource_type_acceleration_structure);
+      return;
+   }
+
    if (ptr->mode == vtn_variable_mode_uniform ||
        ptr->mode == vtn_variable_mode_image) {
       if (ptr->type->pointed->base_type == vtn_base_type_image ||
@@ -1883,19 +1897,19 @@ vtn_storage_class_to_mode(struct vtn_builder *b,
       break;
    case SpvStorageClassCallableDataKHR:
       mode = vtn_variable_mode_call_data;
-      nir_mode = nir_var_shader_temp;
+      nir_mode = nir_var_shader_call_data_out;
       break;
    case SpvStorageClassIncomingCallableDataKHR:
       mode = vtn_variable_mode_call_data_in;
-      nir_mode = nir_var_shader_call_data;
+      nir_mode = nir_var_shader_call_data_in;
       break;
    case SpvStorageClassRayPayloadKHR:
       mode = vtn_variable_mode_ray_payload;
-      nir_mode = nir_var_shader_temp;
+      nir_mode = nir_var_shader_call_data_out;
       break;
    case SpvStorageClassIncomingRayPayloadKHR:
       mode = vtn_variable_mode_ray_payload_in;
-      nir_mode = nir_var_shader_call_data;
+      nir_mode = nir_var_shader_call_data_in;
       break;
    case SpvStorageClassHitAttributeKHR:
       mode = vtn_variable_mode_hit_attrib;
@@ -2650,8 +2664,8 @@ vtn_get_mem_operands(struct vtn_builder *b, const uint32_t *w, unsigned count,
    return true;
 }
 
-static enum gl_access_qualifier
-spv_access_to_gl_access(SpvMemoryAccessMask access)
+enum gl_access_qualifier
+vtn_access_from_spirv(SpvMemoryAccessMask access)
 {
    unsigned result = 0;
 
@@ -2991,8 +3005,8 @@ vtn_handle_variables(struct vtn_builder *b, SpvOp opcode,
       vtn_emit_make_visible_barrier(b, src_access, src_scope, src->mode);
 
       vtn_variable_copy(b, dest, src,
-                        spv_access_to_gl_access(dest_access),
-                        spv_access_to_gl_access(src_access));
+                        vtn_access_from_spirv(dest_access),
+                        vtn_access_from_spirv(src_access));
 
       vtn_emit_make_available_barrier(b, dest_access, dest_scope, dest->mode);
       break;
@@ -3024,8 +3038,8 @@ vtn_handle_variables(struct vtn_builder *b, SpvOp opcode,
                                    vtn_pointer_to_deref(b, dest),
                                    vtn_pointer_to_deref(b, src),
                                    size,
-                                   spv_access_to_gl_access(dest_access),
-                                   spv_access_to_gl_access(src_access));
+                                   vtn_access_from_spirv(dest_access),
+                                   vtn_access_from_spirv(src_access));
 
       vtn_emit_make_available_barrier(b, dest_access, dest_scope, dest->mode);
       break;
@@ -3049,7 +3063,7 @@ vtn_handle_variables(struct vtn_builder *b, SpvOp opcode,
 
       vtn_emit_make_visible_barrier(b, access, scope, src->mode);
 
-      vtn_push_ssa_value(b, w[2], vtn_variable_load(b, src, spv_access_to_gl_access(access)));
+      vtn_push_ssa_value(b, w[2], vtn_variable_load(b, src, vtn_access_from_spirv(access)));
       break;
    }
 
@@ -3100,10 +3114,10 @@ vtn_handle_variables(struct vtn_builder *b, SpvOp opcode,
       src = vtn_align_pointer(b, src, b->options->buffer_descriptor_alignment);
 
       nir_deref_instr *src_deref = vtn_pointer_to_deref(b, src);
-      nir_def *ptr = nir_load_buffer_ptr_deref(&b->nb, num_components, bit_size,
-                                               &src_deref->def,
-                                               .access = access,
-                                               .resource_type = resource_type);
+      nir_def *ptr = nir_load_heap_descriptor_deref(&b->nb, num_components, bit_size,
+                                                    &src_deref->def,
+                                                    .access = access,
+                                                    .resource_type = resource_type);
 
       vtn_push_pointer(b, w[2], vtn_pointer_from_ssa(b, ptr, res_type));
       break;
@@ -3149,7 +3163,7 @@ vtn_handle_variables(struct vtn_builder *b, SpvOp opcode,
       dest = vtn_align_pointer(b, dest, alignment);
 
       struct vtn_ssa_value *src = vtn_ssa_value(b, w[2]);
-      vtn_variable_store(b, src, dest, spv_access_to_gl_access(access));
+      vtn_variable_store(b, src, dest, vtn_access_from_spirv(access));
 
       vtn_emit_make_available_barrier(b, access, scope, dest->mode);
       break;

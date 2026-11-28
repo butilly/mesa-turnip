@@ -5,9 +5,9 @@
 
 #include <functional>
 #include <inttypes.h>
-#include <perfetto.h>
 
 #include "c11/threads.h"
+#include "c11/time.h"
 
 #include "util/perf/u_perfetto.h"
 #include "util/perf/u_perfetto_renderpass.h"

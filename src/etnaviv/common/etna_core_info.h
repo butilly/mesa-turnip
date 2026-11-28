@@ -11,7 +11,7 @@
 #include "util/bitset.h"
 #include "util/macros.h"
 
-enum etna_feature {
+enum ENUM_PACKED etna_feature {
    ETNA_FEATURE_CORE_GPU,
    ETNA_FEATURE_CORE_NPU,
    ETNA_FEATURE_FAST_CLEAR,
@@ -84,14 +84,18 @@ enum etna_feature {
    ETNA_FEATURE_TX_BORDER_CLAMP_FIX,
    ETNA_FEATURE_TESSELLATION_SHADERS,
    ETNA_FEATURE_PE_ADVANCE_BLEND_PART0,
+   ETNA_FEATURE_MSAA_FLOAT_64BIT,
    ETNA_FEATURE_NUM,
 };
+
+static_assert(sizeof(enum etna_feature) == sizeof(uint8_t), "enum etna_feature must be packed");
 
 struct etna_core_gpu_info {
    unsigned max_instructions;          /* vertex/fragment shader max instructions */
    unsigned vertex_output_buffer_size; /* size of vertex shader output buffer */
    unsigned vertex_cache_size;         /* size of a cached vertex (?) */
    unsigned shader_core_count;         /* number of shader cores */
+   unsigned thread_count;              /* number of hardware threads */
    unsigned stream_count;              /* number of vertex streams */
    unsigned max_registers;             /* maximum number of registers */
    unsigned pixel_pipes;               /* available pixel pipes */

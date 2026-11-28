@@ -240,7 +240,7 @@ void
 setup_nir(isel_context* ctx, nir_shader* nir)
 {
    nir_convert_to_lcssa(nir, true, false);
-   if (nir_lower_phis_to_scalar(nir, ac_nir_lower_phis_to_scalar_cb, NULL)) {
+   if (nir_lower_phis_to_scalar(nir, ac_nir_lower_phis_to_scalar_cb, ctx->options->compiler_info)) {
       nir_opt_copy_prop(nir);
       nir_opt_dce(nir);
    }
@@ -375,6 +375,7 @@ init_context(isel_context* ctx, nir_shader* shader)
 
    /* Init NIR range analysis. */
    ctx->range_ht = _mesa_pointer_hash_table_create(NULL);
+   ctx->signed_ht = nir_create_signed_analysis_state(impl, ctx->range_ht, NULL);
    ctx->fp_class_ht = nir_create_fp_analysis_state(impl);
 
    uint32_t options =
@@ -732,6 +733,7 @@ init_context(isel_context* ctx, nir_shader* shader)
 void
 cleanup_context(isel_context* ctx)
 {
+   ralloc_free(ctx->signed_ht);
    _mesa_hash_table_destroy(ctx->range_ht, NULL);
    nir_free_fp_analysis_state(&ctx->fp_class_ht);
 }

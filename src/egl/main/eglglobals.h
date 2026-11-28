@@ -33,7 +33,6 @@
 #include <stdbool.h>
 #include "util/simple_mtx.h"
 
-#include "egltypedefs.h"
 
 enum {
    _EGL_DEBUG_BIT_CRITICAL = 0x1,
@@ -49,9 +48,9 @@ struct _egl_global {
    simple_mtx_t *Mutex;
 
    /* the list of all displays */
-   _EGLDisplay *DisplayList;
+   struct _egl_display *DisplayList;
 
-   _EGLDevice *DeviceList;
+   struct _egl_device *DeviceList;
 
    /*
     * Under libglvnd, the client extension string has to be split into two

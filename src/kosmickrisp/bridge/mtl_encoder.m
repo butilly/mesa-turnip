@@ -24,38 +24,41 @@ mtl_end_encoding(void *encoder)
 
 void
 mtl_barrier_after_stages(void *encoder, enum mtl_stages after_stages,
-                         enum mtl_stages before_queue_stages)
+                         enum mtl_stages before_queue_stages,
+                         enum mtl_visibility_options visibility)
 {
    @autoreleasepool {
       id<MTL4CommandEncoder> enc = (id<MTL4CommandEncoder>)encoder;
       /* TODO_KOSMICKRISP Expose visibility option since resource alias should only be required
        * if occlusion queries are used */
       [enc barrierAfterStages:(MTLStages)after_stages beforeQueueStages:(MTLStages)before_queue_stages
-           visibilityOptions:MTL4VisibilityOptionResourceAlias];
+           visibilityOptions:(MTL4VisibilityOptions)visibility];
    }
 }
 
 void
 mtl_barrier_after_encoder_stages(void *encoder, enum mtl_stages after_stages,
-                                 enum mtl_stages before_queue_stages)
+                                 enum mtl_stages before_stages,
+                                 enum mtl_visibility_options visibility)
 {
    @autoreleasepool {
       id<MTL4CommandEncoder> enc = (id<MTL4CommandEncoder>)encoder;
-      [enc barrierAfterEncoderStages:(MTLStages)after_stages beforeEncoderStages:(MTLStages)before_queue_stages
-           visibilityOptions:MTL4VisibilityOptionResourceAlias];
+      [enc barrierAfterEncoderStages:(MTLStages)after_stages beforeEncoderStages:(MTLStages)before_stages
+           visibilityOptions:(MTL4VisibilityOptions)visibility];
    }
 }
 
 void
 mtl_barrier_after_queue_stages(void *encoder,
                                enum mtl_stages after_queue_stages,
-                               enum mtl_stages before_stages)
+                               enum mtl_stages before_stages,
+                               enum mtl_visibility_options visibility)
 {
    @autoreleasepool {
       id<MTL4CommandEncoder> enc = (id<MTL4CommandEncoder>)encoder;
       [enc barrierAfterQueueStages:(MTLStages)after_queue_stages
                       beforeStages:(MTLStages)before_stages
-                 visibilityOptions:MTL4VisibilityOptionResourceAlias];
+                 visibilityOptions:(MTL4VisibilityOptions)visibility];
    }
 }
 
@@ -236,6 +239,16 @@ mtl_compute_set_argument_table(mtl_compute_encoder *encoder,
 }
 
 void
+mtl_set_threadgroup_memory_length(mtl_compute_encoder *encoder, uint32_t length,
+                                  uint32_t index)
+{
+   @autoreleasepool {
+      id<MTL4ComputeCommandEncoder> enc = (id<MTL4ComputeCommandEncoder>)encoder;
+      [enc setThreadgroupMemoryLength:length atIndex:index];
+   }
+}
+
+void
 mtl_dispatch_threads(mtl_compute_encoder *encoder,
                      struct mtl_size grid_size, struct mtl_size local_size)
 {
@@ -261,6 +274,25 @@ mtl_dispatch_threadgroups_with_indirect_buffer(mtl_compute_encoder *encoder,
                                                     local_size.z);
 
       [enc dispatchThreadgroupsWithIndirectBuffer:addr threadsPerThreadgroup:threads_per_threadgroup];
+   }
+}
+
+void
+mtl_dispatch_threads_with_indirect_buffer(mtl_compute_encoder *encoder,
+                                          uint64_t addr)
+{
+   @autoreleasepool {
+      id<MTL4ComputeCommandEncoder> enc = (id<MTL4ComputeCommandEncoder>)encoder;
+      [enc dispatchThreadsWithIndirectBuffer:addr];
+   }
+}
+
+enum mtl_stages
+mtl_compute_used_stages(mtl_compute_encoder *encoder)
+{
+   @autoreleasepool {
+      id<MTL4ComputeCommandEncoder> enc = (id<MTL4ComputeCommandEncoder>)encoder;
+      return [enc stages];
    }
 }
 

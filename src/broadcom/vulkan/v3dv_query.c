@@ -48,9 +48,7 @@ kperfmon_create(struct v3dv_device *device,
              &pool->perfmon.counters[i * DRM_V3D_MAX_PERF_COUNTERS],
              req.ncounters);
 
-      int ret = v3d_ioctl(device->pdevice->render_fd,
-                          DRM_IOCTL_V3D_PERFMON_CREATE,
-                          &req);
+      int ret = v3d_ioctl(device->fd, DRM_IOCTL_V3D_PERFMON_CREATE, &req);
       if (ret)
          mesa_loge("Failed to create perfmon for query %d: %s\n", query,
                    strerror(errno));
@@ -73,10 +71,7 @@ kperfmon_destroy(struct v3dv_device *device,
          .id = pool->queries[query].perf.kperfmon_ids[i]
       };
 
-      int ret = v3d_ioctl(device->pdevice->render_fd,
-                          DRM_IOCTL_V3D_PERFMON_DESTROY,
-                          &req);
-
+      int ret = v3d_ioctl(device->fd, DRM_IOCTL_V3D_PERFMON_DESTROY, &req);
       if (ret) {
          mesa_loge("Failed to destroy perfmon %u: %s\n",
                    req.id, strerror(errno));
@@ -471,8 +466,13 @@ query_wait_available(struct v3dv_device *device,
    if (pool->query_type == VK_QUERY_TYPE_OCCLUSION) {
       uint8_t *q_addr = ((uint8_t *) pool->occlusion.bo->map) +
                         pool->occlusion.avail_offset + query_idx;
-      while (*q_addr == 0)
+      while (*q_addr == 0) {
+         VkResult status = vk_device_check_status(&device->vk);
+         if (status != VK_SUCCESS)
+            return status;
+
          usleep(250);
+      }
       return VK_SUCCESS;
    }
 
@@ -481,7 +481,7 @@ query_wait_available(struct v3dv_device *device,
                        0, VK_SYNC_WAIT_COMPLETE, UINT64_MAX) != VK_SUCCESS) {
          return vk_device_set_lost(&device->vk, "Query job wait failed");
       }
-      return VK_SUCCESS;
+      return vk_device_check_status(&device->vk);
    }
 
    assert(pool->query_type == VK_QUERY_TYPE_PERFORMANCE_QUERY_KHR);
@@ -506,7 +506,6 @@ query_wait_available(struct v3dv_device *device,
                                  &device->query_mutex,
                                  &timeout);
          if (ret != thrd_success) {
-            mtx_unlock(&device->query_mutex);
             result = vk_device_set_lost(&device->vk, "Query wait failed");
             break;
          }
@@ -515,18 +514,17 @@ query_wait_available(struct v3dv_device *device,
 
       if (result != VK_SUCCESS)
          return result;
-
-      /* For performance queries, we also need to wait for the relevant syncobj
-       * to be signaled to ensure completion of the GPU work.
-       */
-      if (pool->query_type == VK_QUERY_TYPE_PERFORMANCE_QUERY_KHR &&
-          vk_sync_wait(&device->vk, q->perf.last_job_sync,
-                       0, VK_SYNC_WAIT_COMPLETE, UINT64_MAX) != VK_SUCCESS) {
-        return vk_device_set_lost(&device->vk, "Query job wait failed");
-      }
    }
 
-   return result;
+   /* For performance queries, we also need to wait for the relevant syncobj
+    * to be signaled to ensure completion of the GPU work.
+    */
+   if (vk_sync_wait(&device->vk, q->perf.last_job_sync,
+                    0, VK_SYNC_WAIT_COMPLETE, UINT64_MAX) != VK_SUCCESS) {
+      return vk_device_set_lost(&device->vk, "Query job wait failed");
+   }
+
+   return vk_device_check_status(&device->vk);
 }
 
 static VkResult
@@ -662,10 +660,7 @@ write_performance_query_result(struct v3dv_device *device,
                                    DRM_V3D_MAX_PERF_COUNTERS])
       };
 
-      int ret = v3d_ioctl(device->pdevice->render_fd,
-                          DRM_IOCTL_V3D_PERFMON_GET_VALUES,
-                          &req);
-
+      int ret = v3d_ioctl(device->fd, DRM_IOCTL_V3D_PERFMON_GET_VALUES, &req);
       if (ret) {
          mesa_loge("failed to get perfmon values: %s\n", strerror(errno));
          return vk_error(device, VK_ERROR_DEVICE_LOST);

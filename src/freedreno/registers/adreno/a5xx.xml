@@ -61,6 +61,12 @@ xsi:schemaLocation="https://gitlab.freedesktop.org/freedreno/ rules-fd.xsd">
 	<value name="TILE5_3" value="3"/>
 </enum>
 
+<enum name="a5xx_ccu_cache_size">
+	<value value="0x0" name="CCU_CACHE_SIZE_FULL"/>
+	<value value="0x1" name="CCU_CACHE_SIZE_HALF"/>
+	<value value="0x2" name="CCU_CACHE_SIZE_QUARTER"/>
+</enum>
+
 <enum name="a5xx_vtx_fmt" prefix="chipset">
 	<value value="0x03" name="VFMT5_8_UNORM"/>
 	<value value="0x04" name="VFMT5_8_SNORM"/>
@@ -152,6 +158,7 @@ xsi:schemaLocation="https://gitlab.freedesktop.org/freedreno/ rules-fd.xsd">
 	<value value="0x06" name="TFMT5_8_SINT"/>
 	<value value="0x08" name="TFMT5_4_4_4_4_UNORM"/>
 	<value value="0x0a" name="TFMT5_5_5_5_1_UNORM"/>
+	<value value="0x0c" name="TFMT5_1_5_5_5_UNORM"/> <!-- read only -->
 	<value value="0x0e" name="TFMT5_5_6_5_UNORM"/>
 	<value value="0x0f" name="TFMT5_8_8_UNORM"/>
 	<value value="0x10" name="TFMT5_8_8_SNORM"/>
@@ -1400,6 +1407,7 @@ xsi:schemaLocation="https://gitlab.freedesktop.org/freedreno/ rules-fd.xsd">
 	<reg32 offset="0x0512" name="RBBM_CFG_DBGBUS_MISR0"/>
 	<reg32 offset="0x0513" name="RBBM_CFG_DBGBUS_MISR1"/>
 	<reg32 offset="0x0533" name="RBBM_ISDB_CNT"/>
+	<reg64 offset="0x054e" name="RBBM_PIPESTAT_CINVOCATIONS"/>
 	<reg32 offset="0xf000" name="RBBM_SECVID_TRUST_CONFIG"/>
 	<reg32 offset="0xf400" name="RBBM_SECVID_TRUST_CNTL"/>
 	<reg32 offset="0xf800" name="RBBM_SECVID_TSB_TRUSTED_BASE_LO"/>
@@ -1467,8 +1475,15 @@ xsi:schemaLocation="https://gitlab.freedesktop.org/freedreno/ rules-fd.xsd">
 
 	<reg32 offset="0x0cc4" name="RB_DBG_ECO_CNTL"/> <!-- always 00100000? -->
 	<reg32 offset="0x0cc5" name="RB_ADDR_MODE_CNTL" type="a5xx_address_mode"/>
-	<reg32 offset="0x0cc6" name="RB_MODE_CNTL"/> <!-- always 00000044? -->
-	<reg32 offset="0x0cc7" name="RB_CCU_CNTL"/> <!-- always b0056080 or 10000000? -->
+	<reg32 offset="0x0cc6" name="RB_MODE_CNTL">
+		<bitfield name="HIGHESTBANKBIT" low="1" high="2" type="uint"/>
+	</reg32>
+	<reg32 offset="0x0cc7" name="RB_CCU_CNTL">
+		<bitfield name="DEPTH_CACHE_SIZE" low="6" high="7" type="a5xx_ccu_cache_size"/>
+		<bitfield name="DEPTH_OFFSET" low="8" high="18" type="uint"/>
+		<bitfield name="COLOR_CACHE_SIZE" low="19" high="20" type="a5xx_ccu_cache_size"/>
+		<bitfield name="COLOR_OFFSET" low="21" high="31" type="uint"/>
+	</reg32>
 	<reg32 offset="0x0cd0" name="RB_PERFCTR_RB_SEL_0" type="a5xx_rb_perfcounter_select"/>
 	<reg32 offset="0x0cd1" name="RB_PERFCTR_RB_SEL_1" type="a5xx_rb_perfcounter_select"/>
 	<reg32 offset="0x0cd2" name="RB_PERFCTR_RB_SEL_2" type="a5xx_rb_perfcounter_select"/>
@@ -1512,9 +1527,14 @@ xsi:schemaLocation="https://gitlab.freedesktop.org/freedreno/ rules-fd.xsd">
 
 	<reg32 offset="0x0e00" name="HLSQ_TIMEOUT_THRESHOLD_0"/>
 	<reg32 offset="0x0e01" name="HLSQ_TIMEOUT_THRESHOLD_1"/>
-	<reg32 offset="0x0e04" name="HLSQ_DBG_ECO_CNTL"/>
+	<reg32 offset="0x0e04" name="HLSQ_DBG_ECO_CNTL">
+		<!-- named in msm-4.4/kgsl -->
+		<bitfield name="LMLOADKILLDIS" pos="18" type="boolean"/>
+	</reg32>
 	<reg32 offset="0x0e05" name="HLSQ_ADDR_MODE_CNTL" type="a5xx_address_mode"/>
-	<reg32 offset="0x0e06" name="HLSQ_MODE_CNTL"/> <!-- always 00000001? -->
+	<reg32 offset="0x0e06" name="HLSQ_MODE_CNTL">
+		<bitfield name="SSBO_CONSTS_ENABLE" pos="0" type="boolean"/>
+	</reg32>
 	<reg32 offset="0x0e10" name="HLSQ_PERFCTR_HLSQ_SEL_0" type="a5xx_hlsq_perfcounter_select"/>
 	<reg32 offset="0x0e11" name="HLSQ_PERFCTR_HLSQ_SEL_1" type="a5xx_hlsq_perfcounter_select"/>
 	<reg32 offset="0x0e12" name="HLSQ_PERFCTR_HLSQ_SEL_2" type="a5xx_hlsq_perfcounter_select"/>
@@ -1578,7 +1598,12 @@ xsi:schemaLocation="https://gitlab.freedesktop.org/freedreno/ rules-fd.xsd">
 
 	<reg32 offset="0x0ec0" name="SP_DBG_ECO_CNTL"/>
 	<reg32 offset="0x0ec1" name="SP_ADDR_MODE_CNTL" type="a5xx_address_mode"/>
-	<reg32 offset="0x0ec2" name="SP_MODE_CNTL"/> <!-- always 0000001e? -->
+	<reg32 offset="0x0ec2" name="SP_MODE_CNTL">
+		<!-- SSBO_CONSTS_ENABLE should match the bit in HLSQ_MODE_CNTL. -->
+		<bitfield name="SSBO_CONSTS_ENABLE" pos="4" type="boolean"/>
+		<bitfield name="F16_NO_INF" pos="1" type="boolean"/>
+		<bitfield name="CONSTANT_DEMOTION_ENABLE" pos="2" type="boolean"/>
+	</reg32>
 	<reg32 offset="0x0ed0" name="SP_PERFCTR_SP_SEL_0"  type="a5xx_sp_perfcounter_select"/>
 	<reg32 offset="0x0ed1" name="SP_PERFCTR_SP_SEL_1"  type="a5xx_sp_perfcounter_select"/>
 	<reg32 offset="0x0ed2" name="SP_PERFCTR_SP_SEL_2"  type="a5xx_sp_perfcounter_select"/>
@@ -1597,7 +1622,9 @@ xsi:schemaLocation="https://gitlab.freedesktop.org/freedreno/ rules-fd.xsd">
 	<reg32 offset="0x0edf" name="SP_POWERCTR_SP_SEL_3"/>
 
 	<reg32 offset="0x0f01" name="TPL1_ADDR_MODE_CNTL" type="a5xx_address_mode"/>
-	<reg32 offset="0x0f02" name="TPL1_MODE_CNTL"/> <!-- always 00000544? -->
+	<reg32 offset="0x0f02" name="TPL1_MODE_CNTL">
+		<bitfield name="HIGHESTBANKBIT" low="7" high="8" type="uint"/>
+	</reg32>
 	<reg32 offset="0x0f10" name="TPL1_PERFCTR_TP_SEL_0" type="a5xx_tp_perfcounter_select"/>
 	<reg32 offset="0x0f11" name="TPL1_PERFCTR_TP_SEL_1" type="a5xx_tp_perfcounter_select"/>
 	<reg32 offset="0x0f12" name="TPL1_PERFCTR_TP_SEL_2" type="a5xx_tp_perfcounter_select"/>
@@ -1808,13 +1835,18 @@ xsi:schemaLocation="https://gitlab.freedesktop.org/freedreno/ rules-fd.xsd">
 		<bitfield name="ZFAR_CLIP_DISABLE" pos="2" type="boolean"/>
 		<bitfield name="Z_CLAMP_ENABLE" pos="5" type="boolean"/>
 		<bitfield name="ZERO_GB_SCALE_Z" pos="6" type="boolean"/>
+		<bitfield name="VP_CLIP_CODE_IGNORE" pos="7" type="boolean"/>
 	</reg32>
 	<bitset name="a5xx_gras_xs_cl_cntl" inline="yes">
 		<bitfield name="CLIP_MASK" low="0" high="7"/>
 		<bitfield name="CULL_MASK" low="8" high="15"/>
 	</bitset>
 	<reg32 offset="0xe001" name="GRAS_VS_CL_CNTL" type="a5xx_gras_xs_cl_cntl"/>
-	<reg32 offset="0xe004" name="UNKNOWN_E004"/> <!-- always 00000000? -->
+	<reg32 offset="0xe004" name="GRAS_CL_ARRAY_SIZE" type="uint">
+		<doc>
+			The render target's layer count minus one.
+		</doc>
+	</reg32>
 	<reg32 offset="0xe005" name="GRAS_CNTL">
 		<!-- see also RB_RENDER_CONTROL0 -->
 		<bitfield name="IJ_PERSP_PIXEL" pos="0" type="boolean"/>
@@ -1857,7 +1889,18 @@ xsi:schemaLocation="https://gitlab.freedesktop.org/freedreno/ rules-fd.xsd">
 		<bitfield name="MAX" low="16" high="31" type="ufixed" radix="4"/>
 	</reg32>
 	<reg32 offset="0xe092" name="GRAS_SU_POINT_SIZE" type="fixed" radix="4"/>
-	<reg32 offset="0xe093" name="GRAS_SU_LAYERED"/>
+	<!--
+		Like a6xx's GRAS_SU_GS_SIV_CNTL.  The a530 GL blob sets this,
+		PC_GS_LAYERED and VPC_GS_SIV_CNTL.LAYERLOC for a GS writing
+		gl_Layer.  Unlike a6xx, there seems to be no VS variant: with no GS,
+		setting PC_GS_LAYERED hangs the GPU, and with just these two set
+		the VS's gl_Layer output is ignored (everything lands in layer 0).
+		Bit 1 is presumably WRITES_VIEW like a6xx, but the a530 blob has no
+		viewport arrays to check that with.
+	-->
+	<reg32 offset="0xe093" name="GRAS_SU_LAYERED">
+		<bitfield name="WRITES_LAYER" pos="0" type="boolean"/>
+	</reg32>
 	<reg32 offset="0xe094" name="GRAS_SU_DEPTH_PLANE_CNTL">
 		<bitfield name="FRAG_WRITES_Z" pos="0" type="boolean"/>
 		<bitfield name="UNK1" pos="1" type="boolean"/>
@@ -1876,7 +1919,8 @@ xsi:schemaLocation="https://gitlab.freedesktop.org/freedreno/ rules-fd.xsd">
 	 -->
 	<reg32 offset="0xe0a0" name="GRAS_SC_CNTL">
 		<bitfield name="BINNING_PASS" pos="0" type="boolean"/>
-		<bitfield name="SAMPLES_PASSED" pos="15" type="boolean"/>
+		<bitfield name="FLUSH_PER_OVERLAP" pos="6" type="boolean"/>
+		<bitfield name="EARLYVIZOUTEN" pos="15" type="boolean"/>
 	</reg32>
 	<!-- note, 0x4 for binning pass when frag writes z?? -->
 	<reg32 offset="0xe0a1" name="GRAS_SC_BIN_CNTL"/> <!-- always 00000000? -->
@@ -1948,7 +1992,7 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
 	see mrt-fbo-* zs=2)
  -->
 		<bitfield name="BINNING_PASS" pos="0" type="boolean"/>
-		<bitfield name="SAMPLES_PASSED" pos="6" type="boolean"/>
+		<bitfield name="EARLYVIZOUTEN" pos="6" type="boolean"/>
 		<bitfield name="DISABLE_COLOR_PIPE" pos="7" type="boolean"/>
 		<!-- why everything twice?? maybe read vs write? -->
 		<!-- UBWC flag buffer enabled for depth/stencil: -->
@@ -1983,12 +2027,15 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
 		<bitfield name="SAMPLEMASK" pos="0" type="boolean"/>
 		<bitfield name="FACENESS" pos="1" type="boolean"/>
 		<bitfield name="SAMPLEID" pos="2" type="boolean"/>
+		<bitfield name="SAMPLEMODE" low="3" high="4" type="uint"/>
+		<bitfield name="CENTERRHW" pos="5" type="boolean"/>
 	</reg32>
 	<reg32 offset="0xe146" name="RB_FS_OUTPUT_CNTL">
 		<!-- bit0 set except for binning pass.. -->
 		<bitfield name="MRT" low="0" high="3" type="uint"/>
 		<bitfield name="DUAL_COLOR_IN_ENABLE" pos="4" type="boolean"/>
 		<bitfield name="FRAG_WRITES_Z" pos="5" type="boolean"/>
+		<bitfield name="FRAG_WRITES_SAMPMASK" pos="6" type="boolean"/>
 	</reg32>
 	<reg32 offset="0xe147" name="RB_RENDER_COMPONENTS">
 		<bitfield name="RT0" low="0" high="3"/>
@@ -2072,6 +2119,7 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
 		<bitfield name="INDEPENDENT_BLEND" pos="8" type="boolean"/>
 		<bitfield name="DUAL_COLOR_IN_ENABLE" pos="9" type="boolean"/>
 		<bitfield name="ALPHA_TO_COVERAGE" pos="10" type="boolean"/>
+		<bitfield name="ALPHA_TO_ONE" pos="11" type="boolean"/>
 		<!-- a guess? -->
 		<bitfield name="SAMPLE_MASK" low="16" high="31"/>
 	</reg32>
@@ -2237,6 +2285,8 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
 	</doc>
 	<reg64 offset="0xe240" name="RB_DEPTH_FLAG_BUFFER_BASE" type="waddress"/>
 	<reg32 offset="0xe242" name="RB_DEPTH_FLAG_BUFFER_PITCH">
+		<bitfield name="PITCH" low="0" high="10" shr="6" type="uint"/>
+		<bitfield name="ARRAY_PITCH" low="11" high="31" shr="6" type="uint"/>
 	</reg32>
 	<array offset="0xe243" name="RB_MRT_FLAG_BUFFER" stride="4" length="8">
 		<reg64 offset="0" name="ADDR" type="waddress"/>
@@ -2261,6 +2311,13 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
 		<bitfield name="STRIDE_IN_VPC" low="0" high="6" type="uint"/>
 		<bitfield name="VARYING" pos="11" type="boolean"/>
 	</reg32>
+	<enum name="a5xx_varying_interp_mode">
+		<value value="0" name="INTERP_SMOOTH"/>
+		<value value="1" name="INTERP_FLAT"/>
+		<value value="2" name="INTERP_ZERO"/>
+		<value value="3" name="INTERP_ONE"/>
+	</enum>
+
 	<array offset="0xe282" name="VPC_VARYING_INTERP" stride="1" length="8">
 		<reg32 offset="0x0" name="MODE"/>
 	</array>
@@ -2273,7 +2330,14 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
 		<!-- one bit per varying component: -->
 		<reg32 offset="0" name="DISABLE"/>
 	</array>
-	<reg32 offset="0xe298" name="VPC_GS_SIV_CNTL"/>
+	<!--
+		Like a6xx's VPC_GS_SIV_CNTL (see GRAS_SU_LAYERED).  The blob writes
+		0xffff with no gl_Layer written.  The GS's gl_Layer is an ordinary
+		varying at LAYERLOC, which the FS can read as a flat input.
+	-->
+	<reg32 offset="0xe298" name="VPC_GS_SIV_CNTL">
+		<bitfield name="LAYERLOC" low="0" high="7" type="uint"/>
+	</reg32>
 	<reg32 offset="0xe29a" name="VPC_CLIP_CNTL">
 		<bitfield name="CLIP_MASK" low="0" high="7" type="uint"/>
 		<!-- there can be up to 8 total clip/cull distance outputs,
@@ -2356,7 +2420,7 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
 	<array offset="0xe2a7" name="VPC_SO" stride="7" length="4">
 		<reg64 offset="0" name="BUFFER_BASE" type="waddress"/>
 		<reg32 offset="2" name="BUFFER_SIZE"/>
-		<reg32 offset="3" name="NCOMP"/>  <!-- component count -->
+		<reg32 offset="3" name="BUFFER_STRIDE"/>
 		<reg32 offset="4" name="BUFFER_OFFSET"/>
 		<reg64 offset="5" name="FLUSH_BASE" type="waddress"/>
 	</array>
@@ -2367,6 +2431,7 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
 		<bitfield name="PRIMITIVE_RESTART" pos="8" type="boolean"/>
 		<bitfield name="COUNT_PRIMITIVES" pos="9" type="boolean"/><!-- enabled when gl_PrimitiveIDIn is used -->
 		<bitfield name="PROVOKING_VTX_LAST" pos="10" type="boolean"/>
+		<bitfield name="D3D_VERTEX_ORDERING" pos="12" type="boolean"/>
 	</reg32>
 	<reg32 offset="0xe385" name="PC_PRIM_VTX_CNTL">
 		<bitfield name="PSIZE" pos="11" type="boolean"/>
@@ -2380,7 +2445,9 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
 		<bitfield name="CLIP_MASK" low="0" high="7"/>
 	</reg32>
 	<reg32 offset="0xe38c" name="PC_RESTART_INDEX"/>
-	<reg32 offset="0xe38d" name="PC_GS_LAYERED"/>
+	<reg32 offset="0xe38d" name="PC_GS_LAYERED">
+		<bitfield name="WRITES_LAYER" pos="0" type="boolean"/>
+	</reg32>
 	<reg32 offset="0xe38e" name="PC_GS_PARAM">
 		<bitfield name="MAX_VERTICES" low="0" high="9" type="uint"/><!-- vertices - 1 -->
 		<bitfield name="INVOCATIONS" low="11" high="15" type="uint"/><!-- invoc - 1 -->
@@ -2426,6 +2493,7 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
 		<reg32 offset="0x0" name="INSTR">
 			<!-- IDX appears to index into VFD_FETCH[] -->
 			<bitfield name="IDX" low="0" high="4" type="uint"/>
+			<bitfield name="OFFSET" low="5" high="16"/>
 			<bitfield name="INSTANCED" pos="17" type="boolean"/>
 			<bitfield name="FORMAT" low="20" high="27" type="a5xx_vtx_fmt"/>
 			<bitfield name="SWAP" low="28" high="29" type="a3xx_color_swap"/>
@@ -2467,6 +2535,13 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
 		<bitfield name="HALFREGFOOTPRINT" low="4" high="9" type="uint"/>
 		<bitfield name="FULLREGFOOTPRINT" low="10" high="15" type="uint"/>
 		<bitfield name="VARYING" pos="16" type="boolean"/>
+		<bitfield name="LODPIXMASK" pos="17" type="boolean">
+			<doc>
+				Enable ALL helper invocations in a quad. Necessary for
+				fine derivatives and quad subgroup ops.  Set by the blob
+				for fine derivatives.
+			</doc>
+		</bitfield>
 		<bitfield name="PIXLODENABLE" pos="20" type="boolean"/>
 		<!-- seems to be nesting level for flow control:.. -->
 		<bitfield name="BRANCHSTACK" low="24" high="31" type="uint"/>
@@ -2604,24 +2679,27 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
 		<bitfield name="SAMPLES" low="0" high="1" type="a3xx_msaa_samples"/>
 		<bitfield name="MSAA_DISABLE" pos="2" type="boolean"/>
 	</reg32>
-	<!-- either blob is doing it wrong, or this is not per-stage anymore: -->
-	<reg64 offset="0xe706" name="TPL1_TP_BORDER_COLOR_BASE_ADDR" type="address"/>
+	<reg64 offset="0xe706" name="TPL1_GFX_BORDER_COLOR_BASE" type="address"/>
 
-	<!--
-	so these have the same info that is normally in the CP_LOAD_STATE
-	packets.. not sure if they are normally written by pm4/me or if the
-	CP_LOAD_STATE mechanism is deprecated?
-	 -->
+	<!-- bounds on the TPL1_*_TEX_COUNT table accesses. max 128. -->
 	<reg32 offset="0xe700" name="TPL1_VS_TEX_COUNT" type="uint"/>
 	<reg32 offset="0xe701" name="TPL1_HS_TEX_COUNT" type="uint"/>
 	<reg32 offset="0xe702" name="TPL1_DS_TEX_COUNT" type="uint"/>
 	<reg32 offset="0xe703" name="TPL1_GS_TEX_COUNT" type="uint"/>
 
+	<!-- Sampler tables, 16 byte stride and 8 byte alignment-->
 	<reg64 offset="0xe722" name="TPL1_VS_TEX_SAMP" type="address"/>
 	<reg64 offset="0xe724" name="TPL1_HS_TEX_SAMP" type="address"/>
 	<reg64 offset="0xe726" name="TPL1_DS_TEX_SAMP" type="address"/>
 	<reg64 offset="0xe728" name="TPL1_GS_TEX_SAMP" type="address"/>
 
+	<!--
+		These carry the same information as the CP_LOAD_STATE4 packets,
+		but as a pointer to a table in memory rather than a payload: the
+		texture pipe fetches descriptors itself.  The descriptors have a
+		64 byte stride and 64 byte alignment, maximum of 128 entriea
+		(texture indices get masked to 7 bits)
+	-->
 	<reg64 offset="0xe72a" name="TPL1_VS_TEX_CONST" type="address"/>
 	<reg64 offset="0xe72c" name="TPL1_HS_TEX_CONST" type="address"/>
 	<reg64 offset="0xe72e" name="TPL1_DS_TEX_CONST" type="address"/>
@@ -2634,6 +2712,7 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
 	<reg64 offset="0xe75c" name="TPL1_CS_TEX_SAMP" type="address"/>
 	<reg64 offset="0xe75e" name="TPL1_FS_TEX_CONST" type="address"/>
 	<reg64 offset="0xe760" name="TPL1_CS_TEX_CONST" type="address"/>
+	<reg64 offset="0xe762" name="TPL1_CS_BORDER_COLOR_BASE" type="address"/>
 
 	<reg32 offset="0xe764" name="TPL1_TP_FS_ROTATION_CNTL"/>
 
@@ -2726,7 +2805,12 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
 		<bitfield name="UNK1" low="16" high="23" type="a3xx_regid"/>
 		<bitfield name="LOCALIDREGID" low="24" high="31" type="a3xx_regid"/>
 	</reg32>
-	<reg32 offset="0xe7b8" name="HLSQ_CS_CNTL_1"/>
+	<enum name="a5xx_workitem_rast_order">
+		<value value="0x0" name="WORKITEMRASTORDER_LINEAR"/>
+	</enum>
+	<reg32 offset="0xe7b8" name="HLSQ_CS_CNTL_1">
+		<bitfield name="WORKITEMRASTORDER" pos="0" type="a5xx_workitem_rast_order"/>
+	</reg32>
 	<reg32 offset="0xe7c0" name="UNKNOWN_E7C0"/>
 	<reg32 offset="0xe7c3" name="HLSQ_VS_CONSTLEN" type="uint"/>
 	<reg32 offset="0xe7c4" name="HLSQ_VS_INSTRLEN" type="uint"/>
@@ -2770,12 +2854,6 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
 		src via sampler, to enable scaling??)  0x2040 also used in this
 		case.
 	 -->
-	<reg32 offset="0x2100" name="RB_2D_BLIT_CNTL"/>  <!-- same as 0x2180 -->
-	<reg32 offset="0x2101" name="RB_2D_SRC_SOLID_DW0"/>
-	<reg32 offset="0x2102" name="RB_2D_SRC_SOLID_DW1"/>
-	<reg32 offset="0x2103" name="RB_2D_SRC_SOLID_DW2"/>
-	<reg32 offset="0x2104" name="RB_2D_SRC_SOLID_DW3"/>
-
 	<bitset name="a5xx_2d_surf_info" inline="yes">
 		<bitfield name="COLOR_FORMAT" low="0" high="7" type="a5xx_color_fmt"/>
 		<bitfield name="TILE_MODE" low="8" high="9" type="a5xx_tile_mode"/>
@@ -2784,6 +2862,40 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
 		<bitfield name="FLAGS" pos="12" type="boolean"/>
 		<bitfield name="SRGB" pos="13" type="boolean"/>
 	</bitset>
+
+	<bitset name="a5xx_sp_a2d_output_info" inline="yes">
+		<bitfield name="HALF_PRECISION" pos="0" type="boolean"/>
+		<bitfield name="IFMT_TYPE" low="1" high="2" type="adreno_2d_output_ifmt_type"/>
+		<bitfield name="COLOR_FORMAT" low="3" high="10" type="a5xx_color_fmt"/>
+		<bitfield name="SRGB" pos="11" type="boolean"/>
+	</bitset>
+
+	<!-- The source the 2D core samples through, the same block as a6xx's
+	     TPL1_A2D_SRC_TEXTURE_*: -->
+	<reg32 offset="0x2000" name="TPL1_A2D_SRC_TEXTURE_INFO" type="a5xx_2d_surf_info"/>
+	<reg32 offset="0x2001" name="TPL1_A2D_SRC_TEXTURE_SIZE">
+		<bitfield name="WIDTH" low="0" high="14" type="uint"/>
+		<bitfield name="HEIGHT" low="15" high="29" type="uint"/>
+	</reg32>
+	<reg64 offset="0x2002" name="TPL1_A2D_SRC_TEXTURE_BASE" type="address"/>
+	<reg32 offset="0x2004" name="TPL1_A2D_SRC_TEXTURE_PITCH">
+		<bitfield name="PITCH" low="9" high="23" shr="6" type="uint"/>
+	</reg32>
+
+	<reg32 offset="0x2040" name="SP_A2D_OUTPUT_INFO" type="a5xx_sp_a2d_output_info"/>
+
+	<bitset name="a5xx_2d_blit_cntl" inline="yes">
+		<bitfield name="ROP" low="23" high="26" type="a3xx_rop_code"/>
+		<bitfield name="IFMT" low="28" high="30" type="adreno_2d_ifmt"/>
+		<bitfield name="UNK31" pos="31" type="boolean"/>
+	</bitset>
+
+	<reg32 offset="0x2100" name="RB_2D_BLIT_CNTL" type="a5xx_2d_blit_cntl"/>
+	<reg32 offset="0x2101" name="RB_2D_SRC_SOLID_DW0"/>
+	<reg32 offset="0x2102" name="RB_2D_SRC_SOLID_DW1"/>
+	<reg32 offset="0x2103" name="RB_2D_SRC_SOLID_DW2"/>
+	<reg32 offset="0x2104" name="RB_2D_SRC_SOLID_DW3"/>
+
 
 	<reg32 offset="0x2107" name="RB_2D_SRC_INFO" type="a5xx_2d_surf_info"/>
 	<reg64 offset="0x2108" name="RB_2D_SRC" type="address"/>
@@ -2802,7 +2914,7 @@ bit 7 for RECTLIST (clear) when z32s8 (used for clear of depth32?  not set
         <reg32 offset="0x2142" name="RB_2D_SRC_FLAGS_PITCH" shr="6" type="uint"/>
 	<reg64 offset="0x2143" name="RB_2D_DST_FLAGS" type="address"/>
         <reg32 offset="0x2145" name="RB_2D_DST_FLAGS_PITCH" shr="6" type="uint"/>
-	<reg32 offset="0x2180" name="GRAS_2D_BLIT_CNTL"/> <!-- same as 0x2100 -->
+	<reg32 offset="0x2180" name="GRAS_2D_BLIT_CNTL" type="a5xx_2d_blit_cntl"/>
 	<!-- looks same as 0x2107: -->
 	<reg32 offset="0x2181" name="GRAS_2D_SRC_INFO" type="a5xx_2d_surf_info"/>
 	<!-- looks same as 0x2110: -->
@@ -2948,7 +3060,9 @@ different border-color states per texture..  Looks something like:
 		<bitfield name="BASE_HI" low="0" high="16"/>
 		<bitfield name="DEPTH" low="17" high="29" type="uint"/>
 	</reg32>
-	<reg32 offset="6" name="6"/>
+	<reg32 offset="6" name="6">
+		<bitfield name="MIN_LOD_CLAMP" low="0" high="11" type="ufixed" radix="8"/>
+	</reg32>
 	<reg32 offset="7" name="7"/>
 	<reg32 offset="8" name="8"/>
 	<reg32 offset="9" name="9"/>
@@ -2981,6 +3095,13 @@ with a better name.
 
 <domain name="A5XX_SSBO_1" width="32">
 	<reg32 offset="0" name="0">
+		<doc>
+			SWAP selects the component order a store lands in, the same
+			way COLOR_SWAP does for a render target.  Without it a store
+			to a permuted format such as B8G8R8A8 writes the components
+			in the hardware format's own order.
+		</doc>
+		<bitfield name="SWAP" low="6" high="7" type="a3xx_color_swap"/>
 		<bitfield name="FMT" low="8" high="15" type="a5xx_tex_fmt"/>
 		<bitfield name="WIDTH" low="16" high="31" type="uint"/>
 	</reg32>

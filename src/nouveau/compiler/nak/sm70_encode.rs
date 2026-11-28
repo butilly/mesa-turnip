@@ -3,8 +3,8 @@
 
 use crate::ir::*;
 use crate::legalize::{
-    src_is_reg, src_is_upred_reg, swap_srcs_if_both_reg, swap_srcs_if_not_reg,
-    LegalizeBuildHelpers, LegalizeBuilder,
+    LegalizeBuildHelpers, LegalizeBuilder, src_is_reg, src_is_upred_reg,
+    swap_srcs_if_both_reg, swap_srcs_if_not_reg,
 };
 use crate::sm70::ShaderModel70;
 
@@ -47,11 +47,7 @@ impl SM70Encoder<'_> {
     ///
     /// This may be different from the actual maximum supported by hardware.
     fn ugpr_max(&self) -> u32 {
-        if self.sm >= 100 {
-            255
-        } else {
-            63
-        }
+        if self.sm >= 100 { 255 } else { 63 }
     }
 
     fn zero_reg(&self, file: RegFile) -> RegRef {
@@ -931,6 +927,9 @@ impl SM70Op for OpFMnMx {
     }
 
     fn encode(&self, e: &mut SM70Encoder<'_>) {
+        assert!(e.sm >= 80 || !self.nan);
+        assert!(e.sm >= 86 || !self.xorsign);
+
         if self.is_uniform() {
             assert!(e.sm >= 120);
             e.encode_ualu(
@@ -952,11 +951,12 @@ impl SM70Op for OpFMnMx {
             e.set_pred_src(87..90, 90, &self.min);
         }
 
-        e.set_bit(80, self.ftz);
-
         // .IS_A (SM90+): Dst predicate will be set if the first source is picked.
         e.set_bit(65, false);
         // e.set_pred_dst(66..69, &Dst::None); // dst0
+        e.set_bit(80, self.ftz);
+        e.set_bit(81, self.nan);
+        e.set_bit(82, self.xorsign);
     }
 }
 
@@ -1495,6 +1495,7 @@ impl SM70Op for OpHMnMx2 {
 
     fn encode(&self, e: &mut SM70Encoder<'_>) {
         assert!(e.sm >= 80);
+        assert!(e.sm >= 86 || !self.xorsign);
 
         e.encode_fp16v2_alu(
             0x040,
@@ -1507,8 +1508,8 @@ impl SM70Op for OpHMnMx2 {
         // This differentiate between integer and fp16 output
         e.set_bit(78, false); // .F32 (SM86)
         e.set_bit(80, self.ftz);
-        e.set_bit(81, false); // .NAN
-        e.set_bit(82, false); // .XORSIGN
+        e.set_bit(81, self.nan);
+        e.set_bit(82, self.xorsign);
         e.set_bit(85, false); // .BF16_V2
 
         e.set_pred_src(87..90, 90, &self.min);
@@ -1716,7 +1717,7 @@ impl SM70Op for OpIDp4 {
             std::mem::swap(src_type0, src_type1);
         }
         b.copy_alu_src_if_not_reg(src0, gpr, SrcType::ALU);
-        b.copy_alu_src_if_ineg_imm(src1, gpr, SrcType::I32);
+        b.copy_alu_src_if_imm(src1, gpr, SrcType::I32);
         b.copy_alu_src_if_not_reg(src2, gpr, SrcType::ALU);
     }
 
@@ -1786,10 +1787,13 @@ impl SM70Op for OpIMad64 {
         let [src0, src1, src2] = &mut self.srcs;
         swap_srcs_if_not_reg(src0, src1, gpr);
         b.copy_alu_src_if_not_reg(src0, gpr, SrcType::ALU);
-        b.copy_alu_src_if_both_not_reg(src1, src2, gpr, SrcType::ALU);
+        // We prefer copying src1, because src2 is 64 bit and more expensive to
+        // copy, so src1 needs to be the second source passed in.
+        b.copy_alu_src_if_both_not_reg(src2, src1, gpr, SrcType::ALU);
     }
 
     fn encode(&self, e: &mut SM70Encoder<'_>) {
+        assert!(!self.srcs[2].is_immediate());
         if self.is_uniform() {
             e.encode_ualu(
                 0x0a5,
@@ -4517,6 +4521,74 @@ impl SM70Op for OpMatch {
     }
 }
 
+impl SM70Op for OpTtuOpen {
+    fn legalize(&mut self, _b: &mut LegalizeBuilder) {
+        // Nothing to do
+    }
+
+    fn encode(&self, e: &mut SM70Encoder<'_>) {
+        e.set_opcode(0x3d0);
+        e.set_bit(72, self.dual);
+    }
+}
+
+impl SM70Op for OpTtuSt {
+    fn legalize(&mut self, b: &mut LegalizeBuilder) {
+        b.copy_src_if_uniform(&mut self.srcs[0]);
+        b.copy_src_if_uniform(&mut self.srcs[1]);
+    }
+
+    fn encode(&self, e: &mut SM70Encoder<'_>) {
+        e.set_opcode(0x3d1);
+        e.set_reg_src(32..40, &self.srcs[1]);
+        e.set_reg_src(64..72, &self.srcs[0]);
+        e.set_field(40..56, self.offset);
+    }
+}
+
+impl SM70Op for OpTtuLd {
+    fn legalize(&mut self, _b: &mut LegalizeBuilder) {
+        // Nothing to do
+    }
+
+    fn encode(&self, e: &mut SM70Encoder<'_>) {
+        e.set_opcode(0x3d2);
+
+        e.set_dst(&self.dsts[0]);
+        if let Dst::Reg(reg) = self.dsts[1] {
+            e.set_reg(64..72, reg);
+        } else {
+            e.set_field(64..72, 255_u8);
+        }
+        // TODO: unknown predicate, seems to always set to PT
+        e.set_pred_dst(81..84, &Dst::None);
+
+        e.set_field(40..56, self.offset);
+        e.set_bit(74, self.close);
+    }
+}
+
+impl SM70Op for OpTtuGo {
+    fn legalize(&mut self, _b: &mut LegalizeBuilder) {
+        // Nothing to do
+    }
+
+    fn encode(&self, e: &mut SM70Encoder<'_>) {
+        e.set_opcode(0x3d3);
+    }
+}
+
+impl SM70Op for OpTtuMacroFuse {
+    fn legalize(&mut self, _b: &mut LegalizeBuilder) {
+        // Nothing to do
+    }
+
+    fn encode(&self, e: &mut SM70Encoder<'_>) {
+        e.set_opcode(0x9d4);
+        e.set_field(40..45, self.imm);
+    }
+}
+
 impl SM70Op for OpImma {
     fn legalize(&mut self, b: &mut LegalizeBuilder) {
         b.copy_src_if_uniform(&mut self.srcs[0]);
@@ -4783,6 +4855,11 @@ macro_rules! sm70_op_match {
             Op::OutFinal($x) => $y,
             Op::Vote($x) => $y,
             Op::Match($x) => $y,
+            Op::TtuOpen($x) => $y,
+            Op::TtuSt($x) => $y,
+            Op::TtuLd($x) => $y,
+            Op::TtuGo($x) => $y,
+            Op::TtuMacroFuse($x) => $y,
             Op::Hmma($x) => $y,
             Op::Imma($x) => $y,
             Op::Ldsm($x) => $y,

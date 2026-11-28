@@ -20,6 +20,7 @@ typedef struct {
    bool has_query;
    /* True if the mesh shader is linked with a task shader. */
    bool has_task_shader;
+   enum amd_gfx_level gfx_level;
 } lower_tsms_io_state;
 
 static nir_def *
@@ -27,7 +28,7 @@ task_num_entries(nir_builder *b,
                  lower_tsms_io_state *s)
 {
    nir_def *ring = nir_load_ring_task_draw_amd(b);
-   nir_def *bytes = nir_channel(b, ring, 2);
+   nir_def *bytes = ac_nir_get_buffer_num_records(b, 32, ring, s->gfx_level);
    return nir_udiv_imm(b, bytes, AC_TASK_DRAW_ENTRY_BYTES);
 }
 
@@ -37,7 +38,7 @@ task_payload_entry_bytes(nir_builder *b,
 {
    nir_def *num_entries = task_num_entries(b, s);
    nir_def *ring = nir_load_ring_task_payload_amd(b);
-   nir_def *bytes = nir_channel(b, ring, 2);
+   nir_def *bytes = ac_nir_get_buffer_num_records(b, 32, ring, s->gfx_level);
 
    /* num_entries must be a power of two,
     * use that to implement a division using a shift.
@@ -143,6 +144,7 @@ static void
 task_write_draw_ring(nir_builder *b,
                      nir_def *store_val,
                      unsigned const_off,
+                     uint32_t access,
                      lower_tsms_io_state *s)
 {
    nir_def *ptr = task_ring_entry_index(b, s);
@@ -153,7 +155,7 @@ task_write_draw_ring(nir_builder *b,
 
    nir_store_buffer_amd(b, store_val, ring, vector_off, scalar_off, zero,
                         .base = const_off, .memory_modes = nir_var_shader_out,
-                        .access = ACCESS_COHERENT | ACCESS_CP_GE_COHERENT_AMD);
+                        .access = access | ACCESS_COHERENT | ACCESS_CP_GE_COHERENT_AMD);
 }
 
 static bool
@@ -195,16 +197,16 @@ lower_task_launch_mesh_workgroups(nir_builder *b,
     * so we assume that all invocations are active here.
     */
 
-   /* Wait for all necessary stores to finish.
-    * Device memory scope is necessary because we need to ensure there is
-    * always a waitcnt_vscnt instruction in order to avoid a race condition
-    * between payload stores and their loads after mesh shaders launch.
+   /* Wait for other waves to finish their payload stores
+    * in order to avoid race condition between the first wave
+    * writing the draw ring (below) and other waves writing the
+    * payload ring.
     */
    nir_barrier(b, .execution_scope = SCOPE_WORKGROUP,
-                         .memory_scope = SCOPE_DEVICE,
-                         .memory_semantics = NIR_MEMORY_ACQ_REL,
-                         .memory_modes = nir_var_mem_task_payload | nir_var_shader_out |
-                                         nir_var_mem_ssbo | nir_var_mem_global);
+                  .memory_scope = SCOPE_DEVICE,
+                  .memory_semantics = NIR_MEMORY_ACQ_REL,
+                  .memory_modes = nir_var_mem_task_payload | nir_var_shader_out |
+                                  nir_var_mem_ssbo | nir_var_mem_global);
 
    /* On the first invocation, write the full draw ring entry. */
    nir_def *invocation_index = nir_load_local_invocation_index(b);
@@ -221,11 +223,27 @@ lower_task_launch_mesh_workgroups(nir_builder *b,
       x = nir_bcsel(b, nir_ior(b, nir_ieq_imm(b, y, 0), nir_ieq_imm(b, z, 0)), nir_imm_int(b, 0), x);
 
       /* Dispatch dimensions of mesh shader workgroups. */
-      task_write_draw_ring(b, nir_vec3(b, x, y, z), 0, s);
-      /* Prevent the two stores from being reordered. */
-      nir_scoped_memory_barrier(b, SCOPE_INVOCATION, NIR_MEMORY_RELEASE, nir_var_shader_out);
-      /* Ready bit, only write the low 8 bits. */
-      task_write_draw_ring(b, task_draw_ready_bit(b, s), 12, s);
+      task_write_draw_ring(b, nir_vec3(b, x, y, z), 0, 0, s);
+
+      /* Wait for the dimensions to be stored. */
+      nir_barrier(b, .execution_scope = SCOPE_INVOCATION,
+                     .memory_scope = SCOPE_DEVICE,
+                     .memory_semantics = NIR_MEMORY_ACQ_REL,
+                     .memory_modes = nir_var_mem_task_payload | nir_var_shader_out |
+                                     nir_var_mem_ssbo | nir_var_mem_global);
+
+      /*
+       * Ready bit, only write the low 8 bits.
+       * Use the ACCESS_ATOMIC flag to tell the backend compiler that
+       * previous memory stores (payload and dimensions) need to be
+       * visible outside the current workgroup, before we write the
+       * ready bit.
+       *
+       * This is to avoid race conditions.
+       * Otherwise it's possible that mesh shaders would read the payload
+       * before it was written by the task shader, which can lead to bugs.
+       */
+      task_write_draw_ring(b, task_draw_ready_bit(b, s), 12, ACCESS_ATOMIC, s);
 
       task_invocation_query(b, s);
    }
@@ -311,7 +329,8 @@ lower_task_intrinsics(nir_builder *b,
 
 bool
 ac_nir_lower_task_outputs_to_mem(nir_shader *shader,
-                                 bool has_query)
+                                 bool has_query,
+                                 enum amd_gfx_level gfx_level)
 {
    bool progress = false;
 
@@ -325,6 +344,7 @@ ac_nir_lower_task_outputs_to_mem(nir_shader *shader,
 
    lower_tsms_io_state state = {
       .has_query = has_query,
+      .gfx_level = gfx_level,
    };
 
    progress |= nir_shader_lower_instructions(shader,
@@ -370,11 +390,13 @@ lower_mesh_intrinsics(nir_builder *b,
 }
 
 bool
-ac_nir_lower_mesh_inputs_to_mem(nir_shader *shader, bool has_task_shader)
+ac_nir_lower_mesh_inputs_to_mem(nir_shader *shader, bool has_task_shader,
+                                enum amd_gfx_level gfx_level)
 {
    lower_tsms_io_state state = {0};
 
    state.has_task_shader = has_task_shader;
+   state.gfx_level = gfx_level;
 
    return nir_shader_lower_instructions(shader,
                                         filter_mesh_input_load,

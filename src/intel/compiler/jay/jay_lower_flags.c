@@ -77,8 +77,9 @@ pass(jay_function *f)
           * can just use the canonical form as-is unselected.
           */
          if (I->op == JAY_OPCODE_DEMOTE && I->src[0].file == FLAG) {
-            jay_replace_src(&I->src[0],
-                            jay_SEL_u32(&b, I->src[0], 0, I->src[0]));
+            jay_def casted = jay_alloc_def(&b, GPR, jay_flag_bits(f), 1);
+            jay_SEL(&b, jay_flag_type(f), casted, I->src[0], 0, I->src[0]);
+            jay_replace_src(&I->src[0], casted);
          }
 
          /* Convert 1-bit boolean to 0/~0 */
@@ -126,7 +127,11 @@ pass(jay_function *f)
                i < I->num_srcs - I->predication) ||
               (i == 0 &&
                (jay_type_size_bits(I->type) == 64 ||
-                jay_type_is_any_float(I->type))))) {
+                jay_type_is_any_float(I->type) ||
+                (I->op == JAY_OPCODE_SEL &&
+                 I->src[2].file == UGPR &&
+                 !(jay_is_zero(I->src[1]) &&
+                   f->shader->dispatch_width == 32)))))) {
 
             BITSET_SET(read_as_ugpr, jay_index(I->src[i]));
             jay_replace_src(&I->src[i], as_ugpr[jay_index(I->src[i])]);
@@ -145,7 +150,7 @@ pass(jay_function *f)
                b.cursor = jay_after_inst(I);
             }
 
-            jay_def def = jay_alloc_def(&b, UGPR, 1);
+            jay_def def = jay_alloc_def(&b, UGPR, 32, 1);
             jay_MOV(&b, def, dst)->type = jay_flag_type(f);
             as_ugpr[jay_index(dst)] = def;
          }
@@ -186,7 +191,7 @@ pass(jay_function *f)
          assert(I->op == JAY_OPCODE_CMP && I->uniform);
          I->dst = I->cond_flag;
          I->broadcast_flag = false;
-         I->cond_flag = jay_alloc_def(&b, FLAG, 1);
+         I->cond_flag = jay_alloc_def(&b, FLAG, 32, 1);
       }
 
       if (I->op == JAY_OPCODE_SEL && I->src[2].file == UGPR) {
@@ -200,8 +205,8 @@ pass(jay_function *f)
                 *
                 * TODO: We should really add extends to the IR properly.
                 */
-               jay_AND_SN_S32(&b, I->dst, cond, I->src[0],
-                              b.shader->dispatch_width);
+               jay_AND_SN(&b, JAY_TYPE_S32, I->dst, cond, I->src[0],
+                          b.shader->dispatch_width);
             }
          } else {
             jay_inst *csel = jay_CSEL(&b, jay_flag_type(f), I->dst, I->src[0],

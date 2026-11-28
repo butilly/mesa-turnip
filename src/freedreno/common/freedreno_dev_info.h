@@ -49,6 +49,8 @@ struct fd_dev_info {
    uint32_t highest_bank_bit;
    uint32_t ubwc_swizzle;
    uint32_t macrotile_mode;
+   /* For the drm-shim, which has no kernel to ask. */
+   uint32_t gmem_size;
 
    /* Information for private memory calculations */
    uint32_t fibers_per_sp;
@@ -140,6 +142,22 @@ struct fd_dev_info {
        * replace this with minimum fw version.
        */
       bool draw_auto_stale_stride_quirk;
+
+      /* Many A6XX GEN1/GEN2 devices have a newer a630_sqe.fw in which, only in CP_DRAW_INDX and
+       * CP_DRAW_INDX_OFFSET, visibility-based skipping happens *before* predication-based skipping.
+       * It seems this breaks predication, because draws skipped by predication will not be executed
+       * in the binning phase, and therefore won't have an entry in the draw stream, but the
+       * visibility-based skipping will expect it to have an entry. The result is a GPU hang when
+       * actually executing the first non-predicated draw. However, it seems that things still work
+       * if the whole renderpass is predicated. Affected tests (with hw binning) are:
+       *   dEQP-VK.conditional_rendering.draw_clear.draw.case_*_host_memory
+       *   dEQP-VK.conditional_rendering.draw_clear.draw.maintenance5
+       *
+       * linux-firmware (working) FW version: 016ee176
+       * Last known working FW version: 016ee17a
+       * Latest known broken FW version: 016ee207 (linux-firmware)
+       */
+      bool predicated_binning_quirk;
 
       /* On some GPUs, the depth test needs to be enabled when the
        * depth bounds test is enabled and the depth attachment uses UBWC.
@@ -389,6 +407,12 @@ struct fd_dev_info {
        */
       bool enable_tp_ubwc_flag_hint;
 
+      /* Whether SP_CHICKEN_BITS_2.INDEPENDENT_ICACHE_MISS exists, A750 only.
+       * It helps some workloads and hurts others, so it is only set when
+       * the tu_independent_icache_miss driconf option asks for it.
+       */
+      bool has_independent_icache_miss;
+
       bool storage_8bit;
 
       /* A750+ added a special flag that allows HW to correctly interpret UBWC, including
@@ -437,9 +461,6 @@ struct fd_dev_info {
        */
       bool has_sw_fuse;
 
-      /* a750-specific HW bug workaround for ray tracing */
-      bool has_rt_workaround;
-
       /* Whether alias.rt is supported. */
       bool has_alias_rt;
 
@@ -484,6 +505,38 @@ struct fd_dev_info {
        */
       bool prefetch_sam_helpers_quirk;
 
+      /* How many descriptors of each kind (texture/SSBO, sampler/UBO) ir3 may
+       * prefetch in the preamble of a fragment shader, of a shader of any
+       * other stage, and of a binning VS (which runs without a FS, so it
+       * can prefetch more).
+       *
+       * How we think descriptor caching behaves (A7XX+):
+       *
+       *    sample(set, index):                  // in any shader stage
+       *       desc = l1_desc_cache[type].lookup(set.address, index)
+       *       if not found:
+       *          desc = l2_state_cache.lookup(...)    // A750+ only
+       *          if not found:
+       *             desc = memory.read(...)           // slow
+       *          l1_desc_cache[type].insert(desc)
+       *       return fetch_texels(desc)
+       *
+       * l1_desc_cache: 32 texture/SSBO, 32 sampler/UBO
+       *                (on A7XX gen1 it's probably 16 tex/SSBO, 16 sampler/UBO).
+       * l2_state_cache: shared by all descriptor types.
+       *
+       * The compiler doesn't know which shaders run together, so each stage
+       * gets a fixed limit.
+       */
+      uint32_t max_desc_prefetches_fs;
+      uint32_t max_desc_prefetches_non_fs;
+      uint32_t max_desc_prefetches_binning_vs;
+
+      /* Whether resbase can be used. It doesn't exist on a6xx, and on
+       * a7xx gen1 it hangs the GPU, even when its result is unused.
+       */
+      bool has_resbase;
+
       /* On a750+ SUBPASS_FENCE also implicitly does CCU_RESOLVE_CLEAN */
       bool subpass_fence_cleans_resolve;
    } props;
@@ -497,6 +550,16 @@ struct fd_dev_info {
        * of dst_type
        */
       bool QCTDD06363318_movs_half : 1;
+      /* On a7xx gen1/gen2, when the FS varyings in VPC take an odd number of
+       * vec4 slots (+ some conditions about number of contexts and visible
+       * prims that are impossible to detect), VPC_PS_CNTL::NUMNONPOSVAR has to
+       * be padded by one more vec4. Otherwise something goes wrong with varying
+       * storage alloc/dealloc: sometimes we get garbage in loaded varyings,
+       * unless (ei) is removed or moved much later. The padding of
+       * ::NUMNONPOSVAR is what prop driver is doing on a7xx gen1/gen2 and
+       * doesn't do on gen3.
+       */
+      bool QCTDD08049535_numnonposvar_alignment : 1;
       /* Is lock/unlock sequence needed at end of compute shader? */
       bool QCTDD08407086_cs_lock_unlock : 1;
       /* Having zero consts in one FS may corrupt consts in follow up FSs,
@@ -515,8 +578,15 @@ struct fd_dev_info {
       bool QCTDD09112208_cmdbuf_start_cs : 1;
       /* Need fake bary.f for (ei) if last input is flat: */
       bool QCTDD10204462_flat_ei : 1;
+      /* a750-specific HW bug workaround for ray tracing */
+      bool QCTDD10497382_rt_workaround;
       /* Do not use a0 in early preamble. */
       bool QCTDD10789828_no_a0_ep : 1;
+      /* Hw calculates pvtmem address using wave128, so driver needs
+       * to account for this by doubling the pvtmem size in per-wave
+       * layout.
+       */
+      bool QCTDD10982019_double_pvtmem_size : 1;
       /* On a7xx alias.tex may hang when in between mova and (ul). */
       bool QCTDD11147232_alias_mova : 1;
       /* On some HW alias.tex may hang when predicated (i.e. between
@@ -556,8 +626,23 @@ fd_dev_gpu_id(const struct fd_dev_id *id)
    return id->gpu_id;
 }
 
+/**
+ * Table entry for a single GPU version
+ */
+struct fd_dev_rec {
+   struct fd_dev_id id;
+   const char *name;
+   const struct fd_dev_info *info;
+};
+
+const struct fd_dev_rec *fd_dev_rec_at(unsigned index);
+const struct fd_dev_rec *fd_dev_rec_find(const struct fd_dev_id *id);
+
 /* Unmodified dev info as defined in freedreno_devices.py */
 const struct fd_dev_info *fd_dev_info_raw(const struct fd_dev_id *id);
+
+/* Complain where the table disagrees with the kernel, which knows. */
+void fd_dev_check_gmem_size(const struct fd_dev_id *id, uint32_t gmem_size);
 
 /* Helper to check if GPU is known before going any further */
 static inline uint8_t

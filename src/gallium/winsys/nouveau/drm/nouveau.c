@@ -229,6 +229,7 @@ nouveau_object_channel_del(struct nouveau_object *obj)
 static void
 nouveau_object_subchan_del(struct nouveau_object *obj)
 {
+   struct nouveau_drm *drm = nouveau_drm(obj->parent);
    struct {
       struct nvif_ioctl_v0 ioctl;
       struct nvif_ioctl_del del;
@@ -242,7 +243,7 @@ nouveau_object_subchan_del(struct nouveau_object *obj)
       },
    };
 
-   drmCommandWrite(obj->parent->handle, DRM_NOUVEAU_NVIF, &args, sizeof(args));
+   drmCommandWrite(drm->fd, DRM_NOUVEAU_NVIF, &args, sizeof(args));
 }
 
 static void
@@ -1120,6 +1121,11 @@ pushbuf_dump(struct nouveau_device *dev,
 
    kpsh = krec->push;
    for (i = 0; i < krec->nr_push; i++, kpsh++) {
+      if (kpsh->bo_index >= krec->nr_buffer) {
+         err("ch%d: illegal push buffer bo_index %d nr_buffer %d\n",
+             chid, kpsh->bo_index, krec->nr_buffer);
+         continue;
+      }
       kref = krec->buffer + kpsh->bo_index;
       bo = (void *)(unsigned long)kref->user_priv;
       bgn = (uint32_t *)((char *)bo->map + kpsh->offset);

@@ -39,6 +39,9 @@ etna_query_feature_db(struct etna_core_info *info)
    if (db->NNCoreCount)
       etna_core_enable_feature(info, ETNA_FEATURE_CORE_NPU);
 
+   if (db->COMPUTE_ONLY)
+      etna_core_disable_feature(info, ETNA_FEATURE_CORE_GPU);
+
    /* Features: */
    ETNA_FEATURE(REG_TessellationShaders, TESSELLATION_SHADERS);
    ETNA_FEATURE(REG_FastClear, FAST_CLEAR);
@@ -123,6 +126,7 @@ etna_query_feature_db(struct etna_core_info *info)
    ETNA_FEATURE(TX_INTEGER_COORDINATE_V2, TX_INTEGER_COORDINATE_V2);
    ETNA_FEATURE(TX_BORDER_CLAMP_FIX, TX_BORDER_CLAMP_FIX);
    ETNA_FEATURE(PE_ADVANCE_BLEND_PART0, PE_ADVANCE_BLEND_PART0);
+   ETNA_FEATURE(MSAA_FLOAT_64BIT, MSAA_FLOAT_64BIT);
 
    /* Limits: */
    if (etna_core_has_feature(info, ETNA_FEATURE_CORE_GPU)) {
@@ -130,6 +134,7 @@ etna_query_feature_db(struct etna_core_info *info)
       info->gpu.vertex_output_buffer_size = db->VertexOutputBufferSize;
       info->gpu.vertex_cache_size = db->VertexCacheSize;
       info->gpu.shader_core_count = db->NumShaderCores;
+      info->gpu.thread_count = db->ThreadCount;
       info->gpu.stream_count = db->Streams;
       info->gpu.max_registers = db->TempRegisters;
       info->gpu.pixel_pipes = db->NumPixelPipes;

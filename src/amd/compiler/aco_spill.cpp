@@ -1042,7 +1042,8 @@ process_block(spill_ctx& ctx, unsigned block_idx, Block* block, RegisterDemand s
                         live_changes = get_temp_reg_changes(instr.get());
 
                      /* Don't spill operands if killing operands won't help with register pressure */
-                     if (!instr->isCall() && !op.isClobbered() && RegisterDemand(op.getTemp()).exceeds(*live_changes)) {
+                     if (!instr->isCall() && !op.isClobbered() &&
+                         RegisterDemand(op.getTemp()).exceeds(*live_changes)) {
                         can_spill = false;
                         break;
                      }
@@ -1394,7 +1395,9 @@ spill_vgpr(spill_ctx& ctx, Block& block, std::vector<aco_ptr<Instruction>>& inst
       for (unsigned i = 0; i < temp.size(); i++) {
          Temp elem = split->definitions[i].getTemp();
          if (i < lds_slots) {
-            bld.ds(aco_opcode::ds_write_addtid_b32, bld.m0(ctx.lds_m0_zero), elem, lds_offset);
+            Instruction* instr =
+               bld.ds(aco_opcode::ds_write_addtid_b32, bld.m0(ctx.lds_m0_zero), elem, lds_offset);
+            instr->ds().sync = memory_sync_info(storage_vgpr_spill, semantic_private);
             lds_offset += workgroup_size * 4;
          } else if (ctx.program->gfx_level >= GFX9) {
             bld.scratch(aco_opcode::scratch_store_dword, Operand(v1), ctx.scratch_rsrc, elem,
@@ -1409,7 +1412,9 @@ spill_vgpr(spill_ctx& ctx, Block& block, std::vector<aco_ptr<Instruction>>& inst
          }
       }
    } else if (lds_slots) {
-      bld.ds(aco_opcode::ds_write_addtid_b32, bld.m0(ctx.lds_m0_zero), temp, lds_offset);
+      Instruction* instr =
+         bld.ds(aco_opcode::ds_write_addtid_b32, bld.m0(ctx.lds_m0_zero), temp, lds_offset);
+      instr->ds().sync = memory_sync_info(storage_vgpr_spill, semantic_private);
    } else if (ctx.program->gfx_level >= GFX9) {
       bld.scratch(aco_opcode::scratch_store_dword, Operand(v1), ctx.scratch_rsrc, temp, offset,
                   memory_sync_info(storage_vgpr_spill, semantic_private));
@@ -1457,8 +1462,9 @@ reload_vgpr(spill_ctx& ctx, Block& block, std::vector<aco_ptr<Instruction>>& ins
          Temp tmp = bld.tmp(v1.resize(MIN2(def.bytes() - i * 4, 4)));
          vec->operands[i] = Operand(tmp);
          if (i < lds_slots) {
-            bld.ds(aco_opcode::ds_read_addtid_b32, Definition(tmp), bld.m0(ctx.lds_m0_zero),
-                   lds_offset);
+            Instruction* instr = bld.ds(aco_opcode::ds_read_addtid_b32, Definition(tmp),
+                                        bld.m0(ctx.lds_m0_zero), lds_offset);
+            instr->ds().sync = memory_sync_info(storage_vgpr_spill, semantic_private);
             lds_offset += workgroup_size * 4;
          } else if (ctx.program->gfx_level >= GFX9) {
             bld.scratch(aco_opcode::scratch_load_dword, Definition(tmp), Operand(v1),
@@ -1476,7 +1482,9 @@ reload_vgpr(spill_ctx& ctx, Block& block, std::vector<aco_ptr<Instruction>>& ins
       }
       bld.insert(vec);
    } else if (lds_slots) {
-      bld.ds(aco_opcode::ds_read_addtid_b32, def, bld.m0(ctx.lds_m0_zero), lds_offset);
+      Instruction* instr =
+         bld.ds(aco_opcode::ds_read_addtid_b32, def, bld.m0(ctx.lds_m0_zero), lds_offset);
+      instr->ds().sync = memory_sync_info(storage_vgpr_spill, semantic_private);
    } else if (ctx.program->gfx_level >= GFX9) {
       bld.scratch(aco_opcode::scratch_load_dword, def, Operand(v1), ctx.scratch_rsrc, offset,
                   memory_sync_info(storage_vgpr_spill, semantic_private));
@@ -1736,9 +1744,8 @@ assign_spill_slots(spill_ctx& ctx, unsigned spills_to_vgpr)
                         ctx.program->blocks[last_top_level_block_idx].instructions;
                      auto insert_point =
                         std::find_if(block_instrs.rbegin(), block_instrs.rend(),
-                                     [](const auto& iter) {
-                                        return iter->opcode == aco_opcode::p_logical_end;
-                                     })
+                                     [](const auto& iter)
+                                     { return iter->opcode == aco_opcode::p_logical_end; })
                            .base();
                      block_instrs.insert(insert_point, std::move(create));
                   }
@@ -1781,9 +1788,8 @@ assign_spill_slots(spill_ctx& ctx, unsigned spills_to_vgpr)
                         ctx.program->blocks[last_top_level_block_idx].instructions;
                      auto insert_point =
                         std::find_if(block_instrs.rbegin(), block_instrs.rend(),
-                                     [](const auto& iter) {
-                                        return iter->opcode == aco_opcode::p_logical_end;
-                                     })
+                                     [](const auto& iter)
+                                     { return iter->opcode == aco_opcode::p_logical_end; })
                            .base();
                      block_instrs.insert(insert_point, std::move(create));
                   }
@@ -1831,7 +1837,8 @@ spill(Program* program)
          program->blocks.back().instructions.rbegin(), program->blocks.back().instructions.rend(),
          [](const auto& instruction) { return instruction->opcode == aco_opcode::p_return; });
 
-      if (limit.sgpr > callee_limit.sgpr && return_it != program->blocks.back().instructions.rend()) {
+      if (limit.sgpr > callee_limit.sgpr &&
+          return_it != program->blocks.back().instructions.rend()) {
          aco_ptr<Instruction>& old_startpgm = program->blocks.front().instructions.front();
          Instruction* new_startpgm = create_instruction(aco_opcode::p_startpgm, Format::PSEUDO, 0,
                                                         old_startpgm->definitions.size() + 1);
@@ -1868,7 +1875,7 @@ spill(Program* program)
 
          /* TODO: update live var analysis in-place */
          live_var_analysis(program);
-       }
+      }
    }
 
    /* no spilling when register pressure is low enough */

@@ -239,8 +239,8 @@ void vlVaDecoderVP9BitstreamHeader(vlVaContext *context, vlVaBuffer *buf)
    bool mode_ref_delta_enabled, mode_ref_delta_update = false;
    int i;
 
-   vl_vlc_init(&vlc, 1, (const void * const*)&buf->data,
-      (const unsigned *)&context->desc.vp9.picture_parameter.frame_header_length_in_bytes);
+   unsigned size = MIN2(context->desc.vp9.picture_parameter.frame_header_length_in_bytes, buf->size);
+   vl_vlc_init(&vlc, 1, (const void * const*)&buf->data, &size);
 
    /* frame_marker */
    if (vp9_u(&vlc, 2) != 0x2)
@@ -374,8 +374,8 @@ void vlVaDecoderVP9BitstreamHeader(vlVaContext *context, vlVaBuffer *buf)
 
    context->desc.vp9.picture_parameter.base_qindex = vp9_u(&vlc, 8);
    context->desc.vp9.picture_parameter.y_dc_delta_q = vp9_u(&vlc, 1) ? vp9_s(&vlc, 4) : 0;
-   context->desc.vp9.picture_parameter.uv_ac_delta_q = vp9_u(&vlc, 1) ? vp9_s(&vlc, 4) : 0;
    context->desc.vp9.picture_parameter.uv_dc_delta_q = vp9_u(&vlc, 1) ? vp9_s(&vlc, 4) : 0;
+   context->desc.vp9.picture_parameter.uv_ac_delta_q = vp9_u(&vlc, 1) ? vp9_s(&vlc, 4) : 0;
 
    /* segmentation */
 

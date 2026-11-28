@@ -86,11 +86,25 @@ anv_get_buffer_memory_requirements(struct anv_device *device,
       (device->info->verx10 <= 120 &&
        (usage & VK_BUFFER_USAGE_2_PREPROCESS_BUFFER_BIT_EXT));
 
+   /* Bspec 56933 and HSD 14028776404 recommend disabling compression on ray
+    * tracing buffers for better performance. Disable compression if a buffer
+    * will only be used for that purpose.
+    */
+   bool prefer_uncompressed_buffer = (usage & ~(
+      VK_BUFFER_USAGE_2_SHADER_BINDING_TABLE_BIT_KHR |
+      VK_BUFFER_USAGE_2_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR |
+      VK_BUFFER_USAGE_2_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
+      VK_BUFFER_USAGE_2_MICROMAP_STORAGE_BIT_EXT |
+      VK_BUFFER_USAGE_2_MICROMAP_BUILD_INPUT_READ_ONLY_BIT_EXT
+      )) == 0;
+
    uint32_t memory_types;
    if (flags & VK_BUFFER_CREATE_PROTECTED_BIT)
       memory_types = device->physical->memory.protected_mem_types;
    else if (need_dynamic_visible_buffer)
       memory_types = device->physical->memory.dynamic_visible_mem_types;
+   else if (prefer_uncompressed_buffer)
+      memory_types = device->physical->memory.default_buffer_mem_types;
    else
       memory_types = device->physical->memory.default_buffer_mem_types |
                      device->physical->memory.compressed_mem_types;
@@ -216,7 +230,7 @@ VkResult anv_CreateBuffer(
       uint64_t client_address = 0;
 
       if (buffer->vk.create_flags & VK_BUFFER_CREATE_DEVICE_ADDRESS_CAPTURE_REPLAY_BIT) {
-         alloc_flags = ANV_BO_ALLOC_CLIENT_VISIBLE_ADDRESS;
+         alloc_flags = ANV_BO_ALLOC_CAPTURE_REPLAY;
          const VkBufferOpaqueCaptureAddressCreateInfo *opaque_addr_info =
             vk_find_struct_const(pCreateInfo->pNext,
                                  BUFFER_OPAQUE_CAPTURE_ADDRESS_CREATE_INFO);
@@ -225,7 +239,7 @@ VkResult anv_CreateBuffer(
       }
 
       if (buffer->vk.create_flags & VK_BUFFER_CREATE_DESCRIPTOR_BUFFER_CAPTURE_REPLAY_BIT_EXT) {
-         alloc_flags = ANV_BO_ALLOC_CLIENT_VISIBLE_ADDRESS;
+         alloc_flags = ANV_BO_ALLOC_CAPTURE_REPLAY;
 
          const VkOpaqueCaptureDescriptorDataCreateInfoEXT *opaque_info =
             vk_find_struct_const(pCreateInfo->pNext,
@@ -338,8 +352,6 @@ uint64_t anv_GetDeviceMemoryOpaqueCaptureAddress(
     const VkDeviceMemoryOpaqueCaptureAddressInfo* pInfo)
 {
    ANV_FROM_HANDLE(anv_device_memory, memory, pInfo->memory);
-
-   assert(memory->bo->alloc_flags & ANV_BO_ALLOC_CLIENT_VISIBLE_ADDRESS);
 
    return intel_48b_address(memory->bo->offset);
 }

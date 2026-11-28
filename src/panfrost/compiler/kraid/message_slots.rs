@@ -115,14 +115,18 @@ fn calc_message_deadlines_in_bb(
     deadlines
 }
 
-impl Shader<'_> {
-    pub fn assign_message_slots(&mut self) {
+impl Function {
+    pub fn assign_message_slots(
+        &mut self,
+        model: &dyn Model,
+        shader_info: &ShaderInfo,
+    ) {
         if DEBUG.contains(DebugFlags::SERIAL) {
             for b in self.blocks.iter_mut() {
                 for i in b.instrs.iter_mut() {
                     if matches!(&i.op, Op::Barrier(_)) {
                         i.flow.set_wait_bit(FlowWaitBit::Barrier);
-                    } else if self.model.op_is_message(&i.op) {
+                    } else if model.op_is_message(&i.op) {
                         i.flow.set_msg_slot_idx(0);
                         i.flow.set_wait_bit(FlowWaitBit::Slot0);
                     }
@@ -139,7 +143,7 @@ impl Shader<'_> {
             // Track whole registers as HW can have race conditions when a
             // pending message read/writes part of a register that is accessed
             // by another instruction.
-            let deadlines = calc_message_deadlines_in_bb(self.model, block);
+            let deadlines = calc_message_deadlines_in_bb(model, block);
             let mut slots: [Slot; 3] = Default::default();
 
             for ip in 0..block.instrs.len() {
@@ -169,7 +173,7 @@ impl Shader<'_> {
                 }
 
                 let is_barrier = matches!(&block.instrs[ip].op, Op::Barrier(_));
-                let is_message = self.model.op_is_message(&block.instrs[ip].op);
+                let is_message = model.op_is_message(&block.instrs[ip].op);
 
                 if is_barrier {
                     #[cfg(debug_assertions)]
@@ -184,7 +188,7 @@ impl Shader<'_> {
                 }
 
                 // Prefer a slot with the same wait point, otherwise choose the least-used slot.
-                let deadline = deadlines[ip];
+                let mut deadline = deadlines[ip];
                 let slot_idx = fixed_wait_slot(&block.instrs[ip])
                     .unwrap_or_else(|| {
                         slots
@@ -198,6 +202,17 @@ impl Shader<'_> {
                     });
 
                 block.instrs[ip].flow.set_msg_slot_idx(slot_idx as u8);
+
+                // ATest needs a .wait0 right after, unless the shader has a
+                // ZS_EMIT, in which case no message will be sent.
+                if let Op::ATest(_) = block.instrs[ip].op {
+                    if shader_info.has_zs_emit {
+                        // Not a real message, no need to update deadlines
+                        continue;
+                    }
+
+                    deadline = Some(ip + 1);
+                }
 
                 let slot = &mut slots[slot_idx];
                 slot.count += 1;
@@ -225,6 +240,14 @@ impl Shader<'_> {
             block
                 .instrs
                 .retain(|instr| !matches!(&instr.op, Op::ScheduleBarrier(_)));
+        }
+    }
+}
+
+impl Shader<'_> {
+    pub fn assign_message_slots(&mut self) {
+        for f in self.functions.iter_mut() {
+            f.assign_message_slots(self.model, &self.info);
         }
     }
 }

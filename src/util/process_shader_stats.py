@@ -6,30 +6,6 @@ import xml.etree.ElementTree as ET
 import sys
 import textwrap
 
-schema_filename, xml_filename = sys.argv[1:]
-
-try:
-    from lxml import etree
-    import rnc2rng
-
-    rng = rnc2rng.dumps(rnc2rng.load(schema_filename))
-    schema = etree.RelaxNG(etree.fromstring(rng.encode()))
-    valid = schema.validate(etree.parse(xml_filename))
-    if not valid:
-        print(schema.error_log, file=sys.stderr)
-        sys.exit(1)
-except ImportError:
-    # meson/ninja only displays stderr if the script fails, so this warning is
-    # only visible when someone changes the XML in a way that causes the below
-    # code to blow up. Ideally we'd add build dependencies but that might not be
-    # desirable for exotic platforms... This seems reasonable as a compromise.
-    print("", file=sys.stderr)
-    print("****", file=sys.stderr)
-    print("lxml or rnc2rng missing, skipping validation", file=sys.stderr)
-    print("If this script fails, install for diagnostics", file=sys.stderr)
-    print("****", file=sys.stderr)
-    print("", file=sys.stderr)
-
 # XXX: cribbed from genxml
 def to_alphanum(name):
     substitutions = {
@@ -73,8 +49,10 @@ TYPE_MAP = {
     'u16': ('uint16_t', 'u64', '" PRIu16 "'),
     'i32': ('int32_t', 'i64', '" PRId32 "'),
     'u32': ('uint32_t', 'u64', '" PRIu32 "'),
+    'x32': ('uint32_t', 'u64', '" PRIx32 "'),
     'i64': ('int64_t', 'i64', '" PRId64 "'),
     'u64': ('uint64_t', 'u64', '" PRIu64 "'),
+    'x64': ('uint64_t', 'u64', '" PRIx64 "'),
     'float': ('float', 'f64', 'f'),
     'bool': ('bool', 'bool', 'u'),
 }
@@ -90,6 +68,8 @@ class Stat:
         self.description = textwrap.dedent(el.text or '').replace('\n', ' ').strip()
         self.count = int(el.attrib.get('count', 1))
         self.c_name = safe_name(self.display).lower()
+        if self.hash:
+            type_ = {'u64': 'x64', 'u32': 'x32'}.get(type_, type_)
         self.c_type, self.vk_type, format_specifier = TYPE_MAP[type_]
         self.format_strings = [f'%{format_specifier} {self.display.lower()}']
         self.format_args = [f'stats->{self.c_name}']
@@ -108,7 +88,7 @@ class ISA:
         # Derive a the format string to print statistics in GL (report.py)
         # format. report.py has a weird special case for spills/fills, which we
         # need to fix up here.
-        external_stats = [stat for stat in self.stats if not (stat.hidden or stat.hash)]
+        external_stats = [stat for stat in self.stats if not stat.hidden]
         fmt = ', '.join([x for stat in external_stats for x in stat.format_strings])
         self.format_string = fmt.replace('%" PRIu32 " spills, %" PRIu32 " fills', '%" PRIu32 ":%" PRIu32 " spills:fills')
         self.format_args = ', '.join([x for stat in external_stats for x in stat.format_args])
@@ -137,10 +117,6 @@ def parse_file(root):
             isas += family.isas
 
     return (families, isas)
-
-tree = ET.parse(xml_filename)
-root = tree.getroot()
-families, isas = parse_file(root)
 
 template = Template("""\
 #ifndef __SHADER_STATS_H
@@ -261,4 +237,37 @@ ${family.c_name}_stats_serialize(uint8_t *dest, const ${family.c_struct_name} *s
 #endif
 """)
 
-print(template.render(isas=isas, families=families))
+schema_filename, xml_filename = sys.argv[1:]
+
+validation_missing = False
+try:
+    from lxml import etree
+    import rnc2rng
+
+    rng = rnc2rng.dumps(rnc2rng.load(schema_filename))
+    schema = etree.RelaxNG(etree.fromstring(rng.encode()))
+    valid = schema.validate(etree.parse(xml_filename))
+    if not valid:
+        print(schema.error_log, file=sys.stderr)
+        sys.exit(1)
+except ImportError:
+    validation_missing = True
+
+try:
+    tree = ET.parse(xml_filename)
+    root = tree.getroot()
+    families, isas = parse_file(root)
+
+    print(template.render(isas=isas, families=families))
+except Exception:
+    if validation_missing:
+        # Only warn if generation fails. Ideally we'd add build dependencies
+        # but that might not be desirable for exotic platforms... This seems
+        # reasonable as a compromise.
+        print("", file=sys.stderr)
+        print("****", file=sys.stderr)
+        print("lxml or rnc2rng missing, skipping validation", file=sys.stderr)
+        print("If this script fails, install for diagnostics", file=sys.stderr)
+        print("****", file=sys.stderr)
+        print("", file=sys.stderr)
+    raise

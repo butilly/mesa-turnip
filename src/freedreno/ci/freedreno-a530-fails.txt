@@ -1,12 +1,3 @@
-dEQP-GLES2.functional.clipping.point.wide_point_clip,Fail
-dEQP-GLES2.functional.clipping.point.wide_point_clip_viewport_center,Fail
-dEQP-GLES2.functional.clipping.point.wide_point_clip_viewport_corner,Fail
-
-dEQP-GLES3.functional.clipping.line.wide_line_clip_viewport_center,Fail
-dEQP-GLES3.functional.clipping.line.wide_line_clip_viewport_corner,Fail
-dEQP-GLES3.functional.clipping.point.wide_point_clip,Fail
-dEQP-GLES3.functional.clipping.point.wide_point_clip_viewport_center,Fail
-dEQP-GLES3.functional.clipping.point.wide_point_clip_viewport_corner,Fail
 dEQP-GLES3.functional.fbo.blit.rect.nearest_consistency_mag,Fail
 dEQP-GLES3.functional.fbo.blit.rect.nearest_consistency_mag_reverse_dst_x,Fail
 dEQP-GLES3.functional.fbo.blit.rect.nearest_consistency_mag_reverse_dst_y,Fail
@@ -40,7 +31,6 @@ spec@!opengl 1.0@depth-clear-precision-check,Fail
 spec@!opengl 1.1@polygon-mode,Fail
 spec@!opengl 1.4@gl-1.4-polygon-offset,Fail
 
-spec@!opengl 3.1@primitive-restart-xfb generated,Fail
 spec@!opengl 3.1@primitive-restart-xfb written,Fail
 
 spec@arb_draw_indirect@gl_vertexid used with gldrawarraysindirect,Fail
@@ -48,19 +38,8 @@ spec@arb_draw_indirect@gl_vertexid used with gldrawelementsindirect,Fail
 spec@arb_enhanced_layouts@linker@component-layout@intrastage-vs,Fail
 spec@arb_enhanced_layouts@linker@component-layout@vs-to-fs,Fail
 spec@arb_map_buffer_alignment@arb_map_buffer_alignment-map-invalidate-range,Fail
-spec@arb_occlusion_query@occlusion_query_order,Fail
 spec@arb_point_sprite@arb_point_sprite-interactions 1.0,Fail
 spec@arb_texture_rectangle@1-1-linear-texture,Fail
-spec@arb_timer_query@query gl_timestamp,Fail
-spec@arb_transform_feedback3@gl_skipcomponents1-1,Fail
-spec@arb_transform_feedback3@gl_skipcomponents1-2,Fail
-spec@arb_transform_feedback3@gl_skipcomponents1-3,Fail
-spec@arb_transform_feedback3@gl_skipcomponents1-gl_nextbuffer,Fail
-spec@arb_transform_feedback3@gl_skipcomponents1234,Fail
-spec@arb_transform_feedback3@gl_skipcomponents2,Fail
-spec@arb_transform_feedback3@gl_skipcomponents3,Fail
-spec@arb_transform_feedback3@gl_skipcomponents4,Fail
-spec@arb_transform_feedback_instanced@draw-auto instanced,Fail
 spec@ext_framebuffer_object@fbo-alphatest-nocolor,Fail
 spec@ext_framebuffer_object@fbo-alphatest-nocolor-ff,Fail
 spec@ext_framebuffer_object@fbo-blending-snorm,Fail
@@ -77,10 +56,6 @@ spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_uyvy,Fail
 spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_yuyv,Fail
 spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_vyuy,Fail
 spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_yvyu,Fail
-spec@ext_transform_feedback2@draw-auto,Fail
-
-spec@ext_transform_feedback@generatemipmap prims_generated,Fail
-spec@ext_transform_feedback@immediate-reuse-uniform-buffer,Fail
 
 spec@glsl-1.30@execution@texelfetch fs sampler3d 1x129x9-98x129x9,Fail
 spec@glsl-1.30@execution@texelfetch fs sampler3d 98x129x1-98x129x9,Fail
@@ -100,13 +75,27 @@ spec@khr_texture_compression_astc@miptree-gl srgb-sd@sRGB skip decode,Fail
 spec@khr_texture_compression_astc@miptree-gl srgb-sd,Fail
 
 # uprev Piglit in Mesa
+glx@glx-front-flush-after-swap,Fail
+glx@glx-read-back-after-swap -rgba,Fail
+glx@glx-read-back-after-swap,Fail
 spec@!opengl 1.1@large-tex,Fail
-spec@arb_framebuffer_object@execution@msaa-alpha-to-coverage_alpha-to-one_write-z,Fail
-spec@arb_framebuffer_object@execution@msaa-alpha-to-coverage_alpha-to-one,Fail
-spec@arb_framebuffer_object@execution@msaa-alpha-to-one,Fail
-spec@arb_framebuffer_object@framebuffer-blit-oblong tall,Fail
 spec@ext_image_dma_buf_import@ext_image_dma_buf_import-refcount,Fail
-spec@ext_transform_feedback2@draw-auto offset,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_abgr1555,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_abgr16161616,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_abgr16161616f,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_abgr2101010,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_abgr8888,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_argb1555,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_argb2101010,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_argb4444,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_gr1616,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_gr88,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_rgb565,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_xbgr16161616,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_xbgr16161616f,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_xbgr2101010,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_xbgr8888,Fail
+spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_xrgb2101010,Fail
 spec@khr_texture_compression_astc@miptree-gl srgb,Fail
 spec@khr_texture_compression_astc@miptree-gl srgb@sRGB decode,Fail
 spec@khr_texture_compression_astc@miptree-gles srgb,Fail
@@ -115,6 +104,98 @@ spec@khr_texture_compression_astc@sliced-3d-miptree-gl srgb,Fail
 spec@khr_texture_compression_astc@sliced-3d-miptree-gl srgb@sRGB decode,Fail
 spec@khr_texture_compression_astc@sliced-3d-miptree-gles srgb,Fail
 spec@khr_texture_compression_astc@sliced-3d-miptree-gles srgb@sRGB decode,Fail
+spec@arb_shader_image_load_store@invalid,Crash
+spec@!opengl 1.5@gl-1.5-gen-buffers-unique,Crash
+spec@arb_shader_image_load_store@qualifiers,Fail
+spec@arb_shader_image_load_store@qualifiers@r11f_g11f_b10f/permissive layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@r11f_g11f_b10f/permissive layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@r11f_g11f_b10f/strict layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@r11f_g11f_b10f/strict layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@r16/permissive layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@r16/permissive layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@r16/strict layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@r16/strict layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@r16_snorm/permissive layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@r16_snorm/permissive layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@r16_snorm/strict layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@r16_snorm/strict layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@r8_snorm/permissive layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@r8_snorm/permissive layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@r8_snorm/strict layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@r8_snorm/strict layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg16/permissive layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg16/permissive layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg16/strict layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg16/strict layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg16_snorm/permissive layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg16_snorm/permissive layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg16_snorm/strict layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg16_snorm/strict layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg16f/permissive layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg16f/permissive layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg16f/strict layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg16f/strict layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg16i/permissive layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg16i/permissive layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg16i/strict layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg16i/strict layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg16ui/permissive layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg16ui/permissive layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg16ui/strict layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg16ui/strict layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg32f/permissive layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg32f/permissive layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg32f/strict layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg32f/strict layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg32i/permissive layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg32i/permissive layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg32i/strict layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg32i/strict layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg32ui/permissive layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg32ui/permissive layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg32ui/strict layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg32ui/strict layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg8/permissive layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg8/permissive layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg8/strict layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg8/strict layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg8_snorm/permissive layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg8_snorm/permissive layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg8_snorm/strict layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg8_snorm/strict layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg8i/permissive layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg8i/permissive layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg8i/strict layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg8i/strict layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg8ui/permissive layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg8ui/permissive layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg8ui/strict layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rg8ui/strict layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rgb10_a2/permissive layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rgb10_a2/permissive layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rgb10_a2/strict layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rgb10_a2/strict layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rgb10_a2ui/permissive layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rgb10_a2ui/permissive layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rgb10_a2ui/strict layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rgb10_a2ui/strict layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rgba16/permissive layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rgba16/permissive layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rgba16/strict layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rgba16/strict layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rgba16_snorm/permissive layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rgba16_snorm/permissive layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rgba16_snorm/strict layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rgba16_snorm/strict layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rgba8_snorm/permissive layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rgba8_snorm/permissive layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rgba8_snorm/strict layout qualifiers/permissive access qualifiers/permissive binding test,Fail
+spec@arb_shader_image_load_store@qualifiers@rgba8_snorm/strict layout qualifiers/permissive access qualifiers/strict binding test,Fail
+spec@arb_shader_image_load_store@indexing,Crash
+spec@arb_shader_image_load_store@max-size,Fail
+spec@arb_shader_image_load_store@max-size@image1DArray max size test/16384x8x1x1,Fail
+spec@arb_shader_image_load_store@max-size@image2DArray max size test/16384x8x8x1,Fail
+spec@arb_shader_image_load_store@max-size@image2DArray max size test/8x16384x8x1,Fail
 
 spec@!opengl 1.1@polygon-mode-facing,Fail
 spec@!opengl 1.1@polygon-mode-offset,Fail
@@ -160,8 +241,6 @@ dEQP-GLES3.functional.fbo.blit.rect.nearest_consistency_out_of_bounds_min_revers
 dEQP-GLES3.functional.fbo.blit.rect.nearest_consistency_out_of_bounds_min_reverse_src_x,Fail
 dEQP-GLES3.functional.fbo.blit.rect.nearest_consistency_out_of_bounds_min_reverse_dst_x,Fail
 dEQP-GLES3.functional.fbo.blit.rect.nearest_consistency_out_of_bounds_mag,Fail
-dEQP-GLES2.functional.clipping.line.wide_line_clip_viewport_corner,Fail
-dEQP-GLES2.functional.clipping.line.wide_line_clip_viewport_center,Fail
 
 # Regressions while the device was offline
 
@@ -178,3 +257,86 @@ spec@ext_image_dma_buf_import@ext_image_dma_buf_import-sample_yuv420,Fail
 # New failures with ES CTS 3.2.13.0
 dEQP-GLES3.functional.fbo.blit.rect.nearest_consistency_out_of_bounds_mag_reverse_src_dst_y,Fail
 dEQP-GLES3.functional.fbo.blit.rect.nearest_consistency_out_of_bounds_min,Fail
+
+#
+# OpenCL (piglit "cl" profile), measured on a db820c
+#
+
+#Unexpected CL error: CL_SUCCESS 0
+#Expected CL error: CL_LINK_PROGRAM_FAILURE -17
+api@cllinkprogram,Fail
+
+#
+## freedreno issues:
+#
+#Error at data[0]
+custom@r600 create release buffer bug,Fail
+
+#Failed: return NULL if platform is not a valid platform
+api@clgetextensionfunctionaddressforplatform,Fail
+
+#
+## Not our problem:
+#
+# piglit asserts the full-profile minimums even on an EMBEDDED_PROFILE device:
+# CL_DEVICE_MAX_READ_IMAGE_ARGS: failed, expected at least 128, got 16
+# CL_DEVICE_IMAGE_MAX_ARRAY_SIZE: failed, expected at least 2048, got 256
+api@clgetdeviceinfo,Fail
+
+# broken piglit test (doesn't account for FTZ)
+program@execute@builtin@builtin-float-nextafter-1.0.generated,Fail
+program@execute@builtin@builtin-float-nextafter-1.0.generated@nextafter float1,Fail
+program@execute@builtin@builtin-float-nextafter-1.0.generated@nextafter float16,Fail
+program@execute@builtin@builtin-float-nextafter-1.0.generated@nextafter float2,Fail
+program@execute@builtin@builtin-float-nextafter-1.0.generated@nextafter float4,Fail
+program@execute@builtin@builtin-float-nextafter-1.0.generated@nextafter float8,Fail
+
+# (file=input,line=0,column=0,index=0): Unresolved external reference to "_Z21convert_char4_sat_rteDv4_i".
+program@execute@vector-conversion,Fail
+
+# broken piglit test (doesn't account for FTZ): a530 has no CL_FP_DENORM, so
+# the as_half((short)64) subnormal is flushed to zero
+program@execute@amdgcn-f16-inline-immediates,Fail
+program@execute@amdgcn-f16-inline-immediates@add integer 64,Fail
+
+# piglit runs at CL_DEVICE_MAX_WORK_GROUP_SIZE without checking the kernel's
+# CL_KERNEL_WORK_GROUP_SIZE, which its register footprint holds below that:
+# Unexpected CL error: CL_INVALID_WORK_GROUP_SIZE -54
+program@run kernel with max work item sizes,Fail
+
+#
+# OpenCL-CTS (quick profile), measured on a db820c
+#
+
+API,Fail
+API@get_image1d_array_info,Fail
+
+# https://github.com/KhronosGroup/OpenCL-CTS/issues/2765
+Basic,Fail
+Basic@bufferreadwriterect,Fail
+
+# 1D and 2D image kernels partially fail
+Images (Kernel 1D float),Fail
+Images (Kernel 1D float)@1D,Fail
+Images (Kernel 1D float)@1Darray,Fail
+Images (Kernel 1D int),Fail
+Images (Kernel 1D int)@1D,Fail
+Images (Kernel 1D int)@1Darray,Fail
+Images (Kernel 1D uint),Fail
+Images (Kernel 1D uint)@1D,Fail
+Images (Kernel 1D uint)@1Darray,Fail
+Images (Kernel 2D float),Fail
+Images (Kernel 2D float)@2D,Fail
+Images (Kernel 2D float)@2Darray,Fail
+Images (Kernel 2D int),Fail
+Images (Kernel 2D int)@2D,Fail
+Images (Kernel 2D int)@2Darray,Fail
+Images (Kernel 2D uint),Fail
+Images (Kernel 2D uint)@2D,Fail
+Images (Kernel 2D uint)@2Darray,Fail
+
+
+# float controls?  (same three on a618 and a660)
+SPIRV new,Fail
+SPIRV new@op_neg_half,Fail
+SPIRV new@op_spec_constant_half_simple,Fail

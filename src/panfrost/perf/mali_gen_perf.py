@@ -204,6 +204,7 @@ def blk_type_from_filename(fname):
        "Memory-MMU": "Memory System",
        "Tiler": "Tiler",
        "ShaderCore": "Shader Core",
+       "NeuralAccelerator": "Neural Accelerator",
        "Constants": None,
        "Content": None,
    }
@@ -243,6 +244,7 @@ TO_MALI_BLOCK_TYPE = {
    'L2 Cache': 'MALI_PERF_BLOCK_MEMSYS',
    'Tiler': 'MALI_PERF_BLOCK_TILER',
    'Shader Core': 'MALI_PERF_BLOCK_SHADER_CORE',
+   'Neural Accelerator': 'MALI_PERF_BLOCK_NEURAL',
 }
 
 
@@ -283,6 +285,7 @@ TO_MALI_UNITS = {
    'tiles': 'MALI_PERF_COUNTER_UNITS_TILES',
    'transactions': 'MALI_PERF_COUNTER_UNITS_TRANSACTIONS',
    'warps': 'MALI_PERF_COUNTER_UNITS_WARPS',
+   'blocks': 'MALI_PERF_COUNTER_UNITS_BLOCKS',
 }
 
 
@@ -334,14 +337,15 @@ def main():
                     __VA_ARGS__,                                                    \\
                  };                                                                 \\
                                                                                     \\
-                 (double)backend->get_hw_counter_value(backend, id);                \\
+                 mali_perf_get_hw_counter_value(backend, id, constants);            \\
               })
 
+      #define MALI_CONFIG_NEURAL_ACCELERATOR_COUNT (double)0
       #define MALI_CONFIG_EXT_BUS_BYTE_SIZE (double)constants->ext_bus_byte_size
       #define MALI_CONFIG_L2_CACHE_COUNT (double)constants->l2_cache_count
       #define MALI_CONFIG_SHADER_CORE_COUNT (double)constants->shader_core_count
       #define MALI_CONFIG_TIME_SPAN                                                 \\
-              (double)(MIN2(dump_info->time_span.end_ns - dump_info->time_span.start_ns, 1))
+              ((double)(dump_info->time_span.end_ns - dump_info->time_span.start_ns) / 1000000000.0)
 
       /* We seem to have a few cases where the dividend is low and the divisor
        * is zero. Let's assume a divisor of zero means we just had an
@@ -425,7 +429,7 @@ def main():
          blk_type = "MALI_PERF_BLOCK_NONE"
 
       c.write("   {")
-      c.write("      .name = \"{}\",".format(counter.machine_name))
+      c.write("      .name = \"{}\",".format(counter.human_name))
       c.write("      .desc = \"{}\",".format(counter.short_desc))
       c.write("      .units = {},".format(TO_MALI_UNITS[counter.units]))
       c.write("      .block = {},".format(blk_type))

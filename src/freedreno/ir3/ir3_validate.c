@@ -104,8 +104,14 @@ validate_src(struct ir3_validate_ctx *ctx, struct ir3_instruction *instr,
 
    struct ir3_register *src = reg->def;
 
-   validate_assert(ctx, src->instr->serialno < ctx->defs_count &&
-                           BITSET_TEST(ctx->defs, src->instr->serialno));
+   validate_assert(ctx, src->instr->serialno < ctx->defs_count);
+
+   if (src->instr->block == ctx->current_block) {
+      validate_assert(ctx, BITSET_TEST(ctx->defs, src->instr->serialno));
+   } else {
+      validate_assert(
+         ctx, ir3_block_dominates(src->instr->block, ctx->current_block));
+   }
 
    if (src->instr->opc == OPC_META_COLLECT) {
       /* We only support reading a subset of written components from collects.
@@ -266,6 +272,12 @@ static void
 validate_instr(struct ir3_validate_ctx *ctx, struct ir3_instruction *instr)
 {
    struct ir3_register *last_reg = NULL;
+
+   /* This is a validation of these helpers and not of instructions but we might
+    * as well put it here. No instruction should be both a (ss) and (sy)
+    * producer at the same time.
+    */
+   validate_assert(ctx, !(is_ss_producer(instr) && is_sy_producer(instr)));
 
    validate_rpt(ctx, instr);
 
@@ -644,6 +656,8 @@ ir3_validate(struct ir3 *ir)
    ctx->defs = BITSET_RZALLOC(ctx, ctx->defs_count);
    ctx->rpt_set = _mesa_pointer_set_create(ctx);
    ctx->rpt_block = NULL;
+
+   ir3_calc_dominance(ir);
 
    foreach_block (block, &ir->block_list) {
       ctx->current_block = block;

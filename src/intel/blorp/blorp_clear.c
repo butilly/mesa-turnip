@@ -82,7 +82,8 @@ blorp_params_get_clear_kernel_fs(struct blorp_batch *batch,
    params->shader_pipeline = blorp_key.base.shader_pipeline;
 
    if (blorp->lookup_shader(batch, &blorp_key, sizeof(blorp_key),
-                            &params->wm_prog_kernel, &params->fs_prog_data))
+                            &params->wm_prog_kernel, &params->fs_prog_data,
+                            &params->fs_info))
       return true;
 
    void *mem_ctx = ralloc_context(NULL);
@@ -119,8 +120,9 @@ blorp_params_get_clear_kernel_fs(struct blorp_batch *batch,
       blorp->upload_shader(batch, MESA_SHADER_FRAGMENT,
                            &blorp_key, sizeof(blorp_key),
                            p.kernel, p.kernel_size,
-                           p.prog_data, p.prog_data_size,
-                           &params->wm_prog_kernel, &params->fs_prog_data);
+                           p.prog_data, p.prog_data_size, p.bin,
+                           &params->wm_prog_kernel, &params->fs_prog_data,
+                           &params->fs_info);
    assert(result);
 
    ralloc_free(mem_ctx);
@@ -146,7 +148,8 @@ blorp_params_get_clear_kernel_cs(struct blorp_batch *batch,
    params->shader_pipeline = blorp_key.base.shader_pipeline;
 
    if (blorp->lookup_shader(batch, &blorp_key, sizeof(blorp_key),
-                            &params->cs_prog_kernel, &params->cs_prog_data))
+                            &params->cs_prog_kernel, &params->cs_prog_data,
+                            &params->cs_info))
       return true;
 
    void *mem_ctx = ralloc_context(NULL);
@@ -231,8 +234,9 @@ blorp_params_get_clear_kernel_cs(struct blorp_batch *batch,
       blorp->upload_shader(batch, MESA_SHADER_COMPUTE,
                            &blorp_key, sizeof(blorp_key),
                            p.kernel, p.kernel_size,
-                           p.prog_data, p.prog_data_size,
-                           &params->cs_prog_kernel, &params->cs_prog_data);
+                           p.prog_data, p.prog_data_size, p.bin,
+                           &params->cs_prog_kernel, &params->cs_prog_data,
+                           &params->cs_info);
    assert(result);
 
    ralloc_free(mem_ctx);
@@ -619,12 +623,12 @@ blorp_fast_clear(struct blorp_batch *batch,
           * that tile which marks the first row.
           */
          uint64_t offset_B;
-         uint32_t x0_offset_el, y0_offset_el;
+         uint32_t x0_offset_el, y0_offset_el, z0_offset_el;
          isl_surf_get_image_offset_B_tile_el(surf->surf, level,
             surf->surf->dim == ISL_SURF_DIM_3D ? 0 : start_layer,
             surf->surf->dim == ISL_SURF_DIM_3D ? start_layer : 0,
-            &offset_B, &x0_offset_el, &y0_offset_el);
-         assert(x0_offset_el == 0);
+            &offset_B, &x0_offset_el, &y0_offset_el, &z0_offset_el);
+         assert(x0_offset_el == 0 && z0_offset_el == 0);
          assert(y0_offset_el < 32);
 
          /* Get the y-offset of the last row. Include as much padding as
@@ -1546,7 +1550,8 @@ blorp_params_get_mcs_partial_resolve_kernel(struct blorp_batch *batch,
    blorp_key.num_samples = params->num_samples;
 
    if (blorp->lookup_shader(batch, &blorp_key, sizeof(blorp_key),
-                            &params->wm_prog_kernel, &params->fs_prog_data))
+                            &params->wm_prog_kernel, &params->fs_prog_data,
+                            &params->fs_info))
       return true;
 
    void *mem_ctx = ralloc_context(NULL);
@@ -1598,8 +1603,9 @@ blorp_params_get_mcs_partial_resolve_kernel(struct blorp_batch *batch,
       blorp->upload_shader(batch, MESA_SHADER_FRAGMENT,
                            &blorp_key, sizeof(blorp_key),
                            p.kernel, p.kernel_size,
-                           p.prog_data, p.prog_data_size,
-                           &params->wm_prog_kernel, &params->fs_prog_data);
+                           p.prog_data, p.prog_data_size, p.bin,
+                           &params->wm_prog_kernel, &params->fs_prog_data,
+                           &params->fs_info);
    assert(result);
 
    ralloc_free(mem_ctx);
@@ -1800,9 +1806,11 @@ blorp_ccs_ambiguate(struct blorp_batch *batch,
    }
 
    uint64_t offset_B;
-   uint32_t x_offset_el, y_offset_el;
+   uint32_t x_offset_el, y_offset_el, z_offset_el;
    isl_surf_get_image_offset_B_tile_el(surf->aux_surf, level, layer, z,
-                                       &offset_B, &x_offset_el, &y_offset_el);
+                                       &offset_B, &x_offset_el, &y_offset_el,
+                                       &z_offset_el);
+   assert(z_offset_el == 0);
    params.dst.addr.offset += offset_B;
 
    const uint32_t width_px =

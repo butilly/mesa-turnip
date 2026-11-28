@@ -27,14 +27,6 @@
 #include "util/set.h"
 
 static bool
-src_is_invocation_id(const nir_src *src)
-{
-   nir_scalar s = nir_scalar_resolved(src->ssa, 0);
-   return nir_scalar_is_intrinsic(s) &&
-          nir_scalar_intrinsic_op(s) == nir_intrinsic_load_invocation_id;
-}
-
-static bool
 src_is_local_invocation_index(nir_shader *shader, const nir_src *src)
 {
    assert(shader->info.stage == MESA_SHADER_MESH && !shader->info.workgroup_size_variable);
@@ -74,7 +66,7 @@ get_deref_info(nir_shader *shader, nir_variable *var, nir_deref_instr *deref,
    if (is_arrayed) {
       assert((*p)->deref_type == nir_deref_type_array);
       if (shader->info.stage == MESA_SHADER_TESS_CTRL)
-         *cross_invocation = !src_is_invocation_id(&(*p)->arr.index);
+         *cross_invocation = !nir_def_is_invocation_id(shader, (*p)->arr.index.ssa);
       else if (shader->info.stage == MESA_SHADER_MESH)
          *cross_invocation = !src_is_local_invocation_index(shader, &(*p)->arr.index);
       p++;
@@ -520,12 +512,12 @@ gather_intrinsic_info(nir_intrinsic_instr *instr, nir_shader *shader)
       if (nir_intrinsic_writes_external_memory(instr))
          shader->info.writes_memory = true;
       if (shader->info.stage == MESA_SHADER_FRAGMENT &&
-          nir_deref_mode_is_one_of(deref, nir_var_any_pixel_local))
+          nir_deref_mode_is(deref, nir_var_mem_pixel_local))
          shader->info.fs.accesses_pixel_local_storage = true;
       break;
    }
-   case nir_intrinsic_image_deref_load:
-   case nir_intrinsic_image_deref_sparse_load: {
+
+   case nir_intrinsic_image_deref_load: {
       nir_deref_instr *deref = nir_src_as_deref(instr->src[0]);
       nir_variable *var = nir_deref_instr_get_variable(deref);
       enum glsl_sampler_dim dim = glsl_get_sampler_dim(glsl_without_array(var->type));
@@ -538,14 +530,33 @@ gather_intrinsic_info(nir_intrinsic_instr *instr, nir_shader *shader)
       break;
    }
 
+   case nir_intrinsic_image_deref_input_attachment_load:
+   case nir_intrinsic_image_deref_depth_input_attachment_load:
+   case nir_intrinsic_image_deref_stencil_input_attachment_load: {
+      nir_deref_instr *deref = nir_src_as_deref(instr->src[0]);
+      nir_variable *var = nir_deref_instr_get_variable(deref);
+      var->data.fb_fetch_output = true;
+      shader->info.fs.uses_fbfetch_output = true;
+      break;
+   }
+
    case nir_intrinsic_bindless_image_load:
-   case nir_intrinsic_bindless_image_sparse_load:
-   case nir_intrinsic_image_heap_load:
-   case nir_intrinsic_image_heap_sparse_load: {
+   case nir_intrinsic_image_heap_load: {
       enum glsl_sampler_dim dim = nir_intrinsic_image_dim(instr);
       if (dim != GLSL_SAMPLER_DIM_SUBPASS &&
           dim != GLSL_SAMPLER_DIM_SUBPASS_MS)
          break;
+
+      shader->info.fs.uses_fbfetch_output = true;
+      break;
+   }
+
+   case nir_intrinsic_bindless_image_input_attachment_load:
+   case nir_intrinsic_bindless_image_depth_input_attachment_load:
+   case nir_intrinsic_bindless_image_stencil_input_attachment_load:
+   case nir_intrinsic_image_heap_input_attachment_load:
+   case nir_intrinsic_image_heap_depth_input_attachment_load:
+   case nir_intrinsic_image_heap_stencil_input_attachment_load: {
       shader->info.fs.uses_fbfetch_output = true;
       break;
    }
@@ -577,7 +588,7 @@ gather_intrinsic_info(nir_intrinsic_instr *instr, nir_shader *shader)
 
       if (shader->info.stage == MESA_SHADER_TESS_CTRL &&
           instr->intrinsic == nir_intrinsic_load_per_vertex_input) {
-         if (src_is_invocation_id(nir_get_io_arrayed_index_src(instr)))
+         if (nir_def_is_invocation_id(shader, nir_get_io_arrayed_index_src(instr)->ssa))
             shader->info.tess.tcs_same_invocation_inputs_read |= slot_mask;
          else
             shader->info.tess.tcs_cross_invocation_inputs_read |= slot_mask;
@@ -625,7 +636,7 @@ gather_intrinsic_info(nir_intrinsic_instr *instr, nir_shader *shader)
 
       if (shader->info.stage == MESA_SHADER_TESS_CTRL &&
           instr->intrinsic == nir_intrinsic_load_per_vertex_output &&
-          !src_is_invocation_id(nir_get_io_arrayed_index_src(instr)))
+          !nir_def_is_invocation_id(shader, nir_get_io_arrayed_index_src(instr)->ssa))
          shader->info.tess.tcs_cross_invocation_outputs_read |= slot_mask;
 
       /* NV_mesh_shader: mesh shaders can load their outputs. */
@@ -672,7 +683,7 @@ gather_intrinsic_info(nir_intrinsic_instr *instr, nir_shader *shader)
 
          if (shader->info.stage == MESA_SHADER_TESS_CTRL) {
             if (instr->intrinsic == nir_intrinsic_store_per_vertex_output &&
-                !src_is_invocation_id(nir_get_io_arrayed_index_src(instr)))
+                !nir_def_is_invocation_id(shader, nir_get_io_arrayed_index_src(instr)->ssa))
                shader->info.tess.tcs_cross_invocation_outputs_written |= slot_mask;
 
             if (!nir_intrinsic_io_semantics(instr).no_varying) {
@@ -717,6 +728,7 @@ gather_intrinsic_info(nir_intrinsic_instr *instr, nir_shader *shader)
    case nir_intrinsic_load_is_indexed_draw:
    case nir_intrinsic_load_base_instance:
    case nir_intrinsic_load_draw_id:
+   case nir_intrinsic_load_draw_id_offset_ir3:
    case nir_intrinsic_load_invocation_id:
    case nir_intrinsic_load_frag_coord:
    case nir_intrinsic_load_pixel_coord:
@@ -783,6 +795,10 @@ gather_intrinsic_info(nir_intrinsic_instr *instr, nir_shader *shader)
    case nir_intrinsic_load_color1_amd:
       BITSET_SET(shader->info.system_values_read,
                  nir_system_value_from_intrinsic(instr->intrinsic));
+      break;
+
+   case nir_intrinsic_load_local_invocation_id_intel:
+      BITSET_SET(shader->info.system_values_read, SYSTEM_VALUE_LOCAL_INVOCATION_ID);
       break;
 
    case nir_intrinsic_is_helper_invocation:
@@ -986,6 +1002,7 @@ gather_tex_info(nir_tex_instr *instr, nir_shader *shader)
    case nir_texop_txs:
    case nir_texop_query_levels:
    case nir_texop_texture_samples:
+   case nir_texop_resinfo_intel:
       shader->info.uses_resource_info_query = true;
       break;
    default:

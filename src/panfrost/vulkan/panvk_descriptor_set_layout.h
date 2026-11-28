@@ -132,80 +132,18 @@ panvk_get_desc_stride(const struct panvk_descriptor_set_binding_layout *layout)
 static inline uint32_t
 panvk_get_iub_desc_count(uint32_t size)
 {
-   /* Each inline uniform block contains an internal buffer descriptor, in
-    * addition to as many descriptors as needed to contain the requested size
-    * in bytes. */
-   return DIV_ROUND_UP(size, PANVK_DESCRIPTOR_SIZE) + 1;
+   /* Each inline uniform block contains as many descriptors as needed to
+    * contain the requested size in bytes. On bifrost, there's an extra
+    * buffer descriptor. */
+   return DIV_ROUND_UP(size, PANVK_DESCRIPTOR_SIZE) + (PAN_ARCH < 9 ? 1 : 0);
 }
 
 static inline uint32_t
 panvk_get_iub_size(uint32_t desc_count)
 {
-   assert(desc_count >= 1);
-   return (desc_count - 1) * PANVK_DESCRIPTOR_SIZE;
-}
-
-struct panvk_subdesc_info {
-   VkDescriptorType type;
-   uint8_t plane;
-};
-
-#define IMPLICIT_SUBDESC_TYPE (VkDescriptorType)-1
-#define NO_SUBDESC (struct panvk_subdesc_info){ \
-   .type = IMPLICIT_SUBDESC_TYPE, \
-}
-#define TEX_SUBDESC(__plane) (struct panvk_subdesc_info){ \
-   .type = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, \
-   .plane = __plane, \
-}
-#define SAMPLER_SUBDESC(__plane) (struct panvk_subdesc_info){ \
-   .type = VK_DESCRIPTOR_TYPE_SAMPLER, \
-   .plane = __plane, \
-}
-
-static inline struct panvk_subdesc_info
-get_tex_subdesc_info(VkDescriptorType type, uint8_t plane)
-{
-   return (type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-      ? TEX_SUBDESC(plane) : NO_SUBDESC;
-}
-
-static inline struct panvk_subdesc_info
-get_sampler_subdesc_info(VkDescriptorType type, uint8_t plane)
-{
-   return (type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-      ? SAMPLER_SUBDESC(plane) : NO_SUBDESC;
-}
-
-static inline uint32_t
-get_subdesc_idx(const struct panvk_descriptor_set_binding_layout *layout,
-                struct panvk_subdesc_info subdesc)
-{
-   assert((subdesc.type == IMPLICIT_SUBDESC_TYPE) ||
-          (layout->type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER &&
-           (subdesc.type == VK_DESCRIPTOR_TYPE_SAMPLER ||
-            subdesc.type == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)));
-
-   uint32_t subdesc_idx = 0;
-
-   /* In case of combined image-sampler, we put the texture first. */
-   if (subdesc.type == VK_DESCRIPTOR_TYPE_SAMPLER)
-      subdesc_idx += layout->textures_per_desc +
-                     MIN2(subdesc.plane, layout->samplers_per_desc - 1);
-   else if (subdesc.type == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)
-      subdesc_idx += MIN2(subdesc.plane, layout->textures_per_desc - 1);
-
-   return subdesc_idx;
-}
-
-static inline uint32_t
-panvk_get_desc_index(const struct panvk_descriptor_set_binding_layout *layout,
-                     uint32_t elem, struct panvk_subdesc_info subdesc)
-{
-   assert(!vk_descriptor_type_is_dynamic(layout->type));
-
-   return layout->desc_idx + elem * panvk_get_desc_stride(layout) +
-      get_subdesc_idx(layout, subdesc);
+   /* Bifrost needs an adjustment for the extra buffer descriptor. */
+   assert(desc_count >= (PAN_ARCH < 9 ? 1 : 0));
+   return (desc_count - (PAN_ARCH < 9 ? 1 : 0)) * PANVK_DESCRIPTOR_SIZE;
 }
 
 #endif /* PANVK_VX_DESCRIPTOR_SET_LAYOUT_H */

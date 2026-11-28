@@ -1108,6 +1108,8 @@ void ir3_instr_add_dep(struct ir3_instruction *instr,
                        struct ir3_instruction *dep);
 const char *ir3_instr_name(struct ir3_instruction *instr);
 void ir3_instr_remove(struct ir3_instruction *instr);
+struct ir3_instruction *ir3_instr_prev(struct ir3_instruction *instr);
+struct ir3_instruction *ir3_instr_next(struct ir3_instruction *instr);
 
 void ir3_instr_create_rpt(struct ir3_instruction **instrs, unsigned n);
 bool ir3_instr_is_rpt(const struct ir3_instruction *instr);
@@ -1286,11 +1288,11 @@ is_same_type_reg(struct ir3_register *dst, struct ir3_register *src)
 }
 
 /* Is it a non-transformative (ie. not type changing) mov?  This can
- * also include absneg.s/absneg.f, which for the most part can be
- * treated as a mov (single src argument).
+ * also include absneg.s/absneg.f/not.b, which for the most part can be
+ * treated as a mov (single src argument) with source modifiers.
  */
 static inline bool
-is_same_type_mov(struct ir3_instruction *instr)
+is_same_type_mov(struct ir3_instruction *instr, bool allow_src_mods)
 {
    struct ir3_register *dst;
 
@@ -1298,25 +1300,27 @@ is_same_type_mov(struct ir3_instruction *instr)
    case OPC_MOV:
       if (instr->cat1.src_type != instr->cat1.dst_type)
          return false;
-      /* If the type of dest reg and src reg are different,
-       * it shouldn't be considered as same type mov
-       */
-      if (!is_same_type_reg(instr->dsts[0], instr->srcs[0]))
-         return false;
       break;
    case OPC_ABSNEG_F:
    case OPC_ABSNEG_S:
+      if (!allow_src_mods)
+         return false;
       if (instr->flags & IR3_INSTR_SAT)
          return false;
-      /* If the type of dest reg and src reg are different,
-       * it shouldn't be considered as same type mov
-       */
-      if (!is_same_type_reg(instr->dsts[0], instr->srcs[0]))
+      break;
+   case OPC_NOT_B:
+      if (!allow_src_mods)
          return false;
       break;
    default:
       return false;
    }
+
+   /* If the type of dest reg and src reg are different,
+    * it shouldn't be considered as same type mov
+    */
+   if (!is_same_type_reg(instr->dsts[0], instr->srcs[0]))
+      return false;
 
    dst = instr->dsts[0];
 
@@ -1900,7 +1904,8 @@ ir3_cat2_int(opc_t opc)
 }
 
 /* map cat2 instruction to valid abs/neg flags: */
-unsigned ir3_cat2_absneg(opc_t opc);
+unsigned ir3_cat2_absneg(struct ir3_compiler *compiler, opc_t opc,
+                         unsigned src_n);
 
 /* map cat3 instructions to valid abs/neg flags: */
 unsigned ir3_cat3_absneg(struct ir3_compiler *compiler, opc_t opc,
@@ -2133,15 +2138,26 @@ bool is_scalar_alu(struct ir3_instruction *instr,
 static inline bool
 is_ss_producer(struct ir3_instruction *instr)
 {
-   foreach_dst (dst, instr) {
-      if (dst->flags & (IR3_REG_SHARED | IR3_REG_UNIFORM))
-         return true;
+   /* Non-ALU instructions (e.g., ldc.u) may write to shared registers without
+    * needing (ss).
+    */
+   if (is_alu(instr)) {
+      foreach_dst (dst, instr) {
+         if (dst->flags & (IR3_REG_SHARED | IR3_REG_UNIFORM))
+            return true;
+      }
    }
 
    if (instr->block->in_early_preamble && writes_addr1(instr))
       return true;
 
-   return is_sfu(instr) || is_local_mem_load(instr) || instr->opc == OPC_SHFL;
+   if ((instr->opc == OPC_RESINFO || instr->opc == OPC_RESBASE) &&
+       !has_dummy_dst(instr)) {
+      return true;
+   }
+
+   return is_sfu(instr) || is_local_mem_load(instr) ||
+          is_local_atomic(instr->opc) || instr->opc == OPC_SHFL;
 }
 
 static inline bool
@@ -2191,7 +2207,7 @@ is_sy_producer(struct ir3_instruction *instr)
 {
    return is_tex_or_prefetch(instr) ||
       (is_load(instr) && !is_local_mem_load(instr)) ||
-      is_atomic(instr->opc);
+      (is_atomic(instr->opc) && !is_local_atomic(instr->opc));
 }
 
 static inline bool
@@ -3171,11 +3187,14 @@ INSTR2NODST(STC)
 INSTR2NODST(STSC)
 INSTR2(SHFL)
 #ifndef GPU
+#elif GPU >= 500
+INSTR5(LDG_A);
+INSTR6NODST(STG_A);
+#endif
+#ifndef GPU
 #elif GPU >= 600
 INSTR4NODST(STIB);
 INSTR3(LDIB);
-INSTR5(LDG_A);
-INSTR6NODST(STG_A);
 INSTR2(ATOMIC_G_ADD)
 INSTR2(ATOMIC_G_SUB)
 INSTR2(ATOMIC_G_XCHG)

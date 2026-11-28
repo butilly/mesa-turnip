@@ -193,6 +193,7 @@ nvk_cmd_buffer_flush_push(struct nvk_cmd_buffer *cmd, bool incomplete)
          (char *)cmd->push.start - (char *)cmd->push_mem->mem->map;
 
       struct nvk_cmd_push push = {
+         .type = NVK_CMD_PUSH_PUSH,
          .map = cmd->push.start,
          .addr = cmd->push_mem->mem->va->addr + mem_offset,
          .range = nv_push_dw_count(&cmd->push) * 4,
@@ -200,7 +201,7 @@ nvk_cmd_buffer_flush_push(struct nvk_cmd_buffer *cmd, bool incomplete)
       };
       util_dynarray_append(&cmd->pushes, push);
 
-      cmd->prev_subc = NVC0_FIFO_SUBC_FROM_PKHDR(cmd->push.last_hdr_dw);
+      cmd->prev_subc = nvk_cmd_buffer_last_subchannel(cmd);
    }
 
    cmd->push.start = cmd->push.end;
@@ -238,6 +239,7 @@ nvk_cmd_buffer_push_indirect(struct nvk_cmd_buffer *cmd,
    nvk_cmd_buffer_flush_push(cmd, true);
 
    struct nvk_cmd_push push = {
+      .type = NVK_CMD_PUSH_PUSH,
       .addr = addr,
       .range = range,
       .no_prefetch = true,
@@ -365,11 +367,6 @@ nvk_BeginCommandBuffer(VkCommandBuffer commandBuffer,
    if (cmd->vk.level == VK_COMMAND_BUFFER_LEVEL_SECONDARY)
       cmd->state.inherited_pipeline_statistics =
          pBeginInfo->pInheritanceInfo->pipelineStatistics;
-
-   /* Start with a nop so we have at least something to submit */
-   struct nv_push *p = nvk_cmd_buffer_push(cmd, 2);
-   P_MTHD(p, NV90B5, NOP);
-   P_NV90B5_NOP(p, 0);
 
    if (queue_flags & VK_QUEUE_COMPUTE_BIT)
       nvk_cmd_buffer_begin_compute(cmd, pBeginInfo);
@@ -924,6 +921,128 @@ nvk_cmd_bind_shaders(struct vk_command_buffer *vk_cmd,
    }
 }
 
+void
+nvk_cmd_bind_device_heaps(struct nvk_cmd_buffer *cmd)
+{
+   const bool needs_rebind =
+      cmd->state.bound_image_heap != NVK_CMD_BOUND_HEAP_DEVICE ||
+      cmd->state.bound_sampler_heap != NVK_CMD_BOUND_HEAP_DEVICE;
+
+   if (!needs_rebind)
+      return;
+
+   /* Address and size are unused in case of NVK_CMD_BOUND_HEAP_DEVICE */
+   cmd->state.bound_image_heap = NVK_CMD_BOUND_HEAP_DEVICE;
+   cmd->state.resource_heap = (struct nvk_cmd_heap_state) {
+      .addr = 0,
+      .size = 0,
+      .dirty = NVK_CMD_HEAP_DIRTY_GRAPHICS | NVK_CMD_HEAP_DIRTY_COMPUTE,
+   };
+
+   cmd->state.bound_sampler_heap = NVK_CMD_BOUND_HEAP_DEVICE;
+   cmd->state.sampler_heap = (struct nvk_cmd_heap_state) {
+      .addr = 0,
+      .size = 0,
+      .dirty = NVK_CMD_HEAP_DIRTY_GRAPHICS | NVK_CMD_HEAP_DIRTY_COMPUTE,
+   };
+}
+
+void
+nvk_cmd_flush_image_heap(struct nvk_cmd_buffer *cmd,
+                         VkPipelineBindPoint bind_point)
+{
+   struct nvk_cmd_heap_state *heap_state = &cmd->state.resource_heap;
+
+   assert(bind_point == VK_PIPELINE_BIND_POINT_COMPUTE ||
+          bind_point == VK_PIPELINE_BIND_POINT_GRAPHICS);
+
+   const enum nvk_cmd_heap_dirty dirty_state =
+      bind_point == VK_PIPELINE_BIND_POINT_COMPUTE
+         ? heap_state->dirty & NVK_CMD_HEAP_DIRTY_COMPUTE
+         : heap_state->dirty & NVK_CMD_HEAP_DIRTY_GRAPHICS;
+
+   if (!dirty_state)
+      return;
+
+   /* Now we are about to bind, force split pushbuf */
+   nvk_cmd_buffer_flush_push(cmd, false);
+
+   const enum nvk_cmd_push_type push_type =
+      cmd->state.bound_image_heap == NVK_CMD_BOUND_HEAP_DEVICE
+         ? NVK_CMD_PUSH_BIND_DEVICE_HEAPS
+         : NVK_CMD_PUSH_BIND_IMAGE_HEAP;
+
+   if (bind_point == VK_PIPELINE_BIND_POINT_COMPUTE) {
+      struct nvk_cmd_push push = {
+         .type = push_type,
+         .bind_type = NVK_CMD_PUSH_BIND_COMPUTE,
+         .addr = heap_state->addr,
+         .range = heap_state->size,
+      };
+      util_dynarray_append(&cmd->pushes, push);
+   }
+
+   if (bind_point == VK_PIPELINE_BIND_POINT_GRAPHICS) {
+      struct nvk_cmd_push push = {
+         .type = push_type,
+         .bind_type = NVK_CMD_PUSH_BIND_GRAPHICS,
+         .addr = heap_state->addr,
+         .range = heap_state->size,
+      };
+      util_dynarray_append(&cmd->pushes, push);
+   }
+
+   heap_state->dirty &= ~dirty_state;
+}
+
+void
+nvk_cmd_flush_sampler_heap(struct nvk_cmd_buffer *cmd,
+                           VkPipelineBindPoint bind_point)
+{
+   struct nvk_cmd_heap_state *heap_state = &cmd->state.sampler_heap;
+
+   assert(bind_point == VK_PIPELINE_BIND_POINT_COMPUTE ||
+          bind_point == VK_PIPELINE_BIND_POINT_GRAPHICS);
+
+   const enum nvk_cmd_heap_dirty dirty_state =
+      bind_point == VK_PIPELINE_BIND_POINT_COMPUTE
+         ? heap_state->dirty & NVK_CMD_HEAP_DIRTY_COMPUTE
+         : heap_state->dirty & NVK_CMD_HEAP_DIRTY_GRAPHICS;
+
+   if (!dirty_state)
+      return;
+
+   /* Now we are about to bind, force split pushbuf */
+   nvk_cmd_buffer_flush_push(cmd, false);
+
+   const enum nvk_cmd_push_type push_type =
+      cmd->state.bound_sampler_heap == NVK_CMD_BOUND_HEAP_DEVICE
+         ? NVK_CMD_PUSH_BIND_DEVICE_HEAPS
+         : NVK_CMD_PUSH_BIND_SAMPLER_HEAP;
+
+   if (bind_point == VK_PIPELINE_BIND_POINT_COMPUTE) {
+      struct nvk_cmd_push push = {
+         .type = push_type,
+         .bind_type = NVK_CMD_PUSH_BIND_COMPUTE,
+         .addr = heap_state->addr,
+         .range = heap_state->size,
+      };
+      util_dynarray_append(&cmd->pushes, push);
+   }
+
+   if (bind_point == VK_PIPELINE_BIND_POINT_GRAPHICS) {
+      struct nvk_cmd_push push = {
+         .type = push_type,
+         .bind_type = NVK_CMD_PUSH_BIND_GRAPHICS,
+         .addr = heap_state->addr,
+         .range = heap_state->size,
+      };
+      util_dynarray_append(&cmd->pushes, push);
+   }
+
+   heap_state->dirty &= ~dirty_state;
+}
+
 #define NVK_VK_GRAPHICS_STAGE_BITS (VK_SHADER_STAGE_ALL_GRAPHICS | VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT)
 
 void
@@ -1086,6 +1205,8 @@ nvk_CmdBindDescriptorSets2KHR(VkCommandBuffer commandBuffer,
 {
    VK_FROM_HANDLE(nvk_cmd_buffer, cmd, commandBuffer);
 
+   nvk_cmd_bind_device_heaps(cmd);
+
    if (pBindDescriptorSetsInfo->stageFlags & NVK_VK_GRAPHICS_STAGE_BITS) {
       nvk_bind_descriptor_sets(cmd, &cmd->state.gfx.descriptors,
                                pBindDescriptorSetsInfo);
@@ -1103,6 +1224,8 @@ nvk_CmdBindDescriptorBuffersEXT(VkCommandBuffer commandBuffer,
                                 const VkDescriptorBufferBindingInfoEXT *pBindingInfos)
 {
    VK_FROM_HANDLE(nvk_cmd_buffer, cmd, commandBuffer);
+
+   nvk_cmd_bind_device_heaps(cmd);
 
    for (uint32_t i = 0; i < bufferCount; i++)
       cmd->state.descriptor_buffers[i] = pBindingInfos[i].address;
@@ -1152,6 +1275,8 @@ nvk_CmdSetDescriptorBufferOffsets2EXT(VkCommandBuffer commandBuffer,
 {
    VK_FROM_HANDLE(nvk_cmd_buffer, cmd, commandBuffer);
 
+   nvk_cmd_bind_device_heaps(cmd);
+
    if (pInfo->stageFlags & NVK_VK_GRAPHICS_STAGE_BITS) {
       nvk_set_descriptor_buffer_offsets(cmd, &cmd->state.gfx.descriptors,
                                         pInfo);
@@ -1186,6 +1311,8 @@ nvk_CmdBindDescriptorBufferEmbeddedSamplers2EXT(
 {
    VK_FROM_HANDLE(nvk_cmd_buffer, cmd, commandBuffer);
 
+   nvk_cmd_bind_device_heaps(cmd);
+
    if (pInfo->stageFlags & NVK_VK_GRAPHICS_STAGE_BITS) {
       nvk_bind_embedded_samplers(cmd, &cmd->state.gfx.descriptors, pInfo);
    }
@@ -1211,6 +1338,8 @@ nvk_CmdPushConstants2KHR(VkCommandBuffer commandBuffer,
                          const VkPushConstantsInfoKHR *pPushConstantsInfo)
 {
    VK_FROM_HANDLE(nvk_cmd_buffer, cmd, commandBuffer);
+
+   nvk_cmd_bind_device_heaps(cmd);
 
    if (pPushConstantsInfo->stageFlags & NVK_VK_GRAPHICS_STAGE_BITS)
       nvk_push_constants(cmd, &cmd->state.gfx.descriptors, pPushConstantsInfo);
@@ -1273,6 +1402,8 @@ nvk_CmdPushDescriptorSet2KHR(VkCommandBuffer commandBuffer,
 {
    VK_FROM_HANDLE(nvk_cmd_buffer, cmd, commandBuffer);
 
+   nvk_cmd_bind_device_heaps(cmd);
+
    if (pPushDescriptorSetInfo->stageFlags & NVK_VK_GRAPHICS_STAGE_BITS) {
       nvk_push_descriptor_set(cmd, &cmd->state.gfx.descriptors,
                               pPushDescriptorSetInfo);
@@ -1300,7 +1431,7 @@ nvk_cmd_buffer_flush_push_descriptors(struct nvk_cmd_buffer *cmd,
       struct nvk_push_descriptor_set *push_set = desc->sets[set_idx].push;
       uint64_t push_set_addr;
       result = nvk_cmd_buffer_upload_data(cmd, push_set->data,
-                                          sizeof(push_set->data),
+                                          push_set->max_buffer_size,
                                           min_cbuf_alignment,
                                           &push_set_addr);
       if (unlikely(result != VK_SUCCESS)) {
@@ -1310,10 +1441,11 @@ nvk_cmd_buffer_flush_push_descriptors(struct nvk_cmd_buffer *cmd,
 
       struct nvk_buffer_address set_addr = {
          .base_addr = push_set_addr,
-         .size = sizeof(push_set->data),
+         .size = push_set->max_buffer_size,
       };
       nvk_descriptor_state_set_root(cmd, desc, sets[set_idx], set_addr);
    }
+   desc->push_dirty = 0;
 }
 
 void
@@ -1425,6 +1557,8 @@ nvk_CmdPushDescriptorSetWithTemplate2KHR(
    VK_FROM_HANDLE(vk_pipeline_layout, pipeline_layout,
                   pPushDescriptorSetWithTemplateInfo->layout);
    const uint32_t set = pPushDescriptorSetWithTemplateInfo->set;
+
+   nvk_cmd_bind_device_heaps(cmd);
 
    struct nvk_descriptor_state *desc =
       nvk_get_descriptors_state(cmd, template->bind_point);

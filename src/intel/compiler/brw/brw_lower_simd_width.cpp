@@ -171,21 +171,23 @@ get_sampler_lowered_simd_width(const struct intel_device_info *devinfo,
        tex->sampler_opcode == BRW_SAMPLER_OPCODE_SAMPLE_D_C_PACKED)
       return devinfo->ver < 20 ? 8 : 16;
 
-   const unsigned max_payload_size =
-      MAX_SAMPLER_MESSAGE_SIZE *
-      (reg_unit(devinfo) * 8) /* min SIMD */ *
-      4 /* dword */;
-   const unsigned payload_param_size =
-      brw_type_size_bytes(tex->src[TEX_LOGICAL_SRC_PAYLOAD0].type);
-   unsigned payload_size =
-      (tex->sources - TEX_LOGICAL_SRC_PAYLOAD0) *
-      tex->exec_size *
-      payload_param_size;
-
    unsigned simd_width = tex->exec_size;
-   while (payload_size > max_payload_size) {
-      payload_size /= 2;
-      simd_width /= 2;
+   if (tex->sources > TEX_LOGICAL_SRC_PAYLOAD0) {
+      const unsigned max_payload_size =
+         MAX_SAMPLER_MESSAGE_SIZE *
+         (reg_unit(devinfo) * 8) /* min SIMD */ *
+         4 /* dword */;
+      const unsigned payload_param_size =
+         brw_type_size_bytes(tex->src[TEX_LOGICAL_SRC_PAYLOAD0].type);
+      unsigned payload_size =
+         (tex->sources - TEX_LOGICAL_SRC_PAYLOAD0) *
+         tex->exec_size *
+         payload_param_size;
+
+      while (payload_size > max_payload_size) {
+         payload_size /= 2;
+         simd_width /= 2;
+      }
    }
 
    const unsigned max_hw_simd = devinfo->ver < 20 ? 16 : 32;
@@ -409,7 +411,8 @@ brw_get_lowered_simd_width(const brw_shader *shader, const brw_inst *inst)
       return MIN2(devinfo->ver < 20 ? 8 : 16, inst->exec_size);
 
    case RT_OPCODE_TRACE_RAY_LOGICAL:
-      return MIN2(16, inst->exec_size);
+      /* Gfx35 changes the message return format from u32 to u16 to allow SIMD32 */
+      return MIN2(devinfo->ver < 35 ? 16 : 32, inst->exec_size);
 
    case SHADER_OPCODE_QUAD_SWIZZLE: {
       const unsigned swiz = inst->src[1].ud;
@@ -616,8 +619,12 @@ emit_zip(const brw_builder &lbld_before, const brw_builder &lbld_after,
       return dst;
    }
 
-   /* Deal with the residency data part later */
-   const unsigned residency_size = inst->has_sampler_residency() ?
+   /* Only legacy sends residency needs special packing.
+    * From BSpec 57001, efficient 64bit sends return an extra vector component
+    * with the same layout as the color channels.
+    */
+   const unsigned residency_size =
+      inst->has_packed_sampler_residency(lbld_before.shader) ?
       (reg_unit(devinfo) * REG_SIZE) : 0;
    const unsigned dst_size = (inst->size_written - residency_size) /
       inst->dst.component_size(inst->exec_size);
@@ -636,7 +643,7 @@ emit_zip(const brw_builder &lbld_before, const brw_builder &lbld_after,
    } else {
       tmp_comp_size = inst->dst.component_size(lbld_after.dispatch_width());
       tmp = lbld_after.vgrf(inst->dst.type, dst_size +
-         inst->has_sampler_residency() * reg_unit(devinfo));
+         residency_size / REG_SIZE);
    }
 
    if (inst->predicate) {
@@ -656,7 +663,7 @@ emit_zip(const brw_builder &lbld_before, const brw_builder &lbld_after,
                      byte_offset(tmp, tmp_comp_size * k));
    }
 
-   if (inst->has_sampler_residency()) {
+   if (residency_size) {
       /* Sampler messages with residency need a special attention. In the
        * first lane of the last component are located the Pixel Null Mask
        * (bits 0:15) & some upper bits we need to discard (bits 16:31). We
@@ -665,7 +672,7 @@ emit_zip(const brw_builder &lbld_before, const brw_builder &lbld_after,
        */
       const brw_builder rbld = lbld_after.uniform();
       brw_reg local_res_reg = component(
-         retype(offset(tmp, lbld_before, dst_size),
+         retype(byte_offset(tmp, tmp_comp_size * dst_size),
                 BRW_TYPE_UW), 0);
       brw_reg final_res_reg =
          retype(byte_offset(inst->dst,
@@ -701,7 +708,8 @@ brw_lower_simd_width(brw_shader &s)
        * original or the lowered instruction, whichever is lower.
        */
       const unsigned n = DIV_ROUND_UP(inst->exec_size, lower_width);
-      const unsigned residency_size = inst->has_sampler_residency() ?
+      const unsigned residency_size =
+         inst->has_packed_sampler_residency(&s) ?
          (reg_unit(s.devinfo) * REG_SIZE) : 0;
       const unsigned dst_size =
          (inst->size_written - residency_size) /

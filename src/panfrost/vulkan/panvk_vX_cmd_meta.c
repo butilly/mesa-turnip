@@ -84,6 +84,7 @@ meta_compute_start(struct panvk_cmd_buffer *cmdbuf,
       cmdbuf->state.compute.desc_state.push_sets[0];
 
    save_ctx->set0 = set0;
+   save_ctx->descriptor_model = cmdbuf->state.compute.desc_state.active_model;
    if (push_set0 && push_set0 == set0) {
       save_ctx->push_set0.desc_count = push_set0->desc_count;
       save_ctx->push_set0.descs_dev_addr = push_set0->descs.dev;
@@ -124,6 +125,7 @@ meta_compute_end(struct panvk_cmd_buffer *cmdbuf,
 #endif
 
    cmdbuf->state.compute.desc_state.sets[0] = save_ctx->set0;
+   cmdbuf->state.compute.desc_state.active_model = save_ctx->descriptor_model;
    if (save_ctx->push_set0.desc_count) {
       memcpy(push_set0->descs.host, save_ctx->push_set0.desc_storage,
              save_ctx->push_set0.desc_count * PANVK_DESCRIPTOR_SIZE);
@@ -159,6 +161,7 @@ meta_gfx_start(struct panvk_cmd_buffer *cmdbuf,
       cmdbuf->state.gfx.desc_state.push_sets[0];
 
    save_ctx->set0 = set0;
+   save_ctx->descriptor_model = cmdbuf->state.gfx.desc_state.active_model;
    if (push_set0 && push_set0 == set0) {
       save_ctx->push_set0.desc_count = push_set0->desc_count;
       save_ctx->push_set0.descs_dev_addr = push_set0->descs.dev;
@@ -173,6 +176,12 @@ meta_gfx_start(struct panvk_cmd_buffer *cmdbuf,
    save_ctx->fs.desc = cmdbuf->state.gfx.fs.desc;
    save_ctx->vs.shader = cmdbuf->state.gfx.vs.shader;
    save_ctx->vs.desc = cmdbuf->state.gfx.vs.desc;
+   save_ctx->gs.shader = cmdbuf->state.gfx.gs.shader;
+   save_ctx->gs.desc = cmdbuf->state.gfx.gs.desc;
+   save_ctx->tes.shader = cmdbuf->state.gfx.tes.shader;
+   save_ctx->tes.desc = cmdbuf->state.gfx.tes.desc;
+   save_ctx->tcs.shader = cmdbuf->state.gfx.tcs.shader;
+   save_ctx->tcs.desc = cmdbuf->state.gfx.tcs.desc;
    save_ctx->vb0 = cmdbuf->state.gfx.vb.bufs[0];
 
    save_ctx->dyn_state.all = cmdbuf->vk.dynamic_graphics_state;
@@ -219,6 +228,7 @@ meta_gfx_end(struct panvk_cmd_buffer *cmdbuf,
 #endif
 
    cmdbuf->state.gfx.desc_state.sets[0] = save_ctx->set0;
+   cmdbuf->state.gfx.desc_state.active_model = save_ctx->descriptor_model;
    if (save_ctx->push_set0.desc_count) {
       memcpy(push_set0->descs.host, save_ctx->push_set0.desc_storage,
              save_ctx->push_set0.desc_count * PANVK_DESCRIPTOR_SIZE);
@@ -233,12 +243,21 @@ meta_gfx_end(struct panvk_cmd_buffer *cmdbuf,
 
    cmdbuf->state.push_constants = save_ctx->push_constants;
    gfx_state_set_dirty(cmdbuf, VS_PUSH_UNIFORMS);
+   gfx_state_set_dirty(cmdbuf, GS_PUSH_UNIFORMS);
+   gfx_state_set_dirty(cmdbuf, TES_PUSH_UNIFORMS);
+   gfx_state_set_dirty(cmdbuf, TCS_PUSH_UNIFORMS);
    gfx_state_set_dirty(cmdbuf, FS_PUSH_UNIFORMS);
 
    cmdbuf->state.gfx.fs.shader = save_ctx->fs.shader;
    cmdbuf->state.gfx.fs.desc = save_ctx->fs.desc;
    cmdbuf->state.gfx.vs.shader = save_ctx->vs.shader;
    cmdbuf->state.gfx.vs.desc = save_ctx->vs.desc;
+   cmdbuf->state.gfx.gs.shader = save_ctx->gs.shader;
+   cmdbuf->state.gfx.gs.desc = save_ctx->gs.desc;
+   cmdbuf->state.gfx.tes.shader = save_ctx->tes.shader;
+   cmdbuf->state.gfx.tes.desc = save_ctx->tes.desc;
+   cmdbuf->state.gfx.tcs.shader = save_ctx->tcs.shader;
+   cmdbuf->state.gfx.tcs.desc = save_ctx->tcs.desc;
    cmdbuf->state.gfx.vb.bufs[0] = save_ctx->vb0;
 
 #if PAN_ARCH < 9
@@ -246,11 +265,13 @@ meta_gfx_end(struct panvk_cmd_buffer *cmdbuf,
    cmdbuf->state.gfx.vs.attrib_bufs = 0;
    cmdbuf->state.gfx.vs.indirect_attribs_infos = 0;
    cmdbuf->state.gfx.vs.indirect_attrib_bufs_infos = 0;
-   cmdbuf->state.gfx.vs.indirect_varying_bufs_infos = 0;
    cmdbuf->state.gfx.fs.rsd = 0;
 #else
    cmdbuf->state.gfx.fs.desc.res_table = 0;
    cmdbuf->state.gfx.vs.desc.res_table = 0;
+   cmdbuf->state.gfx.gs.desc.res_table = 0;
+   cmdbuf->state.gfx.tes.desc.res_table = 0;
+   cmdbuf->state.gfx.tcs.desc.res_table = 0;
 #endif
 
    cmdbuf->vk.dynamic_graphics_state = save_ctx->dyn_state.all;
@@ -261,6 +282,9 @@ meta_gfx_end(struct panvk_cmd_buffer *cmdbuf,
           cmdbuf->vk.dynamic_graphics_state.set,
           sizeof(cmdbuf->vk.dynamic_graphics_state.set));
    gfx_state_set_dirty(cmdbuf, VS);
+   gfx_state_set_dirty(cmdbuf, GS);
+   gfx_state_set_dirty(cmdbuf, TCS);
+   gfx_state_set_dirty(cmdbuf, TES);
    gfx_state_set_dirty(cmdbuf, FS);
    gfx_state_set_dirty(cmdbuf, VB);
    gfx_state_set_dirty(cmdbuf, OQ);

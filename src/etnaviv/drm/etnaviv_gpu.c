@@ -184,6 +184,9 @@ query_limits_from_kernel(struct etna_gpu *gpu)
 	etna_gpu_get_param(gpu, ETNA_GPU_REGISTER_MAX, &val);
 	info->gpu.max_registers = val;
 
+	etna_gpu_get_param(gpu, ETNA_GPU_THREAD_COUNT, &val);
+	info->gpu.thread_count = val;
+
 	etna_gpu_get_param(gpu, ETNA_GPU_PIXEL_PIPES, &val);
 	info->gpu.pixel_pipes = val;
 
@@ -278,6 +281,9 @@ struct etna_gpu *etna_gpu_new(struct etna_device *dev, unsigned int core)
 		    gpu->info.gpu.max_instructions < 512)
 			gpu->info.gpu.max_instructions = 512;
 	}
+
+	if (etna_core_has_feature(&gpu->info, ETNA_FEATURE_NO_ASTC))
+		etna_core_disable_feature(&gpu->info, ETNA_FEATURE_TEXTURE_ASTC);
 
 	determine_halti(gpu);
 

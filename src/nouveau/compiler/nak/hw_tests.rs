@@ -1,8 +1,8 @@
 // Copyright © 2022 Collabora, Ltd.
 // SPDX-License-Identifier: MIT
 
-use crate::api::{GetDebugFlags, ShaderBin, DEBUG};
-use crate::hw_runner::{Context, PushBuilder, RunConfig, Runner, BO, CB0};
+use crate::api::{DEBUG, GetDebugFlags, ShaderBin};
+use crate::hw_runner::{BO, CB0, Context, PushBuilder, RunConfig, Runner};
 use crate::ir::*;
 
 use acorn::Acorn;
@@ -191,7 +191,7 @@ impl<'a> TestShaderBuilder<'a> {
         });
     }
 
-    pub fn compile(mut self) -> Box<ShaderBin> {
+    fn do_compile(mut self, run_passes: bool) -> Box<ShaderBin> {
         self.b.push_op(OpExit {});
         let block = BasicBlock {
             label: self.label,
@@ -229,6 +229,7 @@ impl<'a> TestShaderBuilder<'a> {
             uses_global_mem: true,
             writes_global_mem: true,
             uses_fp64: false,
+            uses_ttu: false,
             stage: ShaderStageInfo::Compute(cs_info),
             io: ShaderIoInfo::None,
         };
@@ -238,14 +239,18 @@ impl<'a> TestShaderBuilder<'a> {
             functions: vec![f],
         };
 
-        // We do run a few passes
-        s.opt_copy_prop();
-        s.opt_dce();
-        s.legalize();
+        if run_passes {
+            // We do run a few passes
+            s.opt_copy_prop();
+            s.opt_dce();
+
+            s.legalize();
+        }
 
         s.assign_regs();
         s.lower_par_copies();
         s.lower_copy_swap();
+        s.add_ttu_macrofuse_instrs();
         s.calc_instr_deps();
 
         if DEBUG.print() {
@@ -257,6 +262,15 @@ impl<'a> TestShaderBuilder<'a> {
 
         let code = self.sm.encode_shader(&s);
         Box::new(ShaderBin::new(self.sm, &s.info, None, code, ""))
+    }
+
+    pub fn compile(self) -> Box<ShaderBin> {
+        self.do_compile(true)
+    }
+
+    /// Does not run any passes, just RA and copy lowering
+    pub fn compile_raw(self) -> Box<ShaderBin> {
+        self.do_compile(false)
     }
 }
 
@@ -299,8 +313,11 @@ fn test_sanity() {
 }
 
 fn f32_eq(a: f32, b: f32) -> bool {
-    if a.is_nan() && b.is_nan() {
-        true
+    if a.is_nan() && b.is_nan()
+        || a.is_infinite() && b.is_infinite()
+        || a == 0.0 && b == 0.0
+    {
+        a.is_sign_positive() == b.is_sign_positive()
     } else if a.is_nan() || b.is_nan() {
         // If one is NaN but not the other, fail
         false
@@ -310,8 +327,11 @@ fn f32_eq(a: f32, b: f32) -> bool {
 }
 
 fn f64_eq(a: f64, b: f64) -> bool {
-    if a.is_nan() && b.is_nan() {
-        true
+    if a.is_nan() && b.is_nan()
+        || a.is_infinite() && b.is_infinite()
+        || a == 0.0 && b == 0.0
+    {
+        a.is_sign_positive() == b.is_sign_positive()
     } else if a.is_nan() || b.is_nan() {
         // If one is NaN but not the other, fail
         false
@@ -527,10 +547,12 @@ pub fn test_foldable_op_with(
                             assert_eq!(*u, d);
                         }
                         DstType::F32 => {
-                            assert!(f32_eq(
-                                f32::from_bits(*u),
-                                f32::from_bits(d)
-                            ));
+                            let a = f32::from_bits(*u);
+                            let b = f32::from_bits(d);
+                            assert!(
+                                f32_eq(a, b),
+                                "{fold_src:?} => {a} (expected) vs {b} (device)"
+                            );
                         }
                         typ => panic!("Can't auto-test {typ:?} data"),
                     }
@@ -1834,20 +1856,34 @@ fn test_op_ldsm() {
 fn expected_render_enable(
     mode: cl90b5::SetRenderEnableCMode,
     data: &[u64],
+    sm: u8,
 ) -> bool {
     use cl90b5::SetRenderEnableCMode::*;
+
+    let data_u32: &[u32] = unsafe {
+        core::slice::from_raw_parts(data.as_ptr() as *const u32, data.len() * 2)
+    };
+
     match mode {
         True => true,
         False => false,
-        Conditional => data[0] > u32::MAX.into(),
-        RenderIfEqual => data[0] == data[2],
-        RenderIfNotEqual => data[0] != data[2],
+
+        // New generation behaviors
+        Conditional if sm >= 70 => data[0] > u32::MAX.into(),
+        RenderIfEqual if sm >= 75 => data[0] == data[2],
+        RenderIfNotEqual if sm >= 75 => data[0] != data[2],
+
+        // Old generation behaviors
+        Conditional => data_u32[0] != 0,
+        RenderIfEqual => data_u32[0] == data_u32[4],
+        RenderIfNotEqual => data_u32[0] != data_u32[4],
     }
 }
 
 #[test]
 fn test_render_enable() -> io::Result<()> {
     let run = RunSingleton::get();
+    let sm = run.sm.sm();
     let dev = run.run.device();
     let ctx = Context::new(dev.clone()).expect("Failed to create context");
 
@@ -1960,7 +1996,7 @@ fn test_render_enable() -> io::Result<()> {
     for &mode in modes {
         let check = |data: &[u64]| -> io::Result<()> {
             let actual = run(mode, data)?;
-            let expected = expected_render_enable(mode, data);
+            let expected = expected_render_enable(mode, data, sm);
             if actual != expected {
                 println!("input: {mode:?} {data:?}");
             }
@@ -2134,6 +2170,142 @@ fn test_op_f2i_immediate_nan() {
     // TODO: Make the expected result depend on the QMD setting for
     //       `FP32_F2I_NAN_BEHAVIOR`
     assert!([0, 0x80000000].contains(&data[0]));
+}
+
+fn push_ttu_store(b: &mut TestShaderBuilder, offset: u16, values: [Src; 4]) {
+    let src0 = b.alloc_ssa_vec(RegFile::GPR, 2);
+    b.copy_to(src0[0].into(), values[0].clone());
+    b.copy_to(src0[1].into(), values[1].clone());
+
+    let src1 = b.alloc_ssa_vec(RegFile::GPR, 2);
+    b.copy_to(src1[0].into(), values[2].clone());
+    b.copy_to(src1[1].into(), values[3].clone());
+
+    b.push_op(OpTtuSt {
+        srcs: [src0.into(), src1.into()],
+        offset,
+    });
+}
+
+/// This is a very simple test of the TTU coprocessor.
+/// For now, as we do not know much about the actual top/bottom BVH structure, we only try to prove that:
+/// - we can communicate with it and get a "no hit" reply.
+/// - TTUMACROFUSE immediate is encoded on 5-bits.
+#[test]
+fn test_op_ttu_simple() {
+    let run = &RunSingleton::get();
+    let dev = run.run.device();
+
+    if dev.dev_info().cls_compute < TURING_COMPUTE_A {
+        return;
+    }
+
+    let mut b = TestShaderBuilder::new(&run.sm);
+
+    // Those control flags seems to configure the inputs of a ray operation in some ways:
+    // - 0x4 means true
+    // - 0x5 means false
+    // The 0x4 between bits 20 to 24 is related to the triangle matching part.
+    // We effectively setup two ray operations here so the "dual" flag needs to be set when opening
+    // TTU session.
+    let unk_ray_control_flags = 0x50400400u32;
+
+    let cull_mask = 0xff;
+    let unk000 = 0x00030207u32 | cull_mask << 24;
+    let unk004 = 0x00055000u32 | (unk_ray_control_flags & 0x5FF00FFF);
+    let unk008 = cull_mask << 16;
+    let unk00C = cull_mask << 16;
+    let origin_x = 0.0f32;
+    let origin_y = -1000.0f32;
+    let origin_z = 0.0f32;
+    let direction_x = 0.0f32;
+    let direction_y = 1.0f32;
+    let direction_z = 0.0f32;
+    let tmin = 0.01f32;
+    let tmax = 1000.0f32;
+    let unk080 = 0x00030407u32 | cull_mask << 24;
+    let unk084 = unk_ray_control_flags;
+    let unk088 = cull_mask << 16;
+    let unk08C = 0u32;
+
+    let dst0 = b.alloc_ssa_vec(RegFile::GPR, 2);
+    let dst1 = b.alloc_ssa_vec(RegFile::GPR, 2);
+    b.push_op(OpTtuOpen { dual: true });
+
+    push_ttu_store(
+        &mut b,
+        0x000,
+        [unk000.into(), unk004.into(), unk008.into(), unk00C.into()],
+    );
+    push_ttu_store(
+        &mut b,
+        0x040,
+        [
+            origin_x.into(),
+            origin_y.into(),
+            origin_z.into(),
+            tmin.into(),
+        ],
+    );
+    push_ttu_store(
+        &mut b,
+        0x050,
+        [
+            direction_x.into(),
+            direction_y.into(),
+            direction_z.into(),
+            tmax.into(),
+        ],
+    );
+    push_ttu_store(
+        &mut b,
+        0x080,
+        [unk080.into(), unk084.into(), unk088.into(), unk08C.into()],
+    );
+    // We explicitly do not store any address at 0x200 to ensure TTU coprocessor directly
+    // terminate traversal.
+    b.push_op(OpTtuGo {});
+    b.push_op(OpTtuLd {
+        dsts: [dst0.clone().into(), dst1.clone().into()],
+        offset: 0x300,
+        close: true,
+    });
+    b.st_test_data(0x0, MemType::B32, dst0[0].into());
+    b.st_test_data(0x4, MemType::B32, dst0[1].into());
+    b.st_test_data(0x8, MemType::B32, dst1[0].into());
+    b.st_test_data(0xC, MemType::B32, dst1[1].into());
+
+    // Create a no op situation to test TTUMACROFUSE limits
+    // If we were outside of the limits, we would end up with an
+    // illegal encoding exception on the instructions out of the
+    // "section" range.
+    b.push_op(OpTtuOpen { dual: true });
+    for _ in 0..30 {
+        push_ttu_store(
+            &mut b,
+            0x0,
+            [Src::ZERO, Src::ZERO, Src::ZERO, Src::ZERO],
+        );
+    }
+    b.push_op(OpTtuLd {
+        dsts: [Dst::None, Dst::None],
+        offset: 0x0,
+        close: true,
+    });
+
+    let bin = b.compile();
+    let mut data = vec![0u32; 4];
+    run.run.run(&bin, &mut data).unwrap();
+
+    // No match is actually defined by bit 31 at offset 0x30C and if it's not one of the following:
+    // - 0xa0000000 (AABB match)
+    // - 0xde000000 (Blackwell+, triangle match related, possibly compression)
+    // - 0xe0000000 (error?)
+    // However, with this configuration 0xffffffff is expected on every generations so keep it simple.
+    assert_eq!(data[3], u32::MAX);
+    assert_eq!(data[2], u32::MAX);
+    assert_eq!(data[1], u32::MAX);
+    assert_eq!(data[0], u32::MAX);
 }
 
 #[test]
@@ -2828,4 +3000,243 @@ fn test_qmd_hw_decrement_dependence() -> io::Result<()> {
     assert_eq!(written_data[0], 500);
 
     Ok(())
+}
+
+#[test]
+fn test_max_ugpr() -> io::Result<()> {
+    let run = &RunSingleton::get();
+    let mut b = TestShaderBuilder::new(&run.sm);
+    let num_ugprs = b.sm.num_regs(RegFile::UGPR);
+    if num_ugprs == 0 {
+        return Ok(());
+    }
+
+    // We write all the ugprs first in case the hardware truncates the UGPR id or something
+    let mut ugprs = Vec::new();
+    for ugpr_idx in 0..num_ugprs {
+        let ugpr = RegRef::new(RegFile::UGPR, ugpr_idx, 1);
+        b.copy_to(ugpr.into(), ugpr_idx.into());
+        ugprs.push(ugpr);
+    }
+
+    for ugpr_idx in 0..num_ugprs {
+        let ugpr = ugprs[ugpr_idx as usize];
+        let gpr = b.alloc_ssa(RegFile::GPR);
+        b.copy_to(gpr.into(), ugpr.into());
+        b.st_test_data(4 * ugpr_idx as u16, MemType::B32, gpr.into());
+    }
+
+    let bin = b.compile_raw();
+
+    let mut data: Vec<u32> = vec![0; num_ugprs as usize];
+    unsafe {
+        run.run.run_raw([RunConfig::new(
+            &bin,
+            1,
+            0,
+            data.as_mut_ptr().cast(),
+            4 * num_ugprs as usize,
+        )])?;
+    }
+
+    for ugpr in 0..num_ugprs {
+        assert_eq!(data[ugpr as usize], ugpr);
+    }
+
+    Ok(())
+}
+
+fn get_foldable_f32(a: &mut Acorn) -> u32 {
+    let exp = a.get_uint(12);
+    let mant = a.get_uint(23);
+
+    match exp >> 9 {
+        7 => (-0.0f32).to_bits(),
+        6 => 0.0f32.to_bits(),
+        5 => (-f32::INFINITY).to_bits(),
+        4 => f32::INFINITY.to_bits(),
+        3 => (-f32::NAN).to_bits(),
+        2 => f32::NAN.to_bits(),
+        _ => (mant | exp << 23) as u32,
+    }
+}
+
+#[test]
+pub fn test_op_fmnmx() {
+    let run = &RunSingleton::get();
+    let sm = run.sm.sm();
+
+    for min in [true, false] {
+        for xorsign in [true, false] {
+            if xorsign && sm < 86 {
+                continue;
+            }
+
+            for nan in [true, false] {
+                if nan && sm < 80 {
+                    continue;
+                }
+
+                let op = OpFMnMx {
+                    dst: Dst::None,
+                    srcs: [0.into(), 0.into()],
+                    min: min.into(),
+                    ftz: false,
+                    nan,
+                    xorsign,
+                };
+
+                let mut a = Acorn::new();
+                test_foldable_op_with(op, |_| get_foldable_f32(&mut a));
+            }
+        }
+    }
+}
+
+/// Verifies that we can implement fmax(fmin(a, b(is_not_negative)), -b) patterns with fmnmx.xorsign
+/// (fmax, (fmin, a, b(is_not_negative)), -b) -> (fmnmx_xorsign_nv, fabs(a), b, true)
+#[test]
+pub fn test_xorsign() {
+    let run = &RunSingleton::get();
+    if run.sm.sm() < 86 {
+        return;
+    }
+
+    let mut b = TestShaderBuilder::new(&run.sm);
+
+    let src_a: Src = b.ld_test_data(0, MemType::B32).into();
+    let src_b: Src = b.ld_test_data(4, MemType::B32).into();
+
+    let dst = b.fclamp(src_a.clone(), src_b.clone(), false);
+    b.st_test_data(0x0c, MemType::B32, dst.into());
+
+    // fmax(fmin(a, b), -b)
+    let tmp = b.alloc_ssa(RegFile::GPR);
+    let dst = b.alloc_ssa(RegFile::GPR);
+    b.push_op(OpFMnMx {
+        dst: tmp.into(),
+        srcs: [src_a.clone(), src_b.clone()],
+        ftz: false,
+        nan: false,
+        xorsign: false,
+        min: true.into(),
+    });
+    b.push_op(OpFMnMx {
+        dst: dst.into(),
+        srcs: [tmp.into(), src_b.clone().fneg()],
+        ftz: false,
+        nan: false,
+        xorsign: false,
+        min: false.into(),
+    });
+    b.st_test_data(0x10, MemType::B32, dst.into());
+
+    // fmin(fmax(a, b), -b)
+    let tmp = b.alloc_ssa(RegFile::GPR);
+    let dst = b.alloc_ssa(RegFile::GPR);
+    b.push_op(OpFMnMx {
+        dst: tmp.into(),
+        srcs: [src_a, src_b.clone().fneg()],
+        ftz: false,
+        nan: false,
+        xorsign: false,
+        min: false.into(),
+    });
+    b.push_op(OpFMnMx {
+        dst: dst.into(),
+        srcs: [tmp.into(), src_b],
+        ftz: false,
+        nan: false,
+        xorsign: false,
+        min: true.into(),
+    });
+    b.st_test_data(0x14, MemType::B32, dst.into());
+
+    let bin = b.compile();
+
+    // Src_a gets clamped to +- src_b.
+    let mut data: Vec<[u32; 6]> = vec![
+        // fmax(fmin(1.0, 5.0), -5.0) == 1.0
+        [
+            0x3f800000, 0x40a00000, 0x3f800000, 0x00000000, 0x00000000,
+            0x00000000,
+        ],
+        // fmax(fmin(-1.0, 5.0), -5.0) == -1.0
+        [
+            0xbf800000, 0x40a00000, 0xbf800000, 0x00000000, 0x00000000,
+            0x00000000,
+        ],
+        // fmax(fmin(-100.0, 5.0), -5.0) == -5.0
+        [
+            0xc2c80000, 0x40a00000, 0xc0a00000, 0x00000000, 0x00000000,
+            0x00000000,
+        ],
+    ];
+
+    let mut a = Acorn::new();
+    for _ in 0..100000 {
+        let src_au = a.get_u32();
+        let src_bu = a.get_u32();
+
+        let src_af = f32::from_bits(src_au);
+        let src_bf = f32::from_bits(src_bu);
+        let resf = src_af.min(src_bf).max(-src_bf);
+        let mut resu = resf.to_bits();
+
+        if src_bf.is_sign_negative() {
+            continue;
+        }
+
+        // If both inputs are NaN the returned value is a canonical NaN.
+        // Also .xorsign behavior is ignored.
+        if src_af.is_nan() && src_bf.is_nan() {
+            resu = 0x7fffffff;
+        } else {
+            if src_af.is_nan() {
+                resu = src_bu;
+            } else if src_bf.is_nan() {
+                resu = src_au;
+            }
+
+            // .xorsign: xors the sign bits of both pre modified inputs
+            let sign = (src_au & 0x80000000) ^ (src_bu & 0x80000000);
+            resu &= 0x7fffffff;
+            resu |= sign;
+        }
+
+        data.push([src_au, src_bu, resu, 0x00000000, 0x00000000, 0x00000000]);
+    }
+
+    run.run.run(&bin, &mut data).unwrap();
+
+    for [src_au, src_bu, expected, res, res_fmin_fmax, res_fmax_fmin] in data {
+        assert_eq!(
+            expected, res,
+            "{src_au:x}, {src_bu:x}, expected: {expected:x} got: {res:x}"
+        );
+
+        let src_af = f32::from_bits(src_au);
+        let src_bf = f32::from_bits(src_bu);
+        let fres = f32::from_bits(res);
+        let fres_fmin_fmax = f32::from_bits(res_fmin_fmax);
+        let fres_fmax_fmin = f32::from_bits(res_fmax_fmin);
+
+        // Let's compare the fmin(fmax) and fmax(fmin) patterns which should be equal unless a is
+        // NaN, in which case we end up with a negative opposite.
+        assert!(
+            f32_eq(fres_fmin_fmax, fres_fmax_fmin)
+                || src_af.is_nan() && f32_eq(fres_fmin_fmax, -fres_fmax_fmin),
+            "{res_fmin_fmax:x} vs {res_fmax_fmin:x}, inputs: {src_af:e} ({src_au:x}), {src_bf:e} ({src_bu:x})",
+        );
+
+        // The xorsign pattern is equal to fmax(fmin(a, b), -b) or fmin(fmax(a, -b), b) except when
+        // a is NaN, where it is equal to the negative of the result.
+        assert!(
+            (f32_eq(fres, fres_fmax_fmin)
+                || src_af.is_nan() && f32_eq(fres, -fres_fmax_fmin))
+                && (f32_eq(fres, fres_fmin_fmax)
+                    || src_af.is_nan() && f32_eq(fres, -fres_fmin_fmax)),
+            "expected: {fres_fmax_fmin:e} ({res_fmax_fmin:x}) got: {fres:e} ({res:x}), inputs: {src_af:e} ({src_au:x}), {src_bf:e} ({src_bu:x})"
+        );
+    }
 }

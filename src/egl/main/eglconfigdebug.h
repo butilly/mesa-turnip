@@ -31,13 +31,12 @@
 extern "C" {
 #endif
 
-#include "egltypedefs.h"
 
 /**
  * Print the list of configs and the associated attributes.
  */
 void
-eglPrintConfigDebug(const _EGLDisplay *const disp,
+eglPrintConfigDebug(const struct _egl_display *const disp,
                     const EGLConfig *const configs, EGLint numConfigs,
                     EGLBoolean printChosen);
 

@@ -472,6 +472,7 @@ nvk_cmd_copy_memory_to_image_ce(struct nvk_cmd_buffer *cmd,
                                 const VkCopyDeviceMemoryImageInfoKHR *pCopyMemoryInfo)
 {
    VK_FROM_HANDLE(nvk_image, dst, pCopyMemoryInfo->image);
+   assert(dst->zcull.nil.size_B == 0);
 
    for (unsigned r = 0; r < pCopyMemoryInfo->regionCount; r++) {
       const VkDeviceMemoryImageCopyKHR *region = &pCopyMemoryInfo->pRegions[r];
@@ -566,13 +567,14 @@ nvk_remap_extract_aspect(struct nouveau_copy *copy,
          copy2->remap.dst[3] = NV90B5_SET_REMAP_COMPONENTS_DST_W_NO_WRITE;
       }
       break;
+   case PIPE_FORMAT_Z24X8_UNORM:
    case PIPE_FORMAT_Z24_UNORM_S8_UINT:
       if (aspects == VK_IMAGE_ASPECT_DEPTH_BIT) {
          copy->remap.comp_size = 1;
          copy->remap.dst[0] = NV90B5_SET_REMAP_COMPONENTS_DST_X_SRC_X;
          copy->remap.dst[1] = NV90B5_SET_REMAP_COMPONENTS_DST_Y_SRC_Y;
          copy->remap.dst[2] = NV90B5_SET_REMAP_COMPONENTS_DST_Z_SRC_Z;
-         copy->remap.dst[3] = NV90B5_SET_REMAP_COMPONENTS_DST_W_NO_WRITE;
+         copy->remap.dst[3] = NV90B5_SET_REMAP_COMPONENTS_DST_Z_CONST_A;
       } else {
          assert(aspects == VK_IMAGE_ASPECT_STENCIL_BIT);
          copy->remap.comp_size = 1;
@@ -770,6 +772,7 @@ nvk_cmd_copy_image_ce(struct nvk_cmd_buffer *cmd,
 {
    VK_FROM_HANDLE(nvk_image, src, pCopyImageInfo->srcImage);
    VK_FROM_HANDLE(nvk_image, dst, pCopyImageInfo->dstImage);
+   assert(dst->zcull.nil.size_B == 0);
 
    for (unsigned r = 0; r < pCopyImageInfo->regionCount; r++) {
       const VkImageCopy2 *region = &pCopyImageInfo->pRegions[r];

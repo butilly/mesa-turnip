@@ -520,6 +520,73 @@ can_remove_var(nir_variable *var, UNUSED void *data)
    return true;
 }
 
+/* Variables used by gl_program::raster_pos_nir must stay in the vertex shader
+ * so that the uniform linker gives them storage.
+ */
+static bool
+can_remove_var_raster_pos(nir_variable *var, void *data)
+{
+   struct set *raster_pos_vars = (struct set *)data;
+
+   if (var->name && _mesa_set_search(raster_pos_vars, var->name))
+      return false;
+
+   return can_remove_var(var, NULL);
+}
+
+/* Give the variables of gl_program::raster_pos_nir the types, locations and
+ * bindings that linking assigned to the same variables in the vertex shader,
+ * and the same number of buffers.
+ */
+static void
+link_raster_pos_variables(struct gl_shader_program *prog)
+{
+   struct gl_linked_shader *vs = prog->_LinkedShaders[MESA_SHADER_VERTEX];
+   if (!vs || !vs->Program->raster_pos_nir)
+      return;
+
+   const nir_variable_mode modes = nir_var_uniform | nir_var_image |
+                                   nir_var_mem_ubo | nir_var_mem_ssbo;
+   struct hash_table *vars =
+      _mesa_hash_table_create(NULL, _mesa_hash_string, _mesa_key_string_equal);
+
+   nir_foreach_variable_with_modes(var, vs->Program->nir, modes) {
+      if (var->name)
+         _mesa_hash_table_insert(vars, var->name, var);
+   }
+
+   nir_foreach_variable_with_modes(var, vs->Program->raster_pos_nir, modes) {
+      struct hash_entry *entry =
+         var->name ? _mesa_hash_table_search(vars, var->name) : NULL;
+      if (!entry)
+         continue;
+
+      nir_variable *linked = (nir_variable *)entry->data;
+      if (linked->data.mode != var->data.mode)
+         continue;
+
+      /* Uniform arrays may have been resized and blocks given explicit
+       * layouts.
+       */
+      var->type = linked->type;
+      var->interface_type = linked->interface_type;
+      var->num_state_slots = MIN2(var->num_state_slots,
+                                  linked->num_state_slots);
+      var->data = linked->data;
+   }
+
+   nir_fixup_deref_types(vs->Program->raster_pos_nir);
+
+   /* The linker only sets these in the vertex shader. Lowering atomic
+    * counters to shader storage buffers puts them after num_ssbos.
+    */
+   vs->Program->raster_pos_nir->info.num_ubos = vs->Program->info.num_ubos;
+   vs->Program->raster_pos_nir->info.num_ssbos = vs->Program->info.num_ssbos;
+   vs->Program->raster_pos_nir->info.num_abos = vs->Program->info.num_abos;
+
+   _mesa_hash_table_destroy(vars, NULL);
+}
+
 static void
 set_always_active_io(nir_shader *shader, nir_variable_mode io_mode)
 {
@@ -1504,14 +1571,85 @@ optimize_varyings_opts(nir_shader *nir, void *data)
    gl_nir_opts(nir);
 }
 
+/* Gather the built-in output slots written by the shader, as a mask of slots
+ * for each component.
+ */
+static void
+gather_builtin_output_slots(nir_shader *nir, uint32_t slots[4])
+{
+   memset(slots, 0, 4 * sizeof(slots[0]));
+
+   nir_foreach_function_impl(impl, nir) {
+      nir_foreach_block(block, impl) {
+         nir_foreach_instr(instr, block) {
+            if (instr->type != nir_instr_type_intrinsic)
+               continue;
+
+            nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
+            if (intr->intrinsic != nir_intrinsic_store_output)
+               continue;
+
+            nir_io_semantics sem = nir_intrinsic_io_semantics(intr);
+            unsigned mask = nir_intrinsic_write_mask(intr) <<
+                            nir_intrinsic_component(intr);
+            nir_src *offset = nir_get_io_offset_src(intr);
+            unsigned first = sem.location, num_slots = sem.num_slots;
+
+            if (nir_src_is_const(*offset)) {
+               first += nir_src_as_uint(*offset);
+               num_slots = 1;
+            }
+
+            if (first >= VARYING_SLOT_VAR0)
+               continue;
+
+            assert(first + num_slots <= VARYING_SLOT_VAR0);
+            uint32_t slot_mask = BITFIELD_RANGE(first, num_slots);
+            u_foreach_bit(c, mask)
+               slots[c] |= slot_mask;
+         }
+      }
+   }
+}
+
+/* The raster position and feedback/select modes only run the vertex shader
+ * (section 14.7 "Current Raster Position" of the compatibility profile spec),
+ * but varying optimizations remove vertex shader outputs that the next stage
+ * doesn't read and propagate constant outputs into the next stage. Return
+ * whether any built-in output that they need was removed. User-defined
+ * outputs aren't saved in the raster position.
+ *
+ * This can't tell whether the outputs were moved to other slots or
+ * components, which nir_opt_varyings reports.
+ */
+static bool
+raster_pos_outputs_removed(nir_shader *before, nir_shader *after)
+{
+   uint32_t slots_before[4], slots_after[4];
+
+   gather_builtin_output_slots(before, slots_before);
+   gather_builtin_output_slots(after, slots_after);
+
+   for (unsigned c = 0; c < 4; c++) {
+      if (slots_before[c] & ~slots_after[c])
+         return true;
+   }
+   return false;
+}
+
 /**
  * Lower load_deref and store_deref on input/output variables to load_input
  * and store_output intrinsics, and perform varying optimizations and
  * compaction.
+ *
+ * If keep_raster_pos_vs is set and the optimizations remove or move vertex
+ * shader outputs, a copy of the vertex shader from before the optimizations
+ * is kept in gl_program::raster_pos_nir.
  */
 void
 gl_nir_lower_optimize_varyings(const struct gl_constants *consts,
-                               struct gl_shader_program *prog, bool spirv)
+                               struct gl_shader_program *prog, bool spirv,
+                               bool keep_raster_pos_vs)
 {
    nir_shader *shaders[MESA_SHADER_MESH_STAGES];
    unsigned num_shaders = 0;
@@ -1554,8 +1692,33 @@ gl_nir_lower_optimize_varyings(const struct gl_constants *consts,
    if (debug_get_bool_option("MESA_GLSL_DISABLE_IO_OPT", false))
       return;
 
+   /* The vertex shader can only lose outputs if there is a next stage. */
+   struct gl_linked_shader *vs = prog->_LinkedShaders[MESA_SHADER_VERTEX];
+   nir_shader *raster_pos_nir = NULL;
+
+   if (keep_raster_pos_vs && vs && num_shaders > 1) {
+      assert(shaders[0] == vs->Program->nir);
+      raster_pos_nir = nir_shader_clone(NULL, vs->Program->nir);
+   }
+
+   nir_opt_varyings_progress progress[MESA_SHADER_MESH_STAGES] = {0};
+
    nir_opt_varyings_bulk(shaders, num_shaders, spirv, max_uniform_comps,
-                         max_ubos, optimize_varyings_opts, NULL);
+                         max_ubos, optimize_varyings_opts, NULL, progress);
+
+   if (raster_pos_nir) {
+      /* Compaction can move the components of an output around, such as
+       * sorting the components of a color by how they are interpolated,
+       * without removing any of them.
+       */
+      if ((progress[0] & nir_progress_producer_builtin_outputs_moved) ||
+          raster_pos_outputs_removed(raster_pos_nir, vs->Program->nir)) {
+         ralloc_free(vs->Program->raster_pos_nir);
+         vs->Program->raster_pos_nir = raster_pos_nir;
+      } else {
+         ralloc_free(raster_pos_nir);
+      }
+   }
 }
 
 bool
@@ -1583,7 +1746,7 @@ gl_nir_link_spirv(const struct pipe_screen *screen,
    if (!prelink_lowering(screen, consts, exts, prog, linked_shader, num_shaders))
       return false;
 
-   gl_nir_lower_optimize_varyings(consts, prog, true);
+   gl_nir_lower_optimize_varyings(consts, prog, true, false);
 
    for (unsigned i = 0; i < MESA_SHADER_MESH_STAGES; i++) {
       struct gl_linked_shader *shader = prog->_LinkedShaders[i];
@@ -2355,36 +2518,38 @@ link_fs_inout_layout_qualifiers(struct gl_shader_program *prog,
    bool origin_upper_left = false;
    bool pixel_center_integer = false;
 
-   if (linked_shader->Stage != MESA_SHADER_FRAGMENT ||
-       (prog->GLSL_Version < 150 && !arb_fragment_coord_conventions_enable))
+   if (linked_shader->Stage != MESA_SHADER_FRAGMENT)
       return;
 
    for (unsigned i = 0; i < num_shaders; i++) {
       struct gl_shader *shader = shader_list[i];
-      /* From the GLSL 1.50 spec, page 39:
-       *
-       *   "If gl_FragCoord is redeclared in any fragment shader in a program,
-       *    it must be redeclared in all the fragment shaders in that program
-       *    that have a static use gl_FragCoord."
-       */
-      if ((redeclares_gl_fragcoord && !shader->redeclares_gl_fragcoord &&
-           shader->uses_gl_fragcoord)
-          || (shader->redeclares_gl_fragcoord && !redeclares_gl_fragcoord &&
-              uses_gl_fragcoord)) {
-             linker_error(prog, "fragment shader defined with conflicting "
-                         "layout qualifiers for gl_FragCoord\n");
-      }
 
-      /* From the GLSL 1.50 spec, page 39:
-       *
-       *   "All redeclarations of gl_FragCoord in all fragment shaders in a
-       *    single program must have the same set of qualifiers."
-       */
-      if (redeclares_gl_fragcoord && shader->redeclares_gl_fragcoord &&
-          (shader->origin_upper_left != origin_upper_left ||
-           shader->pixel_center_integer != pixel_center_integer)) {
-         linker_error(prog, "fragment shader defined with conflicting "
-                      "layout qualifiers for gl_FragCoord\n");
+      if (prog->GLSL_Version >= 150 || arb_fragment_coord_conventions_enable) {
+         /* From the GLSL 1.50 spec, page 39:
+         *
+         *   "If gl_FragCoord is redeclared in any fragment shader in a program,
+         *    it must be redeclared in all the fragment shaders in that program
+         *    that have a static use gl_FragCoord."
+         */
+         if ((redeclares_gl_fragcoord && !shader->redeclares_gl_fragcoord &&
+            shader->uses_gl_fragcoord)
+            || (shader->redeclares_gl_fragcoord && !redeclares_gl_fragcoord &&
+               uses_gl_fragcoord)) {
+               linker_error(prog, "fragment shader defined with conflicting "
+                           "layout qualifiers for gl_FragCoord\n");
+         }
+
+         /* From the GLSL 1.50 spec, page 39:
+          *
+          *   "All redeclarations of gl_FragCoord in all fragment shaders in a
+          *    single program must have the same set of qualifiers."
+          */
+         if (redeclares_gl_fragcoord && shader->redeclares_gl_fragcoord &&
+            (shader->origin_upper_left != origin_upper_left ||
+            shader->pixel_center_integer != pixel_center_integer)) {
+            linker_error(prog, "fragment shader defined with conflicting "
+                        "layout qualifiers for gl_FragCoord\n");
+         }
       }
 
       /* Update the linked shader state.  Note that uses_gl_fragcoord should
@@ -4176,14 +4341,31 @@ gl_nir_link_glsl(struct gl_context *ctx, struct gl_shader_program *prog)
                                                consts->Program[i].MaxUniformComponents);
          }
 
-         const nir_remove_dead_variables_options opts = {
+         const nir_variable_mode modes =
+            nir_var_uniform | nir_var_image | nir_var_mem_ubo |
+            nir_var_mem_ssbo | nir_var_system_value;
+         nir_remove_dead_variables_options opts = {
             .can_remove_var = can_remove_var,
          };
-         nir_remove_dead_variables(shader->Program->nir,
-                                   nir_var_uniform | nir_var_image |
-                                   nir_var_mem_ubo | nir_var_mem_ssbo |
-                                   nir_var_system_value,
-                                   &opts);
+         struct set *raster_pos_vars = NULL;
+         nir_shader *raster_pos_nir = shader->Program->raster_pos_nir;
+
+         if (raster_pos_nir) {
+            nir_remove_dead_variables(raster_pos_nir, modes, &opts);
+
+            raster_pos_vars = _mesa_set_create(NULL, _mesa_hash_string,
+                                               _mesa_key_string_equal);
+            nir_foreach_variable_with_modes(var, raster_pos_nir, modes) {
+               if (var->name)
+                  _mesa_set_add(raster_pos_vars, var->name);
+            }
+
+            opts.can_remove_var = can_remove_var_raster_pos;
+            opts.can_remove_var_data = raster_pos_vars;
+         }
+
+         nir_remove_dead_variables(shader->Program->nir, modes, &opts);
+         _mesa_set_destroy(raster_pos_vars, NULL);
 
          if (shader->Program->info.stage == MESA_SHADER_FRAGMENT) {
             nir_shader *nir = shader->Program->nir;
@@ -4216,6 +4398,7 @@ gl_nir_link_glsl(struct gl_context *ctx, struct gl_shader_program *prog)
    check_image_resources(consts, exts, prog);
    gl_nir_link_assign_atomic_counter_resources(consts, prog);
    gl_nir_link_check_atomic_counter_resources(consts, prog);
+   link_raster_pos_variables(prog);
 
    /* OpenGL ES < 3.1 requires that a vertex shader and a fragment shader both
     * be present in a linked program. GL_ARB_ES2_compatibility doesn't say

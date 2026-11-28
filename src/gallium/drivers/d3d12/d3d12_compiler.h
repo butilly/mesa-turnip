@@ -26,7 +26,9 @@
 
 #include "d3d12_common.h"
 
+#include "dxil_enums.h"
 #include "dxil_nir_lower_int_samplers.h"
+#include "nir_to_dxil.h"
 
 #include "pipe/p_defines.h"
 #include "pipe/p_state.h"
@@ -73,15 +75,15 @@ d3d12_varying_cache_destroy(struct d3d12_screen *ctx);
 
 struct d3d12_varying_info {
    struct {
-      const struct glsl_type *types[4];
-      uint8_t location_frac_mask:4;
+      const struct glsl_type *types[DXIL_IO_ROW_COMPONENTS];
+      uint8_t location_frac_mask:DXIL_IO_ROW_COMPONENTS;
       uint8_t patch:1;
       struct {
          unsigned interpolation:3;   // INTERP_MODE_COUNT = 5
          unsigned driver_location:6; // VARYING_SLOT_MAX = 64
          unsigned compact:1;
          unsigned always_active_io:1;
-      } vars[4];
+      } vars[DXIL_IO_ROW_COMPONENTS];
    } slots[VARYING_SLOT_MAX];
    uint64_t mask;
    uint32_t hash;
@@ -207,14 +209,15 @@ struct d3d12_shader {
 
    /* Samplers/textures can be sparse for some internal shaders */
    struct {
-      uint32_t dimension;
+      enum dxil_resource_kind dimension;
    } srv_bindings[PIPE_MAX_SHADER_SAMPLER_VIEWS];
    uint32_t begin_srv_binding;
    uint32_t end_srv_binding;
+   bool has_samplers;
 
    /* Images and SSBOs are never sparse */
    struct {
-      uint32_t dimension;
+      enum dxil_resource_kind dimension;
    } uav_bindings[PIPE_MAX_SHADER_IMAGES];
 
    struct d3d12_shader_key key;
@@ -264,8 +267,8 @@ struct d3d12_shader_selector {
    unsigned has_frac_inputs:1;
    unsigned has_frac_outputs:1;
 
-   BITSET_DECLARE(varying_frac_inputs, 64 * 4);
-   BITSET_DECLARE(varying_frac_outputs, 64 * 4);
+   BITSET_DECLARE(varying_frac_inputs, MAX_VARYINGS_INCL_PATCH * DXIL_IO_ROW_COMPONENTS);
+   BITSET_DECLARE(varying_frac_outputs, MAX_VARYINGS_INCL_PATCH * DXIL_IO_ROW_COMPONENTS);
 
    bool is_variant;
    union {
@@ -286,11 +289,11 @@ d3d12_create_compute_shader(struct d3d12_context *ctx,
 void
 d3d12_shader_free(struct d3d12_shader_selector *shader);
 
-void
+bool
 d3d12_select_shader_variants(struct d3d12_context *ctx,
                              const struct pipe_draw_info *dinfo);
 
-void
+bool
 d3d12_select_compute_shader_variants(struct d3d12_context *ctx,
                                      const struct pipe_grid_info *info);
 

@@ -3695,11 +3695,17 @@ ntt_fix_nir_options(struct pipe_screen *screen, struct nir_shader *s,
        !options->lower_fdph ||
        !options->lower_flrp64 ||
        !options->lower_fmod ||
-       !options->lower_uadd_carry ||
-       !options->lower_usub_borrow ||
        !options->lower_uadd_sat ||
        !options->lower_usub_sat ||
        !options->lower_uniforms_to_ubo ||
+       !options->lower_pack_unorm_2x16 ||
+       !options->lower_pack_snorm_2x16 ||
+       !options->lower_unpack_unorm_2x16 ||
+       !options->lower_unpack_snorm_2x16 ||
+       !options->lower_pack_unorm_4x8 ||
+       !options->lower_pack_snorm_4x8 ||
+       !options->lower_unpack_unorm_4x8 ||
+       !options->lower_unpack_snorm_4x8 ||
        options->has_rotate8 ||
        options->has_rotate16 ||
        options->has_rotate32 ||
@@ -3716,11 +3722,17 @@ ntt_fix_nir_options(struct pipe_screen *screen, struct nir_shader *s,
       new_options->lower_fdph = true;
       new_options->lower_flrp64 = true;
       new_options->lower_fmod = true;
-      new_options->lower_uadd_carry = true;
-      new_options->lower_usub_borrow = true;
       new_options->lower_uadd_sat = true;
       new_options->lower_usub_sat = true;
       new_options->lower_uniforms_to_ubo = true;
+      new_options->lower_pack_unorm_2x16 = true;
+      new_options->lower_pack_snorm_2x16 = true;
+      new_options->lower_unpack_unorm_2x16 = true;
+      new_options->lower_unpack_snorm_2x16 = true;
+      new_options->lower_pack_unorm_4x8 = true;
+      new_options->lower_pack_snorm_4x8 = true;
+      new_options->lower_unpack_unorm_4x8 = true;
+      new_options->lower_unpack_snorm_4x8 = true;
       new_options->lower_fsqrt = lower_fsqrt;
       new_options->has_rotate8 = false;
       new_options->has_rotate16 = false;
@@ -4064,8 +4076,6 @@ const nir_shader_compiler_options nir_to_tgsi_compiler_options = {
    .lower_flrp64 = true,
    .lower_fmod = true,
    .lower_uniforms_to_ubo = true,
-   .lower_uadd_carry = true,
-   .lower_usub_borrow = true,
    .lower_uadd_sat = true,
    .lower_usub_sat = true,
    .lower_int64_options = nir_lower_imul_2x32_64,

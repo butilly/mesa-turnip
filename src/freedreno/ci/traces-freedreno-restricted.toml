@@ -10,7 +10,7 @@ freedreno-a750 = { sysmem = 8000 }
 [[traces]]
 path = "angle/angle_trace_tests/among_us"
 [traces.devices]
-freedreno-a660 = { checksum = "76c6a3606ca690d78bb545a2a4e6d736a518bcc6c5653738b9d22fd144fcf4e8" }
+freedreno-a660 = { checksum = "83cda3407a9ab6b6b8a5a1e75146339ecbb91c747e2b1f221ba54f286d0a2ad4" }
 
 [[traces]]
 path = "angle/angle_trace_tests/asphalt_9"
@@ -50,7 +50,7 @@ freedreno-a660 = { checksum = "0edcd91ca6ac74124b077701b494becf054e5f3ec3803417f
 [[traces]]
 path = "angle/angle_trace_tests/pubg_mobile_battle_royale"
 [traces.devices]
-freedreno-a660 = { checksum = "2ee6d64c931869d7d83c5507d73ebcac877d7c6bbc2099f63d029a27dbc172f4" }
+freedreno-a660 = { checksum = "e835b118fe3fdb3074389b3d01c803fe71555c6c8929083baa4d3b90daca3595" }
 
 [[traces]]
 path = "angle/angle_trace_tests/temple_run_300"
@@ -854,19 +854,19 @@ freedreno-a660 = { checksum = "cb4a43398b1b8cf5a50fbb24121a2bd8ef1d220c94995daae
 path = "steam-d3d11/anno5-high-2.rdc"
 sysmem = 900
 [traces.devices]
-freedreno-a660 = { checksum = "7ee7a8dcf70c430aad12aa223da8f5177423ae479a811951830f26dca8b56d93" }
+freedreno-a660 = { checksum = "2972e36b060959852b1d1f6e6e6b30e996b791c4ea3025ec2f13a18739f6179e" }
 
 [[traces]]
 path = "steam-d3d11/anno5-low.rdc"
 sysmem = 600
 [traces.devices]
-freedreno-a660 = { checksum = "4ed664f5d05fec922678f14af4be7ba6f499b991a1d66ce123a6f808ec85e3d6" }
+freedreno-a660 = { checksum = "cbd9dd07c3526c38f1b3ce6b46f2334cf788007b08cce11e35e3bfdafe41b517" }
 
 [[traces]]
 path = "steam-d3d11/anno-medium.rdc"
 sysmem = 600
 [traces.devices]
-freedreno-a660 = { checksum = "b15e76f9d42e8653cd913677d990ca39ac18b773420e67a521f9a13c925ecddc" }
+freedreno-a660 = { checksum = "766eda6dd0d01aa57049081da97427b296dc4704ac75db73a09b37394a3ddf6b" }
 
 [[traces]]
 path = "steam-d3d11/arma-low.rdc"

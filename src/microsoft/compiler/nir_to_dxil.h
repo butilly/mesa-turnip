@@ -33,6 +33,9 @@
 extern "C" {
 #endif
 
+/* A DXIL I/O row is a vec4, i.e. four scalar components. */
+#define DXIL_IO_ROW_COMPONENTS 4
+
 struct blob;
 
 /* Controls how resource decls/accesses are handled. Common to all:
@@ -79,6 +82,7 @@ struct nir_to_dxil_options {
    bool interpolate_at_vertex;
    bool lower_int16;
    bool disable_math_refactoring;
+   bool lower_fp32_compare_select;
    bool last_ubo_is_not_arrayed;
    bool advanced_texture_ops;
    unsigned provoking_vertex;

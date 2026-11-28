@@ -1497,7 +1497,8 @@ bi_emit_intrinsic(bi_builder *b, nir_intrinsic_instr *instr)
       break;
 
    case nir_intrinsic_load_attr_pan:
-      assert(stage == MESA_SHADER_VERTEX);
+      assert(stage == MESA_SHADER_VERTEX ||
+             stage == MESA_SHADER_COMPUTE);
       bi_emit_load_attr(b, instr);
       break;
 
@@ -2666,32 +2667,6 @@ bi_emit_alu(bi_builder *b, nir_alu_instr *instr)
       return;
    }
 
-   case nir_op_pack_uvec2_to_uint: {
-      bi_index src = bi_src_index(&instr->src[0].src);
-
-      assert(sz == 32 && src_sz == 32);
-      bi_mkvec_v2i16_to(
-         b, dst, bi_half(bi_extract(b, src, instr->src[0].swizzle[0]), false),
-         bi_half(bi_extract(b, src, instr->src[0].swizzle[1]), false));
-      return;
-   }
-
-   case nir_op_pack_uvec4_to_uint: {
-      bi_index src = bi_src_index(&instr->src[0].src);
-
-      assert(sz == 32 && src_sz == 32);
-
-      bi_index srcs[4] = {
-         bi_extract(b, src, instr->src[0].swizzle[0]),
-         bi_extract(b, src, instr->src[0].swizzle[1]),
-         bi_extract(b, src, instr->src[0].swizzle[2]),
-         bi_extract(b, src, instr->src[0].swizzle[3]),
-      };
-      unsigned channels[4] = {0};
-      bi_make_vec_to(b, dst, srcs, channels, 4, 8);
-      return;
-   }
-
    case nir_op_f2f16:
    case nir_op_f2f16_rtz:
    case nir_op_f2f16_rtne: {
@@ -2787,6 +2762,48 @@ bi_emit_alu(bi_builder *b, nir_alu_instr *instr)
       }
 
       bi_make_vec_to(b, dst, idxs, chan, comps, 8);
+      return;
+   }
+
+   case nir_op_extract_u8:
+   case nir_op_extract_i8: {
+      bi_index s0 = bi_alu_src_index(b, instr->src[0], comps);
+      if (sz == 32) {
+         assert(comps == 1 && "should be scalarized");
+         unsigned byte = nir_alu_src_as_uint(instr->src[1]);
+         if (instr->op == nir_op_extract_i8)
+            bi_s8_to_s32_to(b, dst, bi_byte(s0, byte));
+         else
+            bi_u8_to_u32_to(b, dst, bi_byte(s0, byte));
+      } else if (sz == 16) {
+         assert(comps <= 2);
+         const unsigned byte_x = nir_alu_src_comp_as_uint(instr->src[1], 0);
+         const unsigned byte_y = comps == 1 ? byte_x :
+                                 nir_alu_src_comp_as_uint(instr->src[1], 1);
+         assert(byte_x < 2 && byte_y < 2);
+
+         /* Construct the swizzle for the select.  We know it's valid because
+          * it's guaranteed to be a BXXYY swizzle, even when composed with
+          * s0.swizzle.
+          */
+         enum bi_swizzle swizzle = BI_SWIZZLE_H01;
+         const unsigned bytes[4] = { byte_x, byte_x, 2 + byte_y, 2 + byte_y };
+         bool valid = bi_swizzle_from_byte_channels(bytes, &swizzle);
+         assert(valid);
+
+         valid = bi_try_compose_swizzles(&swizzle, swizzle, s0.swizzle);
+         assert(valid);
+
+         bi_index src = s0;
+         src.swizzle = swizzle;
+
+         if (instr->op == nir_op_extract_i8)
+            bi_v2s8_to_v2s16_to(b, dst, src);
+         else
+            bi_v2u8_to_v2u16_to(b, dst, src);
+      } else {
+         UNREACHABLE("should be lowered");
+      }
       return;
    }
 
@@ -2904,47 +2921,6 @@ bi_emit_alu(bi_builder *b, nir_alu_instr *instr)
       assert(sz <= 32);
       bi_mux_to(b, sz, dst, s2, s1, s0, BI_MUX_INT_ZERO);
       break;
-
-   case nir_op_extract_u8:
-   case nir_op_extract_i8: {
-      if (sz == 32) {
-         assert(comps == 1 && "should be scalarized");
-         unsigned byte = nir_alu_src_as_uint(instr->src[1]);
-         if (instr->op == nir_op_extract_i8)
-            bi_s8_to_s32_to(b, dst, bi_byte(s0, byte));
-         else
-            bi_u8_to_u32_to(b, dst, bi_byte(s0, byte));
-      } else if (sz == 16) {
-         assert(comps <= 2);
-         const unsigned byte_x = nir_alu_src_comp_as_uint(instr->src[1], 0);
-         const unsigned byte_y = comps == 1 ? byte_x :
-                                 nir_alu_src_comp_as_uint(instr->src[1], 1);
-         assert(byte_x < 2 && byte_y < 2);
-
-         /* Construct the swizzle for the select.  We know it's valid because
-          * it's guaranteed to be a BXXYY swizzle, even when composed with
-          * s0.swizzle.
-          */
-         enum bi_swizzle swizzle = BI_SWIZZLE_H01;
-         const unsigned bytes[4] = { byte_x, byte_x, 2 + byte_y, 2 + byte_y };
-         bool valid = bi_swizzle_from_byte_channels(bytes, &swizzle);
-         assert(valid);
-
-         valid = bi_try_compose_swizzles(&swizzle, swizzle, s0.swizzle);
-         assert(valid);
-
-         bi_index src = s0;
-         src.swizzle = swizzle;
-
-         if (instr->op == nir_op_extract_i8)
-            bi_v2s8_to_v2s16_to(b, dst, src);
-         else
-            bi_v2u8_to_v2u16_to(b, dst, src);
-      } else {
-         UNREACHABLE("should be lowered");
-      }
-      break;
-   }
 
    case nir_op_extract_u16:
    case nir_op_extract_i16: {
@@ -3870,6 +3846,19 @@ bi_shader_stage_name(bi_context *ctx)
 }
 
 static void
+bi_normalize_stats(struct bifrost_stats *stats, const bi_context *ctx)
+{
+   const struct pan_model *model = ctx->inputs->model;
+   if (model) {
+      assert(model->rates.fma && model->rates.texel);
+      stats->arith /= model->rates.fma;
+      stats->t /= model->rates.texel;
+   }
+   stats->v /= 16.0;
+   stats->ldst /= 1.0;
+}
+
+static void
 bi_gather_stats(bi_context *ctx, unsigned size, struct bifrost_stats *out)
 {
    struct bi_stats counts = {0};
@@ -3895,23 +3884,14 @@ bi_gather_stats(bi_context *ctx, unsigned size, struct bifrost_stats *out)
    /* Thread count and register pressure are traded off only on v7 */
    bool full_threads = (ctx->arch == 7 && ctx->info.work_reg_count <= 32);
 
-   const struct pan_model *model =
-      pan_get_model(ctx->inputs->gpu_id, ctx->inputs->gpu_variant);
-   if (model == NULL) {
-      /* Get G52 by default: */
-      model = pan_get_model(((uint64_t)0x7202) << 16, 0);
-      assert(model);
-   }
-   assert(model->rates.fma && model->rates.texel);
-
    *out = (struct bifrost_stats){
       .instrs = counts.nr_ins,
       .tuples = counts.nr_tuples,
       .clauses = counts.nr_clauses,
-      .arith = ((float)counts.nr_arith) / model->rates.fma,
-      .t = ((float)counts.nr_texture) / model->rates.texel,
-      .v = ((float)counts.nr_varying) / 16.0,
-      .ldst = ((float)counts.nr_ldst) / 1.0,
+      .arith = ((float)counts.nr_arith),
+      .t = ((float)counts.nr_texture),
+      .v = ((float)counts.nr_varying),
+      .ldst = ((float)counts.nr_ldst),
       .code_size = size,
       .preloads = ctx->arch == 7 ? bi_count_preload_cost(ctx) : 0,
       .threads = full_threads ? 2 : 1,
@@ -3922,7 +3902,7 @@ bi_gather_stats(bi_context *ctx, unsigned size, struct bifrost_stats *out)
       .registers_used = util_bitcount64(counts.reg_mask),
       .uniforms_used = counts.nr_fau_uniforms,
    };
-
+   bi_normalize_stats(out, ctx);
    out->cycles = MAX2(out->arith, MAX3(out->t, out->v, out->ldst));
 }
 
@@ -3973,19 +3953,29 @@ pan_va_compute_alu_bound(uint8_t arch, float fma, float cvt, float sfu)
 }
 
 static void
+va_normalize_stats(struct valhall_stats *stats, const bi_context *ctx)
+{
+   const struct pan_model *model = ctx->inputs->model;
+   if (!model)
+      return;
+
+   assert(model->rates.fma != 0 && model->rates.cvt != 0 &&
+          model->rates.sfu != 0 && model->rates.varying != 0 &&
+          model->rates.texel != 0);
+   stats->fma /= model->rates.fma;
+   stats->cvt /= model->rates.cvt;
+   stats->sfu /= model->rates.sfu;
+   stats->v /= model->rates.varying;
+   stats->t /= model->rates.texel;
+   stats->ls /= 1.0;
+}
+
+static void
 va_count_stats(bi_context *ctx, unsigned nr_ins, unsigned size,
                const struct va_stats *counts,
                struct valhall_stats *out)
 {
-   const struct pan_model *model =
-      pan_get_model(ctx->inputs->gpu_id, ctx->inputs->gpu_variant);
-
-   if (model == NULL) {
-      /* Get G57 by default: */
-      model = pan_get_model(((uint64_t)0x9001) << 16, 0);
-      assert(model);
-   }
-   unsigned arch = pan_arch(ctx->inputs->gpu_id);
+   assert(ctx->arch == ctx->inputs->arch);
 
    struct valhall_stats stats = {
       .instrs = nr_ins,
@@ -4008,21 +3998,12 @@ va_count_stats(bi_context *ctx, unsigned nr_ins, unsigned size,
 
    /* v14 doesn't have rates anymore */
    const bool output_normalized =
-      !(arch >= 14 || !!(bifrost_debug & BIFROST_DBG_STATSABS));
+      !(ctx->arch >= 14 || !!(bifrost_debug & BIFROST_DBG_STATSABS));
 
-   if (output_normalized) {
-      assert(model->rates.fma != 0 && model->rates.cvt != 0 &&
-             model->rates.sfu != 0 && model->rates.varying != 0 &&
-             model->rates.texel != 0);
-      stats.fma /= model->rates.fma;
-      stats.cvt /= model->rates.cvt;
-      stats.sfu /= model->rates.sfu;
-      stats.v /= model->rates.varying;
-      stats.t /= model->rates.texel;
-      stats.ls /= 1.0;
-   }
+   if (output_normalized)
+      va_normalize_stats(&stats, ctx);
 
-   stats.alu = pan_va_compute_alu_bound(arch, stats.fma, stats.cvt, stats.sfu);
+   stats.alu = pan_va_compute_alu_bound(ctx->arch, stats.fma, stats.cvt, stats.sfu);
    stats.cycles = MAX4(stats.alu, stats.v, stats.t, stats.ls);
 
    *out = stats;
@@ -4210,10 +4191,8 @@ bi_pack_clauses(bi_context *ctx, struct util_dynarray *binary, unsigned offset)
     * so the size remains 0) */
    unsigned prefetch_size = BIFROST_SHADER_PREFETCH - final_clause;
 
-   if (binary->size - offset) {
-      memset(util_dynarray_grow(binary, uint8_t, prefetch_size), 0,
-             prefetch_size);
-   }
+   if (binary->size - offset)
+      util_dynarray_grow_zero(binary, uint8_t, prefetch_size);
 }
 
 static int
@@ -4243,8 +4222,8 @@ bi_compile_variant_nir(nir_shader *nir,
    ctx->inputs = inputs;
    ctx->nir = nir;
    ctx->stage = nir->info.stage;
-   ctx->quirks = bifrost_get_quirks(inputs->gpu_id);
-   ctx->arch = pan_arch(inputs->gpu_id);
+   ctx->quirks = bifrost_get_quirks(inputs->arch, inputs->model);
+   ctx->arch = inputs->arch; // TODO: remove duplication
    ctx->info = info;
    ctx->idvs = idvs;
    ctx->malloc_idvs = (ctx->arch >= 9) && !inputs->no_idvs;
@@ -4530,7 +4509,7 @@ bi_compile_variant_nir(nir_shader *nir,
       va_gather_hsr_info(ctx, pinfo);
 
    /* update info struct */
-   pan_shader_update_info(pinfo, ctx->nir, inputs);
+   pan_shader_update_info(pinfo, ctx->nir, ctx->arch);
 
    if ((bifrost_debug & (BIFROST_DBG_SHADERDB|BIFROST_DBG_STATSFULL))
        && !skip_internal) {
@@ -4691,8 +4670,8 @@ static void
 pan_stats_verbose(FILE *f, const char *prefix, bi_context *ctx, const struct pan_stats *stats,
                   const struct pan_shader_info *info)
 {
-   pan_stats_verbose_prologue(f, prefix, ctx->inputs->gpu_id,
-                              ctx->inputs->gpu_variant, ctx->arch);
+   pan_stats_verbose_prologue(f, prefix, ctx->inputs->arch,
+                              ctx->inputs->model);
 
    switch (stats->isa) {
    case PAN_STAT_VALHALL: {

@@ -39,9 +39,9 @@ const struct drm_driver_descriptor descriptor_name = {         \
    }                                                                    \
    DRM_DRIVER_DESCRIPTOR(driver, NULL, 0)
 
-#define DRM_DRIVER_DESCRIPTOR_ALIAS(driver, alias, driconf, driconf_count) \
+#define DRM_DRIVER_DESCRIPTOR_ALIAS(driver, alias, driconf, driconf_count, ...) \
    DEFINE_DRM_DRIVER_DESCRIPTOR(alias##_driver_descriptor, alias, driconf, \
-                                driconf_count, pipe_##driver##_create_screen, NULL)
+                                driconf_count, pipe_##driver##_create_screen, __VA_ARGS__)
 
 #ifdef GALLIUM_KMSRO_ONLY
 #undef GALLIUM_V3D
@@ -53,6 +53,7 @@ const struct drm_driver_descriptor descriptor_name = {         \
 #undef GALLIUM_ASAHI
 #undef GALLIUM_ROCKET
 #undef GALLIUM_ETHOSU
+#undef GALLIUM_EARTHQAIC
 #endif
 
 #ifdef GALLIUM_I915
@@ -329,8 +330,11 @@ pipe_panfrost_create_screen(int fd, const struct pipe_screen_config *config)
 const driOptionDescription pan_driconf[] = {
       #include "panfrost/driinfo_panfrost.h"
 };
-DRM_DRIVER_DESCRIPTOR(panfrost, pan_driconf, ARRAY_SIZE(pan_driconf))
-DRM_DRIVER_DESCRIPTOR_ALIAS(panfrost, panthor, pan_driconf, ARRAY_SIZE(pan_driconf))
+DRM_DRIVER_DESCRIPTOR(panfrost, pan_driconf, ARRAY_SIZE(pan_driconf),
+                      .probe_nctx = panfrost_drm_probe_nctx)
+DRM_DRIVER_DESCRIPTOR_ALIAS(panfrost, panthor, pan_driconf,
+                            ARRAY_SIZE(pan_driconf),
+                            .probe_nctx = panfrost_drm_probe_nctx)
 
 #else
 DRM_DRIVER_DESCRIPTOR_STUB(panfrost)
@@ -480,6 +484,24 @@ DRM_DRIVER_DESCRIPTOR(ethosu, NULL, 0)
 
 #else
 DRM_DRIVER_DESCRIPTOR_STUB(ethosu)
+#endif
+
+#ifdef GALLIUM_EARTHQAIC
+#include "earthqaic/earthqaic_drm_public.h"
+
+static struct pipe_screen *
+pipe_qaic_create_screen(int fd, const struct pipe_screen_config *config)
+{
+   struct pipe_screen *screen;
+
+   screen = earthqaic_drm_screen_create(fd, config);
+   return screen ? debug_screen_wrap(screen) : NULL;
+}
+
+DRM_DRIVER_DESCRIPTOR(qaic, NULL, 0)
+
+#else
+DRM_DRIVER_DESCRIPTOR_STUB(qaic)
 #endif
 
 #ifdef GALLIUM_KMSRO

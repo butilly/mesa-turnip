@@ -11,6 +11,7 @@
 #include "panvk_device.h"
 #include "panvk_device_memory.h"
 #include "panvk_entrypoints.h"
+#include "panvk_image.h"
 
 #include "pan_props.h"
 
@@ -123,6 +124,31 @@ panvk_AllocateMemory(VkDevice _device,
          result = panvk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
          goto err_destroy_mem;
       }
+
+      const VkMemoryDedicatedAllocateInfo *dedicated_info =
+         vk_find_struct_const(pAllocateInfo->pNext,
+                              MEMORY_DEDICATED_ALLOCATE_INFO);
+
+      const struct wsi_memory_allocate_info *wsi_info =
+         vk_find_struct_const(pAllocateInfo->pNext,
+                              WSI_MEMORY_ALLOCATE_INFO_MESA);
+
+      if (dedicated_info && dedicated_info->image) {
+         VK_FROM_HANDLE(panvk_image, image, dedicated_info->image);
+         if (image->wsi_swapchain_image) {
+            const struct pan_image_props *props = &image->planes[0].image.props;
+            char label[128];
+            snprintf(label, sizeof(label),
+                     "WSI swapchain image format=%s extent=%ux%u modifier=0x%" PRIx64,
+                     util_format_short_name(props->format),
+                     props->extent_px.width,
+                     props->extent_px.height,
+                     props->modifier);
+            pan_kmod_set_bo_label(device->kmod.dev, mem->bo, label);
+         }
+      } else if (wsi_info && dedicated_info && dedicated_info->buffer) {
+         pan_kmod_set_bo_label(device->kmod.dev, mem->bo, "WSI blit buffer");
+      }
    }
 
    /* Always GPU-map at creation time. */
@@ -215,8 +241,8 @@ panvk_AllocateMemory(VkDevice _device,
 
    panvk_memory_emit_report(device, mem, pAllocateInfo, VK_SUCCESS);
 
-   p_atomic_add(&physical_device->memory.heap_used,
-                (uint64_t)pan_kmod_bo_size(mem->bo));
+   vk_memory_budget_add(physical_device->memory.budget, 0,
+                        pan_kmod_bo_size(mem->bo));
 
    *pMem = panvk_device_memory_to_handle(mem);
 
@@ -250,8 +276,8 @@ panvk_FreeMemory(VkDevice _device, VkDeviceMemory _mem,
    struct panvk_physical_device *physical_device =
       to_panvk_physical_device(device->vk.physical);
 
-   p_atomic_add(&physical_device->memory.heap_used,
-                -((int64_t)pan_kmod_bo_size(mem->bo)));
+   vk_memory_budget_sub(physical_device->memory.budget, 0,
+                        pan_kmod_bo_size(mem->bo));
 
    if (device->debug.decode_ctx) {
       pandecode_inject_free(device->debug.decode_ctx, mem->addr.dev,

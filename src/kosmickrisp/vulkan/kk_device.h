@@ -45,6 +45,7 @@ struct mtl_sampler_packed {
    enum mtl_sampler_reduction_mode reduction_mode;
 
    enum mtl_compare_function compare_func;
+   float lod_bias;
    float min_lod;
    float max_lod;
    uint32_t max_anisotropy;
@@ -103,6 +104,8 @@ struct kk_device {
    /* Geomtry heap */
    struct kk_bo *heap;
    util_once_flag heap_init_once;
+
+   bool gpu_capture_active;
 };
 
 VK_DEFINE_HANDLE_CASTS(kk_device, vk.base, VkDevice, VK_OBJECT_TYPE_DEVICE)
@@ -125,6 +128,8 @@ void kk_device_add_buffer_to_residency_set(struct kk_device *dev,
 void kk_device_remove_buffer_from_residency_set(struct kk_device *dev,
                                                 mtl_buffer *buffer);
 void kk_device_make_resources_resident(struct kk_device *dev);
+
+enum mtl_stages kk_enabled_stages(struct kk_device *dev);
 
 /* Required to create a sampler */
 mtl_sampler *kk_sampler_create(struct kk_device *dev,

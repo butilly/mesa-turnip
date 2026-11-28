@@ -65,6 +65,8 @@ etna_alu_to_scalar_filter_cb(const nir_instr *instr, const void *data)
    case nir_op_fsin:
    case nir_op_fdiv:
    case nir_op_imul:
+   case nir_op_imul_high:
+   case nir_op_umul_high:
       return true;
    /* TODO: can do better than alu_to_scalar for vector compares */
    case nir_op_b32all_fequal2:
@@ -502,6 +504,7 @@ get_src(struct etna_compile *c, nir_src *src)
       case nir_intrinsic_load_reg:
       case nir_intrinsic_ddx:
       case nir_intrinsic_ddy:
+      case nir_intrinsic_load_helper_invocation:
          return ra_src(c, src);
       case nir_intrinsic_load_front_face:
          return (hw_src) { .use = 1, .rgroup = ISA_REG_GROUP_INTERNAL };
@@ -693,6 +696,21 @@ emit_intrinsic(struct etna_compile *c, nir_intrinsic_instr * intr)
    case nir_intrinsic_terminate:
       etna_emit_discard(c, SRC_DISABLE);
       break;
+   case nir_intrinsic_load_helper_invocation: {
+      unsigned dst_swiz;
+      struct etna_inst_dst dst = ra_def(c, &intr->def, &dst_swiz);
+
+      /* The hlp condition ignores the sources. */
+      emit_inst(c, &(struct etna_inst) {
+         .dst = dst,
+         .opcode = ISA_OPC_CMP,
+         .cond = ISA_COND_HLP,
+         .type = ISA_TYPE_U32,
+         .src[0] = etna_immediate_int(0),
+         .src[1] = etna_immediate_int(0),
+         .src[2] = etna_immediate_int(-1),
+      });
+   } break;
    case nir_intrinsic_ddx: {
       unsigned dst_swiz;
       struct etna_inst_dst dst = ra_def(c, &intr->def, &dst_swiz);
@@ -781,7 +799,6 @@ emit_intrinsic(struct etna_compile *c, nir_intrinsic_instr * intr)
          .type = ISA_TYPE_U32,
          .denorm = 1,
          .dst = {
-            .use = 1,
             .write_mask = nir_intrinsic_write_mask(intr),
          },
          .src[0] = get_src(c, &intr->src[1]),
@@ -984,7 +1001,7 @@ lower_alu(struct etna_compile *c, nir_alu_instr *alu)
    case nir_op_vec4:
       break;
    default:
-      if (c->specs->has_no_oneconst_limit)
+      if (etna_core_has_feature(c->info, ETNA_FEATURE_SH_NO_ONECONST_LIMIT))
          return;
 
       nir_const_value value[4] = {};
@@ -1497,6 +1514,7 @@ compile_shader(struct etna_shader_variant *v, bool spill_constants)
    NIR_PASS(_, s, nir_lower_alu_to_scalar, etna_alu_to_scalar_filter_cb, c->info);
 
    NIR_PASS(_, s, nir_remove_dead_variables, nir_var_function_temp, NULL);
+   NIR_PASS(_, s, nir_lower_frexp);
    NIR_PASS(_, s, nir_opt_algebraic_late);
 
    NIR_PASS(_, s, nir_move_vec_src_uses_to_dest, false);
@@ -1510,7 +1528,7 @@ compile_shader(struct etna_shader_variant *v, bool spill_constants)
 
    NIR_PASS(_, s, etna_nir_lower_bitfield_insert);
    NIR_PASS(_, s, nir_lower_bool_to_int32);
-   NIR_PASS(_, s, etna_lower_alu, c->specs->has_new_transcendentals);
+   NIR_PASS(_, s, etna_lower_alu, etna_core_has_feature(c->info, ETNA_FEATURE_HAS_FAST_TRANSCENDENTALS));
 
    if (spill_constants)
       NIR_PASS(_, s, etna_nir_spill_constants);
@@ -1537,13 +1555,14 @@ compile_shader(struct etna_shader_variant *v, bool spill_constants)
       emit_inst(c, &(struct etna_inst) { .opcode = ISA_OPC_NOP });
 
    /* assemble instructions, fixing up labels */
+   const bool has_no_oneconst_limit = etna_core_has_feature(c->info, ETNA_FEATURE_SH_NO_ONECONST_LIMIT);
    uint32_t *code = MALLOC(c->inst_ptr * 16);
    for (unsigned i = 0; i < c->inst_ptr; i++) {
       struct etna_inst *inst = &c->code[i];
       if (inst->opcode == ISA_OPC_BRANCH || inst->opcode == ISA_OPC_BRANCH_UNARY || inst->opcode == ISA_OPC_BRANCH_BINARY)
          inst->imm = block_ptr[inst->imm];
 
-      etna_assemble(&code[i * 4], inst, specs->has_no_oneconst_limit);
+      etna_assemble(&code[i * 4], inst, has_no_oneconst_limit);
    }
 
    v->code_size = c->inst_ptr * 4;

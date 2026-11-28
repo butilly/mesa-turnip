@@ -429,8 +429,8 @@ fd_set_viewport_states(struct pipe_context *pctx, unsigned start_slot,
 
    fd_context_dirty(ctx, FD_DIRTY_VIEWPORT);
 
-   /* Guardband is only used on a6xx so far: */
-   if (!is_a6xx(ctx->screen))
+   /* Guardband is only used on a5xx and a6xx so far: */
+   if (!is_a5xx(ctx->screen) && !is_a6xx(ctx->screen))
       return;
 
    ctx->guardband.x = ~0;
@@ -737,7 +737,7 @@ fd_set_global_binding(struct pipe_context *pctx, unsigned first, unsigned count,
                                 struct pipe_resource *, i) = NULL;
    }
 
-   for (unsigned i = first; i < first + count; ++i) {
+   for (unsigned i = 0; i < count; ++i) {
       struct pipe_resource **res = util_dynarray_element(&ctx->global_bindings,
                                                          struct pipe_resource *,
                                                          first + i);

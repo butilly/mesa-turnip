@@ -435,27 +435,13 @@ st_get_sampler_view_format(const struct st_context *st,
    case PIPE_FORMAT_Y16_U16_V16_420_UNORM:
    case PIPE_FORMAT_Y16_U16_V16_422_UNORM:
    case PIPE_FORMAT_Y16_U16_V16_444_UNORM:
-      format = PIPE_FORMAT_R16_UNORM;
-      break;
    case PIPE_FORMAT_Y210:
-      if (texObj->pt->format == PIPE_FORMAT_X6R10X6G10_X6R10X6B10_422_UNORM)
-         format = texObj->pt->format;
-      else
-         format = PIPE_FORMAT_R16G16_UNORM;
-      break;
    case PIPE_FORMAT_Y212:
    case PIPE_FORMAT_Y216:
-      if (texObj->pt->format == PIPE_FORMAT_R16G16_R16B16_422_UNORM)
-         format = texObj->pt->format;
-      else
-         format = PIPE_FORMAT_R16G16_UNORM;
-      break;
    case PIPE_FORMAT_Y410:
-      format = PIPE_FORMAT_R10G10B10A2_UNORM;
-      break;
    case PIPE_FORMAT_Y412:
    case PIPE_FORMAT_Y416:
-      format = PIPE_FORMAT_R16G16B16A16_UNORM;
+      format = texObj->pt->format;
       break;
    case PIPE_FORMAT_YUYV:
    case PIPE_FORMAT_YVYU:
@@ -641,6 +627,10 @@ st_get_buffer_sampler_view_from_stobj(struct st_context *st,
    unsigned size = buf->width0 - base;
    size = MIN2(size, (unsigned)texObj->BufferSize);
    if (!size)
+      return NULL;
+
+   /* Size must be bigger than format blocksize. */
+   if (size < util_format_get_blocksize(format))
       return NULL;
 
    /* Create a new sampler view. There is no need to clear the entire

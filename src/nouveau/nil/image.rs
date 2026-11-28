@@ -1,13 +1,14 @@
 // Copyright © 2024 Collabora, Ltd.
 // SPDX-License-Identifier: MIT
 
-use crate::extent::{units, Extent4D};
+use crate::Minify;
+use crate::extent::{Extent4D, units};
 use crate::format::Format;
 use crate::modifiers::*;
 use crate::tiling::Tiling;
-use crate::Minify;
 
-use nil_rs_bindings::*;
+use mesa_util::format::pipe_format::*;
+use mesa_util::format::*;
 use nvidia_headers::classes::{cl9097, cla097, clb197, clc597, clcd97};
 
 use std::panic;
@@ -28,6 +29,14 @@ pub enum ImageDim {
     _1D = 1,
     _2D = 2,
     _3D = 3,
+}
+
+#[derive(Clone, Debug, Copy, PartialEq)]
+#[repr(u8)]
+pub enum ImageError {
+    Success = 0,
+    Unknown,
+    InvalidStride,
 }
 
 #[derive(Clone, Debug, Copy, PartialEq, Default)]
@@ -193,15 +202,8 @@ impl Image {
         dev: &nil_rs_bindings::nv_device_info,
         image_out: *mut Self,
         info: &ImageInitInfo,
-    ) -> bool {
-        panic::catch_unwind(|| {
-            let image = Self::new(dev, std::slice::from_ref(info), 0);
-            unsafe {
-                assert!(!image_out.is_null());
-                image_out.write(image);
-            }
-        })
-        .is_ok()
+    ) -> ImageError {
+        Self::nil_image_init_planar(dev, image_out, info, 0, 1)
     }
 
     #[unsafe(no_mangle)]
@@ -211,24 +213,28 @@ impl Image {
         info: *const ImageInitInfo,
         plane: usize,
         plane_count: usize,
-    ) -> bool {
+    ) -> ImageError {
         panic::catch_unwind(|| {
             assert!(plane < plane_count);
             let infos =
                 unsafe { std::slice::from_raw_parts(info, plane_count) };
             let image = Self::new(dev, infos, plane);
-            unsafe {
-                assert!(!image_out.is_null());
-                image_out.write(image);
+            match image {
+                Ok(image) => unsafe {
+                    assert!(!image_out.is_null());
+                    image_out.write(image);
+                    ImageError::Success
+                },
+                Err(e) => e,
             }
         })
-        .is_ok()
+        .unwrap_or(ImageError::Unknown)
     }
 
     fn new_linear(
         dev: &nil_rs_bindings::nv_device_info,
         info: &ImageInitInfo,
-    ) -> Self {
+    ) -> Result<Self, ImageError> {
         // Linear images need to be 2D
         assert!(info.dim == ImageDim::_2D);
         // Linear images can't be arrays
@@ -244,7 +250,6 @@ impl Image {
             // alignments.  The texture headers can handle as low as 32B-aligned
             // and NVK has workarounds for rendering if needed.
             assert!(info.modifier == DRM_FORMAT_MOD_LINEAR);
-            debug_assert!(info.explicit_row_stride_B % 32 == 0);
             32
         } else {
             // If we get to pick the alignment, require 128B so that we can
@@ -261,7 +266,9 @@ impl Image {
 
         let extent_B = info.extent_px.to_B(info.format, sample_layout);
         let row_stride_B = if info.explicit_row_stride_B > 0 {
-            debug_assert!(info.explicit_row_stride_B % align_B == 0);
+            if info.explicit_row_stride_B % align_B != 0 {
+                return Err(ImageError::InvalidStride);
+            }
             info.explicit_row_stride_B
         } else {
             extent_B.width.next_multiple_of(align_B)
@@ -289,14 +296,14 @@ impl Image {
             mip_tail_first_lod: 0,
         };
         image.levels[0] = level0;
-        image
+        Ok(image)
     }
 
     fn new_tiled(
         dev: &nil_rs_bindings::nv_device_info,
         infos: &[ImageInitInfo],
         plane: usize,
-    ) -> Self {
+    ) -> Result<Self, ImageError> {
         let info = &infos[plane];
         let sample_layout = SampleLayout::choose_sample_layout(info.samples);
 
@@ -399,10 +406,12 @@ impl Image {
             // Align the size to tiles
             let lvl_tiling_ext_B = lvl_tiling.extent_B();
             lvl_ext_B = lvl_ext_B.align(&lvl_tiling_ext_B);
-            assert!(
-                info.explicit_row_stride_B == 0
-                    || info.explicit_row_stride_B == lvl_ext_B.width
-            );
+
+            if info.explicit_row_stride_B != 0
+                && info.explicit_row_stride_B != lvl_ext_B.width
+            {
+                return Err(ImageError::InvalidStride);
+            }
 
             image.levels[level as usize] = ImageLevel {
                 offset_B: layer_size_B,
@@ -454,14 +463,14 @@ impl Image {
         image.align_B = std::cmp::max(image.align_B, 4096);
         image.size_B = image.size_B.next_multiple_of(image.align_B.into());
 
-        image
+        Ok(image)
     }
 
     pub fn new(
         dev: &nil_rs_bindings::nv_device_info,
         infos: &[ImageInitInfo],
         plane: usize,
-    ) -> Self {
+    ) -> Result<Self, ImageError> {
         let info = &infos[plane];
         match info.dim {
             ImageDim::_1D => {

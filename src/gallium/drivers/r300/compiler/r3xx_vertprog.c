@@ -89,12 +89,7 @@ t_src_conflict(struct rc_src_register a, struct rc_src_register b)
    if (aclass == PVS_SRC_REG_TEMPORARY)
       return 0;
 
-   if (a.RelAddr || b.RelAddr)
-      return 1;
-   if (a.Index != b.Index)
-      return 1;
-
-   return 0;
+   return a.RelAddr != b.RelAddr || a.Index != b.Index;
 }
 
 static inline uint32_t
@@ -740,32 +735,6 @@ transform_source_conflicts(struct radeon_compiler *c, struct rc_instruction *ins
    return 1;
 }
 
-static void
-rc_vs_add_artificial_outputs(struct radeon_compiler *c, void *user)
-{
-   struct r300_vertex_program_compiler *compiler = (struct r300_vertex_program_compiler *)c;
-   int i;
-
-   for (i = 0; i < 32; ++i) {
-      if ((compiler->RequiredOutputs & (1U << i)) &&
-          !(compiler->Base.Program.OutputsWritten & (1U << i))) {
-         struct rc_instruction *inst =
-            rc_insert_new_instruction(&compiler->Base, compiler->Base.Program.Instructions.Prev);
-         inst->U.I.Opcode = RC_OPCODE_MOV;
-
-         inst->U.I.DstReg.File = RC_FILE_OUTPUT;
-         inst->U.I.DstReg.Index = i;
-         inst->U.I.DstReg.WriteMask = RC_MASK_XYZW;
-
-         inst->U.I.SrcReg[0].File = RC_FILE_CONSTANT;
-         inst->U.I.SrcReg[0].Index = 0;
-         inst->U.I.SrcReg[0].Swizzle = RC_SWIZZLE_XYZW;
-
-         compiler->Base.Program.OutputsWritten |= 1U << i;
-      }
-   }
-}
-
 static int
 swizzle_is_native(rc_opcode opcode, struct rc_src_register reg)
 {
@@ -798,7 +767,6 @@ r3xx_compile_vertex_program(struct r300_vertex_program_compiler *c)
    struct radeon_compiler_pass vs_list[] = {
       /* clang-format off */
       /* NAME                        DUMP PREDICATE FUNCTION                      PARAM */
-      {"add artificial outputs",     0,   1,        rc_vs_add_artificial_outputs, NULL},
       {"native rewrite",             1,   1,        rc_local_transform,           alu_rewrite},
       {"unused channels",            1,   opt,      rc_mark_unused_channels,      NULL},
       {"dataflow optimize",          1,   opt,      rc_optimize,                  NULL},

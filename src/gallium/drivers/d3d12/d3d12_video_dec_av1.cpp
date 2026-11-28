@@ -403,16 +403,25 @@ d3d12_video_decoder_dxva_picparams_from_pipe_picparams_av1(
    for (uint32_t i = 0; i < dxvaStructure.tiles.rows; i++)
       dxvaStructure.tiles.heights[i] = pipe_av1->picture_parameter.height_in_sbs[i];
 
-   // Fix the last tile rounding when uniform_tile_spacing_flag
    if (pipe_av1->picture_parameter.pic_info_fields.uniform_tile_spacing_flag) {
       uint32_t sbPixSize = pipe_av1->picture_parameter.seq_info_fields.use_128x128_superblock ? 128 : 64;
+      /* frame_width is the upscaled width. Tiles are laid out on the coded (downscaled)
+       * width, so undo superres before deriving the last tile column.
+       * AV1 spec 7.5: FrameWidth = (UpscaledWidth * 8 + (SuperresDenom / 2)) / SuperresDenom */
+      uint32_t codedWidth = pipe_av1->picture_parameter.frame_width;
+      if (pipe_av1->picture_parameter.pic_info_fields.use_superres) {
+         uint32_t denom = pipe_av1->picture_parameter.superres_scale_denominator;
+         if (denom)
+            codedWidth = (codedWidth * 8u + (denom / 2u)) / denom;
+      }
+
       if (dxvaStructure.tiles.cols > 1) {
          uint32_t acumSbWMinusLast = 0;
          for (uint32_t i = 0; i < dxvaStructure.tiles.cols - 1u; i++)
             acumSbWMinusLast += dxvaStructure.tiles.widths[i];
 
          dxvaStructure.tiles.widths[dxvaStructure.tiles.cols-1] = static_cast<uint16_t>(
-            std::ceil(pipe_av1->picture_parameter.frame_width / (float)sbPixSize) - acumSbWMinusLast);
+            std::ceil(codedWidth / (float)sbPixSize) - acumSbWMinusLast);
       }
 
       if (dxvaStructure.tiles.rows > 1) {
@@ -421,7 +430,7 @@ d3d12_video_decoder_dxva_picparams_from_pipe_picparams_av1(
             acumSbHMinusLast += dxvaStructure.tiles.heights[i];
 
          dxvaStructure.tiles.heights[dxvaStructure.tiles.rows-1] = static_cast<uint16_t>(
-            std::ceil(pipe_av1->picture_parameter.frame_width / (float)sbPixSize) - acumSbHMinusLast);
+            std::ceil(pipe_av1->picture_parameter.frame_height / (float)sbPixSize) - acumSbHMinusLast);
       }
    }
 
@@ -602,12 +611,21 @@ d3d12_video_decoder_dxva_picparams_from_pipe_picparams_av1(
          dxvaStructure.film_grain.scaling_points_cr[i][0] = pipe_av1->picture_parameter.film_grain_info.point_cr_value[i];
          dxvaStructure.film_grain.scaling_points_cr[i][1] = pipe_av1->picture_parameter.film_grain_info.point_cr_scaling[i];
       }
+      /* VA-API delivers the AR coefficients as signed values in [-128, 127]
+       * (va_dec_av1.h: int8_t ar_coeffs_y[24]), but the DXVA AV1 picture
+       * parameters carry the raw bitstream syntax element ar_coeffs_*_plus_128
+       * in an unsigned field. Re-apply the +128 bias on the way out, otherwise
+       * every AR coefficient is off by 128 and the grain loses its spatial
+       * correlation. */
       for (uint32_t i = 0; i < 24; i++) {
-         dxvaStructure.film_grain.ar_coeffs_y[i] = pipe_av1->picture_parameter.film_grain_info.ar_coeffs_y[i];
+         dxvaStructure.film_grain.ar_coeffs_y[i] =
+            (uint8_t) (pipe_av1->picture_parameter.film_grain_info.ar_coeffs_y[i] + 128);
       }
       for (uint32_t i = 0; i < 25; i++) {
-         dxvaStructure.film_grain.ar_coeffs_cb[i] = pipe_av1->picture_parameter.film_grain_info.ar_coeffs_cb[i];
-         dxvaStructure.film_grain.ar_coeffs_cr[i] = pipe_av1->picture_parameter.film_grain_info.ar_coeffs_cr[i];
+         dxvaStructure.film_grain.ar_coeffs_cb[i] =
+            (uint8_t) (pipe_av1->picture_parameter.film_grain_info.ar_coeffs_cb[i] + 128);
+         dxvaStructure.film_grain.ar_coeffs_cr[i] =
+            (uint8_t) (pipe_av1->picture_parameter.film_grain_info.ar_coeffs_cr[i] + 128);
       }
       dxvaStructure.film_grain.cb_mult      = pipe_av1->picture_parameter.film_grain_info.cb_mult;
       dxvaStructure.film_grain.cb_luma_mult = pipe_av1->picture_parameter.film_grain_info.cb_luma_mult;

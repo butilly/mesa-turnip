@@ -13,15 +13,19 @@ ExecuTorch orchestrating data movement between delegates.
 
 Output per op or model per device:
 
-  <dir>/<device>.pte            -- compiled program
-  <dir>/<device>-input-{i}.data -- float32 input(s)
-  <dir>/<device>.json           -- quantisation metadata
-  <dir>/output-{i}.data         -- float32 CPU reference (model mode)
+  <dir>/<device>.pte             -- compiled program
+  <dir>/<device>-input-{i}.data  -- float32 input(s)
+  <dir>/<device>.json            -- quantisation metadata
+  <dir>/output-{i}.data          -- quantised CPU output the test compares against
+  <dir>/float-output-{i}.data    -- float32 CPU reference
 
 Usage:
   python compile_torx_tests.py <op_dir> <stamp_file>
   python compile_torx_tests.py --all <model_dir> <stamp_file>
-  python compile_torx_tests.py --whole-model <pt2_file> <out_dir> <stamp_file>
+  python compile_torx_tests.py --whole-model [--output-convention <name>]
+                               [--input <npy_file>]...
+                               [--float-module <module_name>]...
+                               <pt2_file> <out_dir> <stamp_file>
 
 --all compiles every numbered per-op directory under <model_dir>, in
 parallel across processes.
@@ -35,14 +39,21 @@ import sys
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
+import numpy
+
 _script_dir = Path(__file__).resolve().parent
 if str(_script_dir) not in sys.path:
     sys.path.insert(0, str(_script_dir))
 
+import torch.ao.quantization.fx._decomposed  # noqa: F401
+
+from extract_subgraph import is_dequantize, is_quantize  # noqa: E402
 from compile_torx_common import (
+    QuantisationError,
+    check_quantisation,
+    clone_inputs,
     compile_to_pte,
     configure_known_warning_filters,
-    compute_max_quant_error,
     extract_quant_output_params,
     get_device,
     prepare_pt2e,
@@ -64,30 +75,63 @@ def _collect_tensors(obj):
     return []
 
 
-def _write_artifacts(out_dir, module, example_inputs, output_qparams, device):
-    """Persist inputs, quantisation metadata, and the compiled .pte."""
+def _run(module, example_inputs):
+    with torch.no_grad():
+        return _collect_tensors(module(*clone_inputs(example_inputs)))
+
+
+def _example_inputs(ep, input_shapes):
+    if ep.example_inputs is not None and ep.example_inputs[0]:
+        if ep.example_inputs[1]:
+            print("Keyword example inputs are not supported",
+                  file=sys.stderr)
+            sys.exit(1)
+        return tuple(ep.example_inputs[0])
+    torch.manual_seed(42)
+    return tuple(torch.randn(s) for s in input_shapes)
+
+
+def _load_inputs(input_paths, input_shapes, input_dtypes):
+    if len(input_paths) != len(input_shapes):
+        print(f"{len(input_paths)} processed inputs, the model takes "
+              f"{len(input_shapes)}", file=sys.stderr)
+        sys.exit(1)
+    inputs = []
+    for path, shape, dtype in zip(input_paths, input_shapes, input_dtypes):
+        tensor = torch.from_numpy(numpy.load(str(path), allow_pickle=False))
+        if list(tensor.shape) != shape or tensor.dtype != dtype:
+            print(f"{path}: {tensor.dtype} {list(tensor.shape)}, the model "
+                  f"takes {dtype} {shape}", file=sys.stderr)
+            sys.exit(1)
+        inputs.append(tensor)
+    return tuple(inputs)
+
+
+def _write_artifacts(out_dir, module, example_inputs, quant_outputs,
+                     output_qparams, device, output_convention=None):
+    """Persist inputs, the quantised CPU output, metadata, and the .pte."""
     for i, inp in enumerate(example_inputs):
         inp.numpy().tofile(str(out_dir / (device + f"-input-{i}.data")))
 
-    with torch.no_grad():
-        quant_output = module(*example_inputs)
-    quant_outputs = _collect_tensors(quant_output)
-
     num_outputs = len(output_qparams)
-    max_quant_errors = []
     for i in range(num_outputs):
-        max_quant_errors.append(
-            compute_max_quant_error(out_dir / f"output-{i}.data", quant_outputs[i])
-        )
+        quant_outputs[i].detach().numpy().flatten().tofile(
+            str(out_dir / f"output-{i}.data"))
 
     compile_to_pte(module, example_inputs, out_dir / (device + ".pte"))
 
-    write_json(out_dir / (device + ".json"), {
+    meta = {
         "num_outputs": num_outputs,
-        "output_scales": [float(s) for s, _ in output_qparams],
-        "output_zero_points": [int(zp) for _, zp in output_qparams],
-        "max_quant_errors": max_quant_errors,
-    })
+        "output_scales": [None if s is None else float(s)
+                          for s, _ in output_qparams],
+        "output_zero_points": [None if zp is None else int(zp)
+                               for _, zp in output_qparams],
+        "output_shapes": [list(quant_outputs[i].shape)
+                          for i in range(num_outputs)],
+    }
+    if output_convention is not None:
+        meta["output_convention"] = output_convention
+    write_json(out_dir / (device + ".json"), meta)
 
 
 def compile_op(op_dir, device):
@@ -108,6 +152,8 @@ def compile_op(op_dir, device):
         example_inputs = (example_inputs_raw,)
     else:
         example_inputs = tuple(example_inputs_raw)
+
+    float_outputs = _run(module, example_inputs)
 
     from torx import TorxQuantizer
 
@@ -134,10 +180,16 @@ def compile_op(op_dir, device):
               file=sys.stderr)
         return
 
-    _write_artifacts(op_dir, module, example_inputs, output_qparams, device)
+    quant_outputs = _run(module, example_inputs)
+    check_quantisation(float_outputs, quant_outputs, output_qparams,
+                       op_dir.name)
+
+    _write_artifacts(op_dir, module, example_inputs, quant_outputs,
+                     output_qparams, device)
 
 
-def compile_model(pt2_path, out_dir, device):
+def compile_model(pt2_path, out_dir, device, output_convention=None,
+                  input_paths=None, float_modules=()):
     if not pt2_path.exists():
         print(f"{pt2_path} not found", file=sys.stderr)
         sys.exit(1)
@@ -153,38 +205,61 @@ def compile_model(pt2_path, out_dir, device):
                         if spec.kind == InputKind.USER_INPUT]
 
     name_to_shape = {}
+    name_to_dtype = {}
     for node in ep.graph.nodes:
         if node.op == "placeholder" and node.name in user_input_names:
             name_to_shape[node.name] = [int(s) for s in node.meta['val'].shape]
+            name_to_dtype[node.name] = node.meta['val'].dtype
     input_shapes = [name_to_shape[name] for name in user_input_names
                     if name in name_to_shape]
+    input_dtypes = [name_to_dtype[name] for name in user_input_names
+                    if name in name_to_dtype]
 
     if not input_shapes:
         print("Could not determine input shape", file=sys.stderr)
         sys.exit(1)
 
-    # Generate deterministic example inputs and re-export with concrete
-    # shapes to remove shape guards from the loaded .pt2.
-    torch.manual_seed(42)
-    example_inputs = tuple(torch.randn(s) for s in input_shapes)
+    if input_paths:
+        example_inputs = _load_inputs(input_paths, input_shapes,
+                                      input_dtypes)
+    else:
+        example_inputs = _example_inputs(ep, input_shapes)
+
+    # Re-export with concrete shapes to remove shape guards from the
+    # loaded .pt2.
     ep = torch.export.export(module, example_inputs, strict=False)
     module = ep.module()
 
-    with torch.no_grad():
-        float_output = module(*example_inputs)
-    for i, out in enumerate(_collect_tensors(float_output)):
-        out.numpy().tofile(str(out_dir / f"output-{i}.data"))
+    float_outputs = _run(module, example_inputs)
+    for i, out in enumerate(float_outputs):
+        out.numpy().tofile(str(out_dir / f"float-output-{i}.data"))
 
     torch.save(example_inputs, str(out_dir / "example_input.pt"))
 
-    module = quantize_module(module, example_inputs)
+    is_quantized = any(is_quantize(node) or is_dequantize(node)
+                       for node in module.graph.nodes)
+    if not is_quantized:
+        module = quantize_module(module, example_inputs,
+                                 float_modules=float_modules)
 
+    quant_outputs = _run(module, example_inputs)
     output_qparams = extract_quant_output_params(module)
+    if not output_qparams and float_modules:
+        output_qparams = [(None, None)] * len(quant_outputs)
     if not output_qparams:
         print("    ERROR: could not extract quant params", file=sys.stderr)
         sys.exit(1)
 
-    _write_artifacts(out_dir, module, example_inputs, output_qparams, device)
+    if is_quantized:
+        print(f"    {out_dir.name}: the exported program is already "
+              "quantised, the quantisation check does not apply",
+              file=sys.stderr)
+    else:
+        check_quantisation(float_outputs, quant_outputs, output_qparams,
+                           out_dir.name)
+
+    _write_artifacts(out_dir, module, example_inputs, quant_outputs,
+                     output_qparams, device, output_convention)
 
 
 def _compile_op_worker(op_dir_str):
@@ -229,24 +304,48 @@ def main():
     mode.add_argument("--whole-model", action="store_true",
                       help="compile a whole-model .pt2 with mixed NPU/CPU "
                            "delegation")
+    parser.add_argument("--output-convention",
+                        help="with --whole-model, the model zoo's name "
+                             "for what the model's output holds")
+    parser.add_argument("--input", type=Path, action="append",
+                        help="a processed input of the whole model, a "
+                             "NumPy .npy file; once per input the model "
+                             "takes, in the model's input order")
+    parser.add_argument("--float-module", action="append", default=[],
+                        help="a module of the whole model to leave "
+                             "unquantised, by its name in the exported "
+                             "program; once per module")
     parser.add_argument("paths", nargs="+")
     args = parser.parse_args()
 
-    if args.whole_model:
-        if len(args.paths) != 3:
-            parser.error("--whole-model needs <pt2_file> <out_dir> <stamp_file>")
-        pt2_path, out_dir, stamp_file = (Path(p) for p in args.paths)
-        compile_model(pt2_path, out_dir, get_device())
-    elif args.all:
-        if len(args.paths) != 2:
-            parser.error("--all needs <model_dir> <stamp_file>")
-        model_dir, stamp_file = (Path(p) for p in args.paths)
-        compile_all_ops(model_dir, get_device())
-    else:
-        if len(args.paths) != 2:
-            parser.error("per-op mode needs <op_dir> <stamp_file>")
-        op_dir, stamp_file = (Path(p) for p in args.paths)
-        compile_op(op_dir, get_device())
+    try:
+        if args.whole_model:
+            if len(args.paths) != 3:
+                parser.error(
+                    "--whole-model needs <pt2_file> <out_dir> <stamp_file>")
+            pt2_path, out_dir, stamp_file = (Path(p) for p in args.paths)
+            compile_model(pt2_path, out_dir, get_device(),
+                          args.output_convention, args.input,
+                          args.float_module)
+        elif args.output_convention is not None:
+            parser.error("--output-convention needs --whole-model")
+        elif args.input is not None:
+            parser.error("--input needs --whole-model")
+        elif args.float_module:
+            parser.error("--float-module needs --whole-model")
+        elif args.all:
+            if len(args.paths) != 2:
+                parser.error("--all needs <model_dir> <stamp_file>")
+            model_dir, stamp_file = (Path(p) for p in args.paths)
+            compile_all_ops(model_dir, get_device())
+        else:
+            if len(args.paths) != 2:
+                parser.error("per-op mode needs <op_dir> <stamp_file>")
+            op_dir, stamp_file = (Path(p) for p in args.paths)
+            compile_op(op_dir, get_device())
+    except QuantisationError as e:
+        print(f"    ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
 
     write_stamp(stamp_file)
 

@@ -256,7 +256,7 @@ v3d_setup_plane_slices(struct v3dv_device *device, struct v3dv_image *image,
       if (image->from_wsi) {
          slice->stride =
             align(slice->stride,
-                  v3d_simulator_get_raster_stride_align(device->pdevice->render_fd));
+                  v3d_simulator_get_raster_stride_align(device->fd));
       }
 #endif
 
@@ -659,6 +659,10 @@ get_image_subresource_layout(struct v3dv_device *device,
             layout->size = prev_slice->offset - slice->offset;
       }
    }
+   VkSubresourceHostMemcpySize *memcpy_size =
+      vk_find_struct(layout2->pNext, SUBRESOURCE_HOST_MEMCPY_SIZE);
+   if (memcpy_size)
+      memcpy_size->size = layout->size;
 }
 
 VKAPI_ATTR void VKAPI_CALL

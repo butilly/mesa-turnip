@@ -105,7 +105,25 @@ static const struct {
      "FDM is disabled due to the presence of LOAD_OP_LOAD or LOAD_OP_STORE" },
 };
 
-static uint32_t gpu_clock_id;
+/* See: https://perfetto.dev/docs/concepts/clock-sync
+ *
+ * Use sequence-scoped clock (64 <= ID < 128) for GPU clock because
+ * there's no central daemon emitting consistent snapshots for
+ * synchronization between CPU and GPU clocks on behalf of renderstages
+ * and counters producers.
+ *
+ * When CPU clock is the same with the authoritative trace clock
+ * (normally default to CLOCK_BOOTTIME), perfetto drops the
+ * non-monotonic snapshots to ensure validity of the global source clock
+ * in the resolution graph. When they are different, the clocks are
+ * marked invalid and the rest of the clock syncs will fail during trace
+ * processing.
+ *
+ * Meanwhile, since the clock is now sequence-scoped (unique per
+ * producer + writer pair within the tracing session), we can simply
+ * pick 64.
+ */
+static constexpr uint32_t gpu_clock_id = 64;
 
 static uint64_t
 get_iid()
@@ -120,47 +138,10 @@ struct TuRenderpassTraits : public perfetto::DefaultDataSourceTraits {
 
 class TuRenderpassDataSource : public MesaRenderpassDataSource<TuRenderpassDataSource,
                                                                TuRenderpassTraits> {
-   void OnStart(const StartArgs &args) override
-   {
-      MesaRenderpassDataSource<TuRenderpassDataSource, TuRenderpassTraits>::OnStart(args);
-
-      /* See: https://perfetto.dev/docs/concepts/clock-sync
-       *
-       * Use sequence-scoped clock (64 <= ID < 128) for GPU clock because
-       * there's no central daemon emitting consistent snapshots for
-       * synchronization between CPU and GPU clocks on behalf of renderstages
-       * and counters producers.
-       *
-       * When CPU clock is the same with the authoritative trace clock
-       * (normally default to CLOCK_BOOTTIME), perfetto drops the
-       * non-monotonic snapshots to ensure validity of the global source clock
-       * in the resolution graph. When they are different, the clocks are
-       * marked invalid and the rest of the clock syncs will fail during trace
-       * processing.
-       *
-       * Meanwhile, since the clock is now sequence-scoped (unique per
-       * producer + writer pair within the tracing session), we can simply
-       * pick 64.
-       */
-      gpu_clock_id = 64;
-   }
 };
 
 PERFETTO_DECLARE_DATA_SOURCE_STATIC_MEMBERS(TuRenderpassDataSource);
 PERFETTO_DEFINE_DATA_SOURCE_STATIC_MEMBERS(TuRenderpassDataSource);
-
-static void
-emit_sync_timestamp(struct tu_perfetto_clocks &clocks)
-{
-   uint32_t cpu_clock_id = perfetto::protos::pbzero::BUILTIN_CLOCK_BOOTTIME;
-   uint64_t gpu_ts = clocks.gpu_ts + clocks.gpu_ts_offset;
-   TuRenderpassDataSource::Trace([=](auto tctx) {
-      MesaRenderpassDataSource<TuRenderpassDataSource,
-                               TuRenderpassTraits>::EmitClockSync(tctx, clocks.cpu,
-                                                                  gpu_ts, cpu_clock_id,
-                                                                  gpu_clock_id);
-   });
-}
 
 static void
 setup_incremental_state(TuRenderpassDataSource::TraceContext &ctx,
@@ -233,7 +214,7 @@ tu_perfetto_destroy_state(struct tu_perfetto_state *state)
 static void
 stage_cleanup(struct tu_perfetto_stage *stage)
 {
-   free((void *) stage->payload);
+   free(const_cast<void *>(stage->payload));
 
    stage->payload = nullptr;
    stage->start_payload_function = nullptr;
@@ -312,7 +293,7 @@ stage_start(struct tu_device *dev,
       .stage_id = stage_id,
       .start_ts = ts_ns,
       .payload = payload,
-      .start_payload_function = (void *) payload_as_extra,
+      .start_payload_function = reinterpret_cast<void *>(payload_as_extra),
    };
 }
 
@@ -328,7 +309,7 @@ stage_end(struct tu_device *dev, uint64_t ts_ns, enum tu_stage_id stage_id,
    struct tu_perfetto_stage_stack *stack = get_stack(dev, stage_id);
    struct tu_perfetto_stage *stage = stage_pop(stack);
    auto trace_flush_data =
-      (const struct tu_u_trace_submission_data *) flush_data;
+      static_cast<const struct tu_u_trace_submission_data *>(flush_data);
    uint32_t submission_id = trace_flush_data->submission_id;
    uint64_t gpu_ts_offset = trace_flush_data->gpu_ts_offset;
 
@@ -359,7 +340,7 @@ stage_end(struct tu_device *dev, uint64_t ts_ns, enum tu_stage_id stage_id,
       state->has_pending_clocks_sync = false;
       mtx_unlock(&state->pending_clocks_sync_mtx);
 
-      emit_sync_timestamp(clocks);
+      tu_perfetto_emit_clock_sync(&clocks);
    }
 
    uint32_t queue_id = BR_HW_QUEUE_ID;
@@ -376,7 +357,7 @@ stage_end(struct tu_device *dev, uint64_t ts_ns, enum tu_stage_id stage_id,
       while (dev->perfetto.sticky_warnings_stack.stage_depth > 0) {
          struct tu_perfetto_stage *stage =
             &dev->perfetto.sticky_warnings_stack.stages[dev->perfetto.sticky_warnings_stack.stage_depth - 1];
-         stage_end(dev, ts_ns, (tu_stage_id) stage->stage_id, nullptr, flush_data);
+         stage_end(dev, ts_ns, static_cast<tu_stage_id>(stage->stage_id), nullptr, flush_data);
       }
    }
 
@@ -427,7 +408,7 @@ stage_end(struct tu_device *dev, uint64_t ts_ns, enum tu_stage_id stage_id,
 
       if (stage->payload) {
          if (stage->start_payload_function)
-            ((trace_payload_as_extra_func) stage->start_payload_function)(
+            reinterpret_cast<trace_payload_as_extra_func>(stage->start_payload_function)(
                event, stage->payload, nullptr);
       }
 
@@ -490,6 +471,16 @@ void
 tu_perfetto_init(void)
 {
    call_once(&tu_perfetto_init_once_flag, tu_perfetto_init_once);
+}
+
+void
+tu_perfetto_emit_clock_sync(const struct tu_perfetto_clocks *clocks)
+{
+   TuRenderpassDataSource::Trace([=](auto tctx) {
+      using Base = MesaRenderpassDataSource<TuRenderpassDataSource, TuRenderpassTraits>;
+      Base::EmitClockSync(tctx, clocks->cpu, clocks->gpu_ts + clocks->gpu_ts_offset,
+                          perfetto::protos::pbzero::BUILTIN_CLOCK_BOOTTIME, gpu_clock_id);
+   });
 }
 
 uint64_t
@@ -605,7 +596,7 @@ tu_perfetto_end_submit(struct tu_queue *queue,
       auto submit = event->set_vk_queue_submit();
 
       submit->set_duration_ns(clocks.cpu - start_ts);
-      submit->set_vk_queue((uintptr_t) queue);
+      submit->set_vk_queue(reinterpret_cast<uintptr_t>(queue));
       submit->set_submission_id(submission_id);
    });
 
@@ -624,9 +615,9 @@ tu_bin_layout_data_create(const struct tu_cmd_buffer *cmd,
    const struct vk_viewport_state *vp = &cmd->vk.dynamic_graphics_state.vp;
    const struct tu_tiling_config *tiling = cmd->state.tiling;
 
-   struct tu_bin_layout_data *data = (struct tu_bin_layout_data *)
+   struct tu_bin_layout_data *data = static_cast<struct tu_bin_layout_data *>(
       ralloc_size(NULL, sizeof(struct tu_bin_layout_data) +
-                        tile_count * sizeof(struct tu_tile_config));
+                        tile_count * sizeof(struct tu_tile_config)));
    if (!data) {
       mesa_logw("Failed to allocate memory for Perfetto bin layout.");
       return NULL;
@@ -652,10 +643,10 @@ tu_bin_layout_data_create(const struct tu_cmd_buffer *cmd,
       }
 
       data->viewports[i] = (VkRect2D){
-         .offset = { .x = (int32_t)vp->viewports[i].x, .y = (int32_t)y },
+         .offset = { .x = static_cast<int32_t>(vp->viewports[i].x), .y = static_cast<int32_t>(y) },
          .extent = {
-            .width = (uint32_t)vp->viewports[i].width,
-            .height = (uint32_t)height,
+            .width = static_cast<uint32_t>(vp->viewports[i].width),
+            .height = static_cast<uint32_t>(height),
          },
       };
    }
@@ -742,11 +733,11 @@ tu_bin_layout_data_json_serialize(enum u_trace_backend_type backend_type,
    JSON_Value *binInfo_v = json_value_init_object();
    JSON_Object *binInfo = json_object(binInfo_v);
 
-   json_object_set_number(binInfo, "version", (double) version);
+   json_object_set_number(binInfo, "version", static_cast<double>(version));
 
    json_append_extent2D(binInfo, "fbSize", data->fb_size);
    json_append_extent2D(binInfo, "binSize", data->bin_size);
-   json_object_set_number(binInfo, "viewCount", (double) data->view_count);
+   json_object_set_number(binInfo, "viewCount", static_cast<double>(data->view_count));
 
    JSON_Value *viewports_v = json_value_init_array();
    JSON_Array *viewports = json_array(viewports_v);
@@ -813,7 +804,7 @@ tu_bin_layout_data_json_serialize(enum u_trace_backend_type backend_type,
    json_object_set_value(binInfo, "perViewFDMScale", perViewFDMScale_v);
 
    size_t size = json_serialization_size(binInfo_v);
-   char *serialized = (char *) ralloc_size(NULL, size);
+   char *serialized = static_cast<char *>(ralloc_size(NULL, size));
 
    json_serialize_to_buffer(binInfo_v, serialized, size);
    json_value_free(binInfo_v);

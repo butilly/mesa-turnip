@@ -22,6 +22,7 @@
 #define SHRAM_LUT_BASE(lut)         ((SHRAM_TOTAL_BANKS - SHRAM_RESERVED_END_BANKS) * \
                                      SHRAM_BANK_SIZE_BYTES + (lut) * LUT8_SIZE)
 #define SOFTMAX_MAX_DEPTH           4095
+#define FEATURE_MAP_MAX_DIM         65536
 #define ACC_BITS                    32 /* Use for now always 32-bit accumulators */
 #define IFM_GRANULE                 8
 #define ACC_GRANULE                 16
@@ -104,6 +105,13 @@ enum ethosu_upscale_mode {
    ETHOSU_UPSCALE_NONE = 0,
    ETHOSU_UPSCALE_NEAREST = 1,
    ETHOSU_UPSCALE_ZEROS = 2,
+};
+
+enum ethosu_transpose_type {
+   ETHOSU_TRANSPOSE_NONE = 0,
+   ETHOSU_TRANSPOSE_HEIGHT_WIDTH,
+   ETHOSU_TRANSPOSE_WIDTH_DEPTH,
+   ETHOSU_TRANSPOSE_HEIGHT_DEPTH,
 };
 
 struct ethosu_stride {
@@ -217,8 +225,12 @@ struct ethosu_operation {
       struct {
          struct ethosu_address_range weights;
          struct ethosu_address_range scales;
+         uint8_t *weight_data;
+         unsigned weight_data_size;
+         int32_t *bias_data;
          bool depthwise;
          bool weight_sparse;
+         bool weights_in_sram;
          unsigned scale;
          unsigned shift;
          int activation_min;
@@ -228,6 +240,7 @@ struct ethosu_operation {
       struct {
          enum ethosu_pooling_type type;
          bool nop;
+         enum ethosu_transpose_type transpose;
       } pooling;
 
       struct {
@@ -252,6 +265,7 @@ struct ethosu_operation {
    struct ethosu_feature_map ifm2;
    struct ethosu_feature_map ofm;
    struct ethosu_address_range lut;
+   bool reuses_coefs;
 
    struct ethosu_kernel kernel;
    struct ethosu_padding pad;
@@ -268,9 +282,10 @@ struct ethosu_tensor {
    unsigned index;
    unsigned offset;
    unsigned size;
-   unsigned required_size;
    unsigned batches;
    uint8_t type_size;
+   uint8_t users;
+   bool is_external_output;
    struct ethosu_block shape;
    enum ethosu_layout layout;
 };
@@ -360,5 +375,17 @@ int ethosu_round_up_to_multiple(int a, int b);
 int ethosu_round_up_divide(int a, int b);
 
 int ethosu_quantize_scale(double scale, int32_t *shift, bool reduced);
+
+static inline bool
+ethosu_is_feature_map_in_io(const struct ethosu_feature_map *fm)
+{
+   if (fm->region != IO_REGION || !fm->tensor || fm->has_scalar)
+      return false;
+
+   if (fm->activation_storage == ETHOSU_ACTIVATION_STORAGE_CHAINED)
+      return false;
+
+   return true;
+}
 
 #endif /* ETHOSU_ML_H */

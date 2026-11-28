@@ -13,6 +13,7 @@
 #include "kk_cmd_buffer.h"
 #include "kk_format.h"
 #include "kk_image_view.h"
+#include "kk_instance.h"
 #include "kk_physical_device.h"
 #include "kk_query_pool.h"
 
@@ -362,6 +363,16 @@ kk_CmdBeginRendering(VkCommandBuffer commandBuffer,
 
    render->rendering_to_whole_framebuffer = is_whole_framebuffer;
 
+   if (!is_whole_framebuffer) {
+      /* Vulkan allows overlapping render passes with the same images as long
+       * as their render areas don't overlap.
+       * Metal does not.
+       * The render pass can also overlap with other work if that's outside
+       * the render area so we need a barrier for all stages unfortunately. */
+      cmd->barrier.pending.after |= MTL_STAGE_ALL;
+      cmd->barrier.pending.before |= MTL_STAGE_FRAGMENT;
+   }
+
    /* renderTargetWidth/Height doesn't seem to guarantee
     * that the attachments won't get touched outside the area
     * so just checking for offset = 0 doesn't cut it. */
@@ -531,6 +542,7 @@ kk_CmdEndRendering2KHR(VkCommandBuffer commandBuffer,
                        UNUSED const VkRenderingEndInfoKHR *pRenderingEndInfo)
 {
    VK_FROM_HANDLE(kk_cmd_buffer, cmd, commandBuffer);
+   struct kk_device *dev = kk_cmd_buffer_device(cmd);
    struct kk_rendering_state *render = &cmd->state.gfx.render;
    bool need_meta_resolve = false;
 
@@ -628,6 +640,16 @@ kk_CmdEndRendering2KHR(VkCommandBuffer commandBuffer,
 
    kk_apply_attachment_store_ops(cmd, false);
 
+   if (render->flags & VK_RENDERING_SUSPENDING_BIT) {
+      /* We assume suspending render passes are at the end of the command buffer
+       * so avoid adding pending stages which would force us to create a compute
+       * encoder. Hopefully we'll be able to properly support suspend+resume at
+       * some point which will make this barrier obsolete. */
+      mtl_barrier_after_stages(cmd->metal.render, MTL_STAGE_FRAGMENT,
+                               MTL_STAGE_FRAGMENT,
+                               MTL_VISIBILITY_OPTION_RESOURCE_ALIAS);
+   }
+
    /* Clean up previous encoder */
    cs_end(cmd);
    mtl_release(cmd->state.gfx.render_pass_descriptor);
@@ -637,10 +659,32 @@ kk_CmdEndRendering2KHR(VkCommandBuffer commandBuffer,
        (VK_RENDERING_SUSPENDING_BIT | VK_RENDERING_CUSTOM_RESOLVE_BIT_EXT))
       need_meta_resolve = false;
 
+   if (need_meta_resolve ||
+       (render->flags & VK_RENDERING_CUSTOM_RESOLVE_BIT_EXT)) {
+      cmd->barrier.pending.after |= MTL_STAGE_FRAGMENT;
+      cmd->barrier.pending.before |= MTL_STAGE_FRAGMENT;
+   }
+
+   bool rendering_to_whole_framebuffer = render->rendering_to_whole_framebuffer;
    memset(render, 0, sizeof(*render));
 
    if (need_meta_resolve) {
       kk_meta_resolve_rendering(cmd, &vk_render);
+   }
+
+   if (!rendering_to_whole_framebuffer) {
+      /* The render pass could overlap with other work as long as the render
+       * area doesn't overlap with read/writes from that work.
+       * We need a barrier in Metal. */
+      cmd->barrier.pending.after |= MTL_STAGE_FRAGMENT;
+      cmd->barrier.pending.before |= MTL_STAGE_ALL;
+   }
+
+   struct kk_instance *instance = kk_physical_device_instance(
+      (struct kk_physical_device *)dev->vk.physical);
+   if (instance->drirc.misc.sync_render_passes) {
+      cmd->barrier.pending.after |= MTL_STAGE_FRAGMENT;
+      cmd->barrier.pending.before |= MTL_STAGE_FRAGMENT;
    }
 }
 
@@ -833,19 +877,16 @@ kk_calculate_vbo_clamp(uint64_t vbuf, uint64_t sink, enum pipe_format format,
    }
 }
 
-static bool
-is_primitive_culled(VkPrimitiveTopology topology)
+/* The GS output primitive if one is bound, otherwise the input topology */
+static enum mesa_prim
+kk_rast_prim(struct kk_cmd_buffer *cmd)
 {
-   switch (topology) {
-   case VK_PRIMITIVE_TOPOLOGY_POINT_LIST:
-   case VK_PRIMITIVE_TOPOLOGY_LINE_LIST:
-   case VK_PRIMITIVE_TOPOLOGY_LINE_STRIP:
-   case VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY:
-   case VK_PRIMITIVE_TOPOLOGY_LINE_STRIP_WITH_ADJACENCY:
-      return false;
-   default:
-      return true;
-   }
+   struct kk_shader *gs = cmd->state.shaders[MESA_SHADER_GEOMETRY];
+   if (gs)
+      return gs->info.gs.mode;
+
+   return vk_topology_to_mesa(
+      cmd->vk.dynamic_graphics_state.ia.primitive_topology);
 }
 
 static void
@@ -970,6 +1011,9 @@ kk_flush_render_pass(struct kk_cmd_buffer *cmd)
          kk_apply_attachment_store_ops(cmd, true);
       }
 
+      mtl_barrier_after_stages(cmd->metal.render, MTL_STAGE_FRAGMENT,
+                               MTL_STAGE_FRAGMENT,
+                               MTL_VISIBILITY_OPTION_RESOURCE_ALIAS);
       cs_end(cmd);
       kk_cmd_buffer_dirty_all_gfx(cmd);
       cmd->state.gfx.need_to_start_render_pass = true;
@@ -1056,23 +1100,53 @@ kk_heap(struct kk_cmd_buffer *cmd)
 
    /* We need to free all allocations after each command buffer execution */
    if (!cmd->uses_heap) {
+      /* Wait for the stages that use the heap in other command buffers. */
+      struct mtl_compute_encoder *enc = cs_get_compute(cmd);
+      mtl_barrier_after_queue_stages(enc, MTL_STAGE_DISPATCH | MTL_STAGE_VERTEX,
+                                     MTL_STAGE_DISPATCH,
+                                     MTL_VISIBILITY_OPTION_RESOURCE_ALIAS);
+
+      enum mtl_stages used_stages = mtl_compute_used_stages(cmd->metal.compute);
+      if (used_stages & MTL_STAGE_DISPATCH)
+         mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH,
+                                          MTL_STAGE_DISPATCH,
+                                          MTL_VISIBILITY_OPTION_RESOURCE_ALIAS);
+
       uint64_t addr = dev->heap->gpu;
 
       /* Zeroing the allocated index frees everything. Force compute encoder
-       * since this path is only taken by tessellation and unroll which already
-       * force a compute encoder break */
-      mtl_compute_encoder *encoder = cs_get_compute(cmd);
-      kk_cmd_write(cmd, (struct libkk_imm_write){
-                           addr + offsetof(struct poly_heap, bottom), 0});
+       * since this path is only taken by tessellation, GS and unroll, which
+       * already force a compute encoder break */
+      libkk_write_u32(cmd, kk_grid_1d(1), true,
+                      addr + offsetof(struct poly_heap, bottom), 0u);
+
+      mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH,
+                                       MTL_STAGE_DISPATCH,
+                                       MTL_VISIBILITY_OPTION_RESOURCE_ALIAS);
 
       /* Ensure heap is set to 0 before we allocate anything. */
-      mtl_barrier_after_encoder_stages(encoder, MTL_STAGE_DISPATCH,
-                                       MTL_STAGE_DISPATCH);
+      mtl_barrier_after_stages(enc, MTL_STAGE_DISPATCH,
+                               MTL_STAGE_DISPATCH | MTL_STAGE_VERTEX,
+                               MTL_VISIBILITY_OPTION_RESOURCE_ALIAS);
 
       cmd->uses_heap = true;
    }
 
    return dev->heap->gpu;
+}
+
+/* GPU-generated indices are allocated from the heap, past its header */
+static struct kk_addr_range
+kk_heap_indices(struct kk_cmd_buffer *cmd)
+{
+   struct kk_device *dev = kk_cmd_buffer_device(cmd);
+   uint64_t heap = kk_heap(cmd);
+
+   /* TODO_KOSMICKRISP Self-contained until we have rodata at the device. */
+   return (struct kk_addr_range){
+      .addr = heap + sizeof(struct poly_heap),
+      .range = dev->heap->size_B - sizeof(struct poly_heap),
+   };
 }
 
 enum kk_predicate_op : uint16_t {
@@ -1130,7 +1204,8 @@ static uint64_t
 kk_upload_vertex_params(struct kk_cmd_buffer *cmd,
                         const struct kk_draw_data *data)
 {
-   const uint32_t wg_size[3] = {1, 1, 1};
+   /* Threadgroup size of indirect-local dispatches */
+   const uint32_t wg_size[3] = {KK_POLY_WG_SIZE, 1, 1};
 
    struct poly_vertex_params params;
    poly_vertex_params_init(&params, 0, wg_size);
@@ -1149,12 +1224,12 @@ kk_upload_vertex_params(struct kk_cmd_buffer *cmd,
    }
 
    struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
-   params.outputs = vs->info.vs.outputs_written;
+   params.outputs = vs->info.outputs_written;
 
    if (!indirect) {
       uint32_t verts = data->grid.size.x, instances = data->grid.size.y;
       unsigned vb_size =
-         poly_tcs_in_size(verts * instances, vs->info.vs.outputs_written);
+         poly_tcs_in_size(verts * instances, vs->info.outputs_written);
 
       /* Allocate if there are any outputs, or use the null sink to trap
        * reads if there aren't. Those reads are undefined but should not
@@ -1255,6 +1330,73 @@ kk_upload_tess_params(struct kk_cmd_buffer *cmd, struct poly_tess_params *out,
    memcpy(out, &args, sizeof(args));
 }
 
+static enum mesa_prim
+kk_gs_in_prim(struct kk_cmd_buffer *cmd)
+{
+   if (cmd->state.shaders[MESA_SHADER_TESS_EVAL])
+      return cmd->state.gfx.tess.prim;
+
+   return vk_topology_to_mesa(
+      cmd->vk.dynamic_graphics_state.ia.primitive_topology);
+}
+
+static uint64_t
+kk_upload_geometry_params(struct kk_cmd_buffer *cmd,
+                          const struct kk_draw_data *draw, bool restart)
+{
+   /* The tessellator output always feeds the GS indirectly */
+   bool indirect = kk_grid_is_indirect(draw->grid) ||
+                   cmd->state.shaders[MESA_SHADER_TESS_EVAL];
+   struct kk_graphics_state *gfx = &cmd->state.gfx;
+   struct kk_shader *gs = cmd->state.shaders[MESA_SHADER_GEOMETRY];
+   enum poly_gs_shape shape = gs->info.gs.shape;
+   uint32_t max_indices = gs->info.gs.max_indices;
+
+   enum mesa_prim mode = kk_gs_in_prim(cmd);
+   if (restart)
+      mode = u_decomposed_prim(mode);
+
+   const uint32_t wg_size[3] = {KK_POLY_WG_SIZE, 1, 1};
+
+   struct poly_geometry_params params;
+   poly_geometry_params_init(&params, mode, wg_size);
+
+   if (indirect) {
+      /* The indirect setup kernel writes the draw and allocates from the
+       * heap, including the index buffer */
+      if (shape == POLY_GS_SHAPE_DYNAMIC_INDEXED)
+         gfx->gs.index = kk_heap_indices(cmd);
+   } else {
+      poly_geometry_params_set_draw(&params, mode, shape, max_indices,
+                                    draw->grid.size.x, draw->grid.size.y);
+
+      gfx->gs.index_count = params.draw.index_count;
+      gfx->gs.instance_count = params.draw.instance_count;
+
+      if (shape == POLY_GS_SHAPE_DYNAMIC_INDEXED) {
+         uint32_t size_B = gfx->gs.index_count * sizeof(uint32_t);
+         params.output_index_buffer = kk_pool_alloc(cmd, size_B, 4).gpu;
+         gfx->gs.index.addr = params.output_index_buffer;
+         gfx->gs.index.range = size_B;
+      }
+   }
+
+   if (shape == POLY_GS_SHAPE_STATIC_INDEXED) {
+      /* Metal has no 8-bit indices and restarts 16-bit ones at 0xFFFF */
+      uint16_t indices[ARRAY_SIZE(gs->info.gs.topology)];
+      for (uint32_t i = 0u; i < max_indices; ++i) {
+         uint8_t index = gs->info.gs.topology[i];
+         indices[i] = index == UINT8_MAX ? UINT16_MAX : index;
+      }
+
+      uint32_t size_B = max_indices * sizeof(uint16_t);
+      gfx->gs.index.addr = kk_pool_upload(cmd, indices, size_B, 4).gpu;
+      gfx->gs.index.range = size_B;
+   }
+
+   return kk_pool_upload(cmd, &params, sizeof(params), 8).gpu;
+}
+
 static void
 kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
 {
@@ -1282,11 +1424,12 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
       }
    }
 
-   if (IS_DIRTY(RS_CULL_MODE) || IS_DIRTY(IA_PRIMITIVE_TOPOLOGY)) {
+   if (IS_DIRTY(RS_CULL_MODE) || IS_DIRTY(IA_PRIMITIVE_TOPOLOGY) ||
+       IS_SHADER_DIRTY(GEOMETRY)) {
       /* Only disable rendering if primitive type is culled. */
       gfx->is_cull_front_and_back =
          dyn->rs.cull_mode == VK_CULL_MODE_FRONT_AND_BACK &&
-         is_primitive_culled(dyn->ia.primitive_topology);
+         u_reduced_prim(kk_rast_prim(cmd)) == MESA_PRIM_TRIANGLES;
       if (gfx->is_cull_front_and_back) {
          set_empty_scissor(enc);
       } else {
@@ -1380,7 +1523,7 @@ kk_flush_dynamic_state(struct kk_cmd_buffer *cmd)
 
    if ((IS_DIRTY(DS_DEPTH_BOUNDS_TEST_ENABLE) ||
         IS_DIRTY(DS_DEPTH_BOUNDS_TEST_BOUNDS)) &&
-       pdev->vk.supported_features.depthBounds) {
+       kk_gpu_supports_depth_bounds(&pdev->info)) {
       /* Metal does not expose a separate flag for enabling the depth bounds
        * test. Instead, it treats [0, 1] as disabled. */
       bool bounds_enable = dyn->ds.depth.bounds_test.enable;
@@ -1536,6 +1679,13 @@ kk_predicate_draws(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
          in_addr = patched.gpu;
          in_stride_el = out_stride_el;
       }
+
+      /* Make the indirect commands visible for future compute work.
+       * There will be a future barrier that makes it visible for the vertex
+       * stage. */
+      mtl_barrier_after_encoder_stages(cmd->metal.compute, MTL_STAGE_DISPATCH,
+                                       MTL_STAGE_DISPATCH,
+                                       MTL_VISIBILITY_OPTION_RESOURCE_ALIAS);
    }
 
    data->indirect_command.addr = patched.gpu;
@@ -1545,13 +1695,28 @@ kk_predicate_draws(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
    return true;
 }
 
+/* Points the draw at the 32-bit heap indices an unroll kernel wrote */
+static void
+kk_set_unrolled_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data,
+                     enum mesa_prim prim, uint64_t out_draws)
+{
+   data->prim = prim;
+   data->index_buffer = kk_heap_indices(cmd);
+   data->restart_index = UINT32_MAX;
+   data->index_buffer_el_size_B = 4u;
+   data->indirect = true;
+   data->indexed = true;
+   data->restart = false;
+   data->flatshade_first = true;
+   data->indirect_command.addr = out_draws;
+   data->indirect_command.stride = sizeof(VkDrawIndexedIndirectCommand);
+}
+
 /* Unrolling will always be done through indirect rendering, so if this is
  * called from non-indirect calls, we will fake it. */
 static bool
 kk_unroll_geometry(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
 {
-   struct kk_device *dev = kk_cmd_buffer_device(cmd);
-
    if (unlikely(!kk_convert_to_indirect_draw(cmd, data)))
       return false;
 
@@ -1583,18 +1748,55 @@ kk_unroll_geometry(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
    libkk_unroll_geometry_struct(cmd, kk_grid_1d(1024 * data->draw_count), true,
                                 info);
 
-   data->prim = u_decomposed_prim(data->prim);
-   /* TODO_KOSMICKRISP Self-contained until we have rodata at the device. */
-   data->index_buffer.addr = dev->heap->gpu + sizeof(struct poly_heap);
-   data->index_buffer.range = dev->heap->size_B - sizeof(struct poly_heap);
-   data->restart_index = UINT32_MAX;
-   data->index_buffer_el_size_B = 4u;
-   data->indirect = true;
-   data->indexed = true;
-   data->restart = false;
-   data->flatshade_first = true;
-   data->indirect_command.addr = out_draws.gpu;
-   data->indirect_command.stride = sizeof(VkDrawIndexedIndirectCommand);
+   kk_set_unrolled_draw(cmd, data, u_decomposed_prim(data->prim),
+                        out_draws.gpu);
+
+   /* Intra-encoder barrier in case there's more pre-draw compute work after
+    * this. */
+   mtl_barrier_after_encoder_stages(cmd->metal.compute, MTL_STAGE_DISPATCH,
+                                    MTL_STAGE_DISPATCH,
+                                    MTL_VISIBILITY_OPTION_RESOURCE_ALIAS);
+
+   return true;
+}
+
+/* Metal has no adjacency topologies, so draws without a GS draw the lines or
+ * triangles they rasterize instead. */
+static bool
+kk_unroll_adjacency(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
+{
+   if (unlikely(!kk_convert_to_indirect_draw(cmd, data)))
+      return false;
+
+   struct kk_ptr out_draws = kk_pool_alloc(
+      cmd, data->draw_count * sizeof(VkDrawIndexedIndirectCommand), 4u);
+   if (unlikely(!out_draws.gpu))
+      return false;
+
+   struct libkk_unroll_adjacency_args info = {
+      .index_buffer = data->index_buffer.addr,
+      .heap = kk_heap(cmd),
+      .in_draw = data->indirect_command.addr,
+      .out_draw = out_draws.gpu,
+      .in_draw_stride_el = data->indirect_command.stride / sizeof(uint32_t),
+      .index_buffer_size_el =
+         data->indexed ? data->index_buffer.range / data->index_buffer_el_size_B
+                       : 0u,
+      .in_el_size_B = data->index_buffer_el_size_B,
+      .flatshade_first = data->flatshade_first,
+      .mode = data->prim,
+   };
+
+   libkk_unroll_adjacency_struct(cmd, kk_grid_1d(1024 * data->draw_count), true,
+                                 info);
+
+   kk_set_unrolled_draw(cmd, data, u_reduced_prim(data->prim), out_draws.gpu);
+
+   /* Intra-encoder barrier in case there's more pre-draw compute work after
+    * this. */
+   mtl_barrier_after_encoder_stages(cmd->metal.compute, MTL_STAGE_DISPATCH,
+                                    MTL_STAGE_DISPATCH,
+                                    MTL_VISIBILITY_OPTION_RESOURCE_ALIAS);
 
    return true;
 }
@@ -1634,6 +1836,11 @@ build_per_draw_upload_mask(struct kk_cmd_buffer *cmd)
       mask |= BITFIELD_BIT(MESA_SHADER_TESS_EVAL);
    }
 
+   /* So does a GS */
+   if (cmd->state.shaders[MESA_SHADER_GEOMETRY]) {
+      mask |= BITFIELD_BIT(MESA_SHADER_GEOMETRY);
+   }
+
    struct kk_shader *fragment = cmd->state.shaders[MESA_SHADER_FRAGMENT];
    if (fragment && fragment->info.uses_per_draw_data) {
       mask |= BITFIELD_BIT(MESA_SHADER_FRAGMENT);
@@ -1665,6 +1872,16 @@ kk_sanitize_index_range(struct kk_cmd_buffer *cmd, struct kk_addr_range range)
       range.addr = gfx->index.null_addr;
       range.range = sizeof(uint32_t);
    }
+
+   /* KK_WORKAROUND_12: macOS 26 requires addr + range to be 4 byte aligned due
+    * to a known bug where Metal drops the last index if addr + range is not 4
+    * byte aligned. The extra bytes will not be read. The issue is not present
+    * in macOS 27.
+    */
+   struct kk_physical_device *pdev =
+      kk_device_physical(kk_cmd_buffer_device(cmd));
+   if (!(pdev->settings.disabled_workarounds & BITFIELD64_BIT(12)))
+      range.range = align64(range.addr + range.range, 4u) - range.addr;
 
    return range;
 }
@@ -1796,12 +2013,14 @@ requires_unroll_restart(struct kk_cmd_buffer *cmd,
    if (!data->restart || !data->indexed)
       return false;
 
+   /* The adjacency rewrite reads restart-free input */
+   if (mesa_prim_has_adjacency(data->prim))
+      return true;
+
    switch (data->prim) {
    case MESA_PRIM_POINTS:
    case MESA_PRIM_LINES:
    case MESA_PRIM_TRIANGLES:
-   case MESA_PRIM_LINES_ADJACENCY:
-   case MESA_PRIM_TRIANGLES_ADJACENCY:
       /* Unroll list restart only if the user requests it, to avoid associated
        * cost otherwise. Some applications unintentionally leave the primitive
        * restart flag enabled while using list primitives without any restarts,
@@ -1834,9 +2053,12 @@ requires_unroll(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
 {
    /* No need to unroll for tessellation. Robustness is handled by tessellator,
     * restart is not supported for patch lists, and flat-shading does not have a
-    * well-defined vertex used when tessellating. */
+    * well-defined vertex used when tessellating. A GS reads any index size and
+    * topology through poly's bounds-checked input assembly, and
+    * kk_draw_without_restart unrolls restart before it runs. */
    bool tess = cmd->state.shaders[MESA_SHADER_TESS_EVAL];
-   if (tess)
+   bool geom = cmd->state.shaders[MESA_SHADER_GEOMETRY];
+   if (tess || geom)
       return false;
 
    /* Metal does not support triangle fans */
@@ -1883,27 +2105,43 @@ upload_base_instance(struct kk_cmd_buffer *cmd, const struct kk_draw_data *data)
 }
 
 /* Prepares emulation data for stages like tessellation. It also upload system
- * values not present in Metal such as drawID. */
+ * values not present in Metal such as drawID. gs_restart is set when a GS draw
+ * unrolls primitive restart. */
 static void
 kk_upload_per_draw_data(struct kk_cmd_buffer *cmd, uint32_t upload_mask,
-                        uint32_t draw_id, const struct kk_draw_data *draw)
+                        uint32_t draw_id, const struct kk_draw_data *draw,
+                        bool gs_restart)
 {
    struct kk_graphics_state *gfx = &cmd->state.gfx;
    gfx->per_draw_data.draw_id = draw_id;
 
-   /* Prepare emulation data for tessellation. */
+   /* Prepare emulation data for tessellation and GS. */
    bool tess = upload_mask & BITFIELD_BIT(MESA_SHADER_TESS_EVAL);
-   if (tess) {
+   bool geom = upload_mask & BITFIELD_BIT(MESA_SHADER_GEOMETRY);
+   if (tess || geom) {
       gfx->per_draw_data.index_size = draw->index.el_size_B;
       gfx->per_draw_data.base_vertex_addr = upload_base_vertex(cmd, draw);
       gfx->per_draw_data.base_instance_addr = upload_base_instance(cmd, draw);
       gfx->per_draw_data.vertex_params = kk_upload_vertex_params(cmd, draw);
+   }
+
+   if (tess) {
       struct kk_ptr tess_args =
          kk_pool_alloc(cmd, sizeof(struct poly_tess_params), 4);
       gfx->per_draw_data.tess_params = tess_args.gpu;
       if (tess_args.gpu) {
          kk_upload_tess_params(cmd, tess_args.cpu, draw);
       }
+   }
+
+   if (geom) {
+      gfx->per_draw_data.geometry_params =
+         kk_upload_geometry_params(cmd, draw, gs_restart);
+
+      const struct vk_dynamic_graphics_state *dyn =
+         &cmd->vk.dynamic_graphics_state;
+      gfx->per_draw_data.provoking_last =
+         dyn->rs.provoking_vertex == VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT;
    }
 
    struct kk_ptr shader_data_gpu =
@@ -1920,6 +2158,8 @@ kk_dispatch_compute(mtl_compute_encoder *enc, struct kk_grid grid,
 {
    if (grid.mode == KK_GRID_DIRECT)
       mtl_dispatch_threads(enc, grid.size, local_size);
+   else if (grid.mode == KK_GRID_INDIRECT_LOCAL)
+      mtl_dispatch_threads_with_indirect_buffer(enc, grid.addr);
    else
       mtl_dispatch_threadgroups_with_indirect_buffer(enc, grid.addr,
                                                      local_size);
@@ -1928,7 +2168,6 @@ kk_dispatch_compute(mtl_compute_encoder *enc, struct kk_grid grid,
 static struct kk_draw_data
 kk_launch_tess(struct kk_cmd_buffer *cmd, struct kk_draw_data draw)
 {
-   struct kk_device *dev = kk_cmd_buffer_device(cmd);
    struct kk_graphics_state *gfx = &cmd->state.gfx;
    struct kk_grid grid_vs, grid_tcs, grid_tess;
 
@@ -1940,6 +2179,8 @@ kk_launch_tess(struct kk_cmd_buffer *cmd, struct kk_draw_data draw)
    uint64_t state = gfx->per_draw_data.tess_params;
    struct kk_tess_info info = gfx->tess.info;
 
+   mtl_compute_encoder *enc = cs_get_compute(cmd);
+
    /* Setup grids */
    if (kk_grid_is_indirect(draw.grid)) {
       struct libkk_tess_setup_indirect_args args = {
@@ -1947,7 +2188,7 @@ kk_launch_tess(struct kk_cmd_buffer *cmd, struct kk_draw_data draw)
          .grids = gfx->tess.indirect_ptr.gpu,
          .indirect = draw.grid.addr,
          .vp = gfx->per_draw_data.vertex_params,
-         .vertex_outputs = vs->info.vs.outputs_written,
+         .vertex_outputs = vs->info.outputs_written,
          .tcs_statistic = 0,
       };
 
@@ -1959,6 +2200,9 @@ kk_launch_tess(struct kk_cmd_buffer *cmd, struct kk_draw_data draw)
       }
 
       libkk_tess_setup_indirect_struct(cmd, kk_grid_1d(1), true, args);
+      mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH,
+                                       MTL_STAGE_DISPATCH,
+                                       MTL_VISIBILITY_OPTION_RESOURCE_ALIAS);
 
       uint32_t grid_stride = sizeof(uint32_t) * 3;
       grid_vs = kk_grid_indirect(gfx->tess.indirect_ptr.gpu + 0u * grid_stride);
@@ -1975,15 +2219,14 @@ kk_launch_tess(struct kk_cmd_buffer *cmd, struct kk_draw_data draw)
    }
 
    /* First launch the VS and TCS */
-
-   mtl_compute_encoder *enc = cs_get_compute(cmd);
    {
       mtl_compute_pipeline_state *pipeline = vs->pipeline.gfx.pre_render[0];
-      struct mtl_size local_size = {64, 1, 1};
-      mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH,
-                                       MTL_STAGE_DISPATCH);
+      struct mtl_size local_size = {KK_POLY_WG_SIZE, 1, 1};
       mtl_compute_set_pipeline_state(enc, pipeline);
       kk_dispatch_compute(enc, grid_vs, local_size);
+      mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH,
+                                       MTL_STAGE_DISPATCH,
+                                       MTL_VISIBILITY_OPTION_RESOURCE_ALIAS);
    }
    {
       mtl_compute_pipeline_state *pipeline = vs->pipeline.gfx.pre_render[1];
@@ -1992,28 +2235,171 @@ kk_launch_tess(struct kk_cmd_buffer *cmd, struct kk_draw_data draw)
        * empty data. We set restart to true to avoid unroll. */
       if (grid_tcs.mode == KK_GRID_DIRECT && grid_tcs.size.x == 0u)
          return (struct kk_draw_data){.grid = kk_grid_1d(0u)};
-      mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH,
-                                       MTL_STAGE_DISPATCH);
+
       mtl_compute_set_pipeline_state(enc, pipeline);
       kk_dispatch_compute(enc, grid_tcs, local_size);
+      mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH,
+                                       MTL_STAGE_DISPATCH,
+                                       MTL_VISIBILITY_OPTION_RESOURCE_ALIAS);
    }
 
    /* First generate counts, then prefix sum them, and then tessellate. */
    libkk_tessellate(cmd, grid_tess, true, info.mode, POLY_TESS_MODE_COUNT,
                     state);
+   mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH, MTL_STAGE_DISPATCH,
+                                    MTL_VISIBILITY_OPTION_RESOURCE_ALIAS);
 
    libkk_prefix_sum_tess(cmd, kk_grid_1d(1024u), true, state);
+   mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH, MTL_STAGE_DISPATCH,
+                                    MTL_VISIBILITY_OPTION_RESOURCE_ALIAS);
 
    libkk_tessellate(cmd, grid_tess, true, info.mode, POLY_TESS_MODE_WITH_COUNTS,
                     state);
 
    draw.grid = kk_grid_indirect(gfx->tess.out_draws_addr);
 
-   draw.index.gpu.addr = dev->heap->gpu + sizeof(struct poly_heap);
-   draw.index.gpu.range = dev->heap->size_B - sizeof(struct poly_heap);
+   draw.index.gpu = kk_heap_indices(cmd);
    draw.index.el_size_B = 4u;
    draw.primitive_type = mesa_prim_to_mtl_primitive_type(gfx->tess.prim);
    return draw;
+}
+
+/* A GS assembles its input in software, which cannot follow restarts, so the
+ * draw is unrolled to lists first. */
+static struct kk_draw_data
+kk_draw_without_restart(struct kk_cmd_buffer *cmd,
+                        const struct kk_draw_command *data,
+                        struct kk_draw_data draw)
+{
+   assert(kk_grid_is_indirect(draw.grid));
+
+   struct kk_ptr out_draw =
+      kk_pool_alloc(cmd, sizeof(VkDrawIndexedIndirectCommand), 4u);
+
+   struct libkk_unroll_restart_args args = {
+      .index_buffer = draw.index.gpu.addr,
+      .heap = kk_heap(cmd),
+      .in_draw = draw.grid.addr,
+      .out_draw = out_draw.gpu,
+      .restart_index = data->restart_index,
+      .index_buffer_size_el = draw.index.gpu.range / draw.index.el_size_B,
+      .index_size_B = draw.index.el_size_B,
+      .flatshade_first = data->flatshade_first,
+      .mode = data->prim,
+   };
+   libkk_unroll_restart_struct(cmd, kk_grid_1d(1024u), true, args);
+
+   draw.grid = kk_grid_indirect(out_draw.gpu);
+   draw.index.gpu = kk_heap_indices(cmd);
+   return draw;
+}
+
+/* Runs the stage feeding the GS and the GS compute pass, returning the draw
+ * that rasterizes its output. */
+static struct kk_draw_data
+kk_launch_gs_prerast(struct kk_cmd_buffer *cmd,
+                     const struct kk_draw_command *data,
+                     struct kk_draw_data draw, bool restart)
+{
+   struct kk_physical_device *pdev =
+      kk_device_physical(kk_cmd_buffer_device(cmd));
+   struct kk_graphics_state *gfx = &cmd->state.gfx;
+   struct kk_shader *vs = cmd->state.shaders[MESA_SHADER_VERTEX];
+   struct kk_shader *tes = cmd->state.shaders[MESA_SHADER_TESS_EVAL];
+   struct kk_shader *gs = cmd->state.shaders[MESA_SHADER_GEOMETRY];
+   uint64_t vertex_params = gfx->per_draw_data.vertex_params;
+   uint64_t geometry_params = gfx->per_draw_data.geometry_params;
+   enum poly_gs_shape shape = gs->info.gs.shape;
+   struct kk_grid grid_vs, grid_gs;
+
+   enum mesa_prim mode = kk_gs_in_prim(cmd);
+
+   mtl_compute_encoder *enc = cs_get_compute(cmd);
+
+   if (restart) {
+      draw = kk_draw_without_restart(cmd, data, draw);
+      mode = u_decomposed_prim(mode);
+
+      mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH,
+                                       MTL_STAGE_DISPATCH,
+                                       MTL_VISIBILITY_OPTION_RESOURCE_ALIAS);
+   }
+
+   if (kk_grid_is_indirect(draw.grid)) {
+      struct libkk_gs_setup_indirect_args args = {
+         .index_buffer = draw.index.gpu.addr,
+         .draw = draw.grid.addr,
+         .vp = vertex_params,
+         .p = geometry_params,
+         .heap = kk_heap(cmd),
+         .vs_outputs = (tes ? tes : vs)->info.outputs_written,
+         .prim = mode,
+         .max_indices = gs->info.gs.max_indices,
+         .shape = shape,
+      };
+
+      if (draw.index.el_size_B) {
+         args.index_size_B = draw.index.el_size_B;
+         args.index_buffer_range_el =
+            draw.index.gpu.range / draw.index.el_size_B;
+      }
+
+      libkk_gs_setup_indirect_struct(cmd, kk_grid_1d(1u), true, args);
+
+      grid_vs = kk_grid_indirect_local(
+         vertex_params + offsetof(struct poly_vertex_params, grid));
+      grid_gs = kk_grid_indirect_local(
+         geometry_params + offsetof(struct poly_geometry_params, grid));
+   } else {
+      grid_vs = grid_gs = kk_grid_2d(draw.grid.size.x, draw.grid.size.y);
+      grid_gs.size.x = u_decomposed_prims_for_vertices(mode, draw.grid.size.x);
+
+      /* Avoid Metal validation errors from empty dispatches and draws */
+      if (grid_gs.size.x == 0u)
+         return (struct kk_draw_data){.grid = kk_grid_1d(0u)};
+   }
+
+   /* The stage feeding the GS and its compute pass are the last two pre-render
+    * pipelines */
+   uint32_t pre_render_count = vs->pipeline.gfx.pre_render_count;
+   struct mtl_size local_size = {KK_POLY_WG_SIZE, 1, 1};
+
+   /* KK_WORKAROUND_19 */
+   if (!(pdev->settings.disabled_workarounds & BITFIELD64_BIT(19)))
+      mtl_set_threadgroup_memory_length(enc, 16u, 0u);
+
+   mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH, MTL_STAGE_DISPATCH,
+                                    MTL_VISIBILITY_OPTION_RESOURCE_ALIAS);
+
+   mtl_compute_set_pipeline_state(
+      enc, vs->pipeline.gfx.pre_render[pre_render_count - 2u]);
+   kk_dispatch_compute(enc, grid_vs, local_size);
+
+   mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH, MTL_STAGE_DISPATCH,
+                                    MTL_VISIBILITY_OPTION_RESOURCE_ALIAS);
+   mtl_compute_set_pipeline_state(
+      enc, vs->pipeline.gfx.pre_render[pre_render_count - 1u]);
+   kk_dispatch_compute(enc, grid_gs, local_size);
+
+   struct kk_draw_data rast = {
+      .primitive_type = mesa_prim_to_mtl_primitive_type(gs->info.gs.mode),
+   };
+
+   if (poly_gs_indexed(shape)) {
+      rast.index.gpu = gfx->gs.index;
+      rast.index.el_size_B = shape == POLY_GS_SHAPE_DYNAMIC_INDEXED
+                                ? sizeof(uint32_t)
+                                : sizeof(uint16_t);
+   }
+
+   if (kk_grid_is_indirect(draw.grid)) {
+      rast.grid = kk_grid_indirect(geometry_params +
+                                   offsetof(struct poly_geometry_params, draw));
+   } else {
+      rast.grid = kk_grid_3d(gfx->gs.index_count, gfx->gs.instance_count, 0u);
+   }
+
+   return rast;
 }
 
 /* Get modifiable per draw data. */
@@ -2021,11 +2407,14 @@ static struct kk_draw_data
 build_draw_data(struct kk_cmd_buffer *cmd, struct kk_draw_command *data,
                 uint32_t draw_id)
 {
-   bool tess = cmd->state.shaders[MESA_SHADER_TESS_EVAL];
+   /* Emulated stages rasterize a primitive of their own */
+   bool emulated = cmd->state.shaders[MESA_SHADER_TESS_EVAL] ||
+                   cmd->state.shaders[MESA_SHADER_GEOMETRY];
    struct kk_draw_data draw = {
       .index.gpu = data->index_buffer,
       .index.el_size_B = data->index_buffer_el_size_B,
-      .primitive_type = tess ? 0u : mesa_prim_to_mtl_primitive_type(data->prim),
+      .primitive_type =
+         emulated ? 0u : mesa_prim_to_mtl_primitive_type(data->prim),
    };
 
    if (data->indirect) {
@@ -2058,6 +2447,7 @@ static void
 kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
 {
    struct vk_dynamic_graphics_state *dyn = &cmd->vk.dynamic_graphics_state;
+   struct kk_device *dev = kk_cmd_buffer_device(cmd);
 
    kk_flush_gfx_state(cmd);
 
@@ -2067,23 +2457,98 @@ kk_draw(struct kk_cmd_buffer *cmd, struct kk_draw_command *data)
       dyn->rs.provoking_vertex == VK_PROVOKING_VERTEX_MODE_FIRST_VERTEX_EXT;
 
    /* Convert to indirect and process predicates. Skip draw if we fail. */
+   bool draw_was_predicated = data->predicate_count > 0;
    if (data->predicate_count > 0 && !kk_predicate_draws(cmd, data))
       return;
 
    bool tess = cmd->state.shaders[MESA_SHADER_TESS_EVAL];
+   bool geom = cmd->state.shaders[MESA_SHADER_GEOMETRY];
+   bool fs = cmd->state.shaders[MESA_SHADER_FRAGMENT];
+
+   bool draw_requires_unroll = requires_unroll(cmd, data);
+   if (draw_requires_unroll || mesa_prim_has_adjacency(data->prim) || tess ||
+       geom) {
+      /* Do a barrier here because the vertex shader is now executed as a
+       * compute shader or relies on work that comes from a compute shader.
+       * We want to avoid emitting MTL_STAGE_DISPATCH for regular
+       * VK_PIPELINE_STAGE_VERTEX_SHADER and
+       * VK_PIPELINE_STAGE_VERTEX_ATTRIBUTE_BIT barriers. Make sure any changes
+       * to the vertex/index buffers are visible to compute shaders. We can use
+       * the emulated dependency chains here. */
+
+      /* Make sure we have interrupted the render pass. */
+      struct mtl_compute_encoder *enc = cs_get_compute(cmd);
+
+      enum mtl_stages stages =
+         MTL_STAGE_VERTEX |
+         cmd->barrier.chained_stages[mtl_stage_to_index(MTL_STAGE_VERTEX)];
+      mtl_barrier_after_queue_stages(enc, stages, MTL_STAGE_DISPATCH,
+                                     MTL_VISIBILITY_OPTION_RESOURCE_ALIAS);
+
+      enum mtl_stages used_stages = mtl_compute_used_stages(cmd->metal.compute);
+      if (stages & used_stages) {
+         /* Compute or copy was in the chained stages, and we had compute/copy
+          * work in the encoder. */
+         mtl_barrier_after_encoder_stages(enc, stages & used_stages,
+                                          MTL_STAGE_DISPATCH,
+                                          MTL_VISIBILITY_OPTION_RESOURCE_ALIAS);
+      }
+   }
 
    /* Unroll geometry. Skip draw if we fail. */
-   if (requires_unroll(cmd, data) && !kk_unroll_geometry(cmd, data))
+   if (draw_requires_unroll && !kk_unroll_geometry(cmd, data))
       return;
+
+   if (!geom && mesa_prim_has_adjacency(data->prim) &&
+       !kk_unroll_adjacency(cmd, data))
+      return;
+
+   if (draw_requires_unroll || mesa_prim_has_adjacency(data->prim) ||
+       draw_was_predicated) {
+      /* Make the unrolled geometry or the indirect command visible to the
+       * vertex stage. Do this even when TESS/GS is active because that might
+       * execute as a Metal VS. */
+      struct mtl_compute_encoder *enc = cs_get_compute(cmd);
+      mtl_barrier_after_stages(enc, MTL_STAGE_DISPATCH,
+                               MTL_STAGE_VERTEX | MTL_STAGE_DISPATCH,
+                               MTL_VISIBILITY_OPTION_RESOURCE_ALIAS);
+      /* There might be more compute work because of tess or geometry shaders. */
+      mtl_barrier_after_encoder_stages(enc, MTL_STAGE_DISPATCH,
+                                       MTL_STAGE_DISPATCH,
+                                       MTL_VISIBILITY_OPTION_RESOURCE_ALIAS);
+   }
+
+   /* Patch lists do not restart, so only a GS fed by the input assembly needs
+    * its restarts unrolled. The unroll kernel reads an indirect draw. */
+   bool gs_restart = geom && !tess && data->restart && data->indexed;
+   if (gs_restart && !kk_convert_to_indirect_draw(cmd, data))
+      return;
+
+   if (fs)
+      kk_cmd_barrier_chain_clear_stage(cmd, MTL_STAGE_FRAGMENT);
+
+   /* Only clear VERTEX chain stages after unroll and emulated stage barrier.
+    * So we can use the chained stages there. */
+   kk_cmd_barrier_chain_clear_stage(cmd, MTL_STAGE_VERTEX);
 
    for (uint32_t i = 0; i < data->draw_count; i++) {
       struct kk_draw_data draw_data = build_draw_data(cmd, data, i);
 
       if (data->upload_mask)
-         kk_upload_per_draw_data(cmd, data->upload_mask, i, &draw_data);
+         kk_upload_per_draw_data(cmd, data->upload_mask, i, &draw_data,
+                                 gs_restart);
 
       if (tess)
          draw_data = kk_launch_tess(cmd, draw_data);
+      if (geom)
+         draw_data = kk_launch_gs_prerast(cmd, data, draw_data, gs_restart);
+
+      if (tess || geom) {
+         mtl_compute_encoder *enc = cs_get_compute(cmd);
+         mtl_barrier_after_stages(enc, MTL_STAGE_DISPATCH,
+                                  kk_enabled_stages(dev),
+                                  MTL_VISIBILITY_OPTION_RESOURCE_ALIAS);
+      }
 
       /* TODO_KOSMICKRISP Remove this once unroll, tess and any compute does not
        * split render pass */

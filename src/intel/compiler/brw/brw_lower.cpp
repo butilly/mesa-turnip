@@ -416,10 +416,10 @@ brw_lower_find_live_channel(brw_shader &s)
 
    bool packed_dispatch =
       brw_stage_has_packed_dispatch(s.devinfo, s.stage, s.max_polygons,
-                                    s.prog_data);
+                                    &s.info);
    bool vmask =
       s.stage == MESA_SHADER_FRAGMENT &&
-      brw_fs_prog_data(s.prog_data)->uses_vmask;
+      s.info.fs.uses_vmask;
 
    foreach_block_and_inst_safe(block, brw_inst, inst, s.cfg) {
       if (inst->opcode != SHADER_OPCODE_FIND_LIVE_CHANNEL &&
@@ -615,13 +615,31 @@ brw_lower_bfloat_conversion(brw_shader &s, brw_inst *inst)
 
    } else if (inst->dst.type == BRW_TYPE_BF &&
               byte_stride(inst->dst) == 2) {
-      /* Converting to packed BF is not supported natively.  Using
-       * ADD with -0.0f preserves NaN correctly.  Note +0.0f would
-       * not work since it doesn't preserve -0.0f!
+      /* Converting to packed BF is not supported natively.
+       *
+       * NVL (ver >= 35): dst.hstride must be 32/16 = 2 for F→BF narrowing.
+       * Pre-NVL: Use ADD with -0.0f to preserve NaN and -0.0f correctly.
        */
       assert(inst->src[0].type == BRW_TYPE_F);
-      inst = brw_transform_inst(s, inst, BRW_OPCODE_ADD);
-      inst->src[1] = brw_imm_f(-0.0f);
+      assert(inst->dst.stride == 1);
+
+      const intel_device_info *devinfo = s.devinfo;
+
+      if (devinfo->ver >= 35) {
+         const brw_builder ibld(inst);
+         /* Convert F→BF with unpacked dest, then pack the result */
+         brw_reg temp = ibld.vgrf(BRW_TYPE_BF, 2);
+         temp = horiz_stride(retype(temp, BRW_TYPE_BF), 2);
+         ibld.MOV(temp, inst->src[0]);
+
+         /* Pack - use UW since we are just moving bits like the BF→BF case */
+         inst->src[0] = retype(temp, BRW_TYPE_UW);
+         inst->dst = retype(inst->dst, BRW_TYPE_UW);
+      } else {
+         inst = brw_transform_inst(s, inst, BRW_OPCODE_ADD);
+         inst->src[1] = brw_imm_f(-0.0f);
+      }
+
       return true;
 
    } else if (inst->dst.type == BRW_TYPE_F &&
@@ -690,16 +708,54 @@ brw_lower_alu_restrictions(brw_shader &s)
           *
           *   "Bfloat16 not allowed in Src2 of 3-source instructions
           *   involving multiplier."
+          *
+          * NVL (ver >= 35) has additional strict regioning requirements for
+          * BF16 mixed-mode operations. Convert all operands to F to avoid
+          * these complex restrictions.
           */
-         brw_reg &last_src = inst->src[inst->sources - 1];
-         if (last_src.type == BRW_TYPE_BF) {
+         bool has_bf_operand = false;
+         for (int i = 0; i < inst->sources; i++) {
+            if (brw_type_is_bfloat(inst->src[i].type)) {
+               has_bf_operand = true;
+               break;
+            }
+         }
+
+         if (has_bf_operand) {
             assert(devinfo->has_bfloat16);
             const brw_builder ibld = brw_builder(inst);
 
-            brw_reg src2_as_f = ibld.vgrf(BRW_TYPE_F);
-            brw_inst *conv = ibld.MOV(src2_as_f, last_src);
-            brw_lower_bfloat_conversion(s, conv);
-            last_src = src2_as_f;
+            if (devinfo->ver >= 35) {
+               /* NVL: Convert all BF16 sources to F */
+               for (int i = 0; i < inst->sources; i++) {
+                  if (brw_type_is_bfloat(inst->src[i].type)) {
+                     brw_reg src_as_f = ibld.vgrf(BRW_TYPE_F);
+                     brw_inst *conv = ibld.MOV(src_as_f, inst->src[i]);
+                     brw_lower_bfloat_conversion(s, conv);
+                     inst->src[i] = src_as_f;
+                  }
+               }
+
+               if (brw_type_is_bfloat(inst->dst.type)) {
+                  /* Convert F result back to BF */
+                  brw_reg dst_as_f = ibld.vgrf(BRW_TYPE_F);
+                  brw_reg old_dst = inst->dst;
+                  inst->dst = dst_as_f;
+
+                  const brw_builder ibld_after = ibld.after(inst);
+                  brw_inst *conv = ibld_after.MOV(old_dst, dst_as_f);
+                  brw_lower_bfloat_conversion(s, conv);
+               }
+            } else {
+               /* Pre-NVL: Convert only last source to F for mixed-mode */
+               brw_reg &last_src = inst->src[inst->sources - 1];
+               if (last_src.type == BRW_TYPE_BF) {
+                  brw_reg src_as_f = ibld.vgrf(BRW_TYPE_F);
+                  brw_inst *conv = ibld.MOV(src_as_f, last_src);
+                  brw_lower_bfloat_conversion(s, conv);
+                  last_src = src_as_f;
+               }
+            }
 
             progress = true;
          }
@@ -825,7 +881,7 @@ brw_lower_vgrf_to_fixed_grf(const struct intel_device_info *devinfo,
 void
 brw_lower_vgrfs_to_fixed_grfs(brw_shader &s)
 {
-   assert(s.grf_used || !"Must be called after register allocation");
+   assert(s.info.grf_used || !"Must be called after register allocation");
 
    foreach_block_and_inst(block, brw_inst, inst, s.cfg) {
       assert(inst->dst.stride <= 4);
@@ -895,7 +951,7 @@ bool
 brw_lower_send_gather(brw_shader &s)
 {
    assert(s.devinfo->ver >= 30);
-   assert(s.grf_used || !"Must be called after register allocation");
+   assert(s.info.grf_used || !"Must be called after register allocation");
 
    bool progress = false;
 
@@ -930,7 +986,7 @@ brw_lower_sendg_ind_desc_to_arf_inst(brw_shader &s, brw_inst *inst, enum send_sr
 bool
 brw_lower_sendg_ind_desc_to_arf(brw_shader &s)
 {
-   assert(s.grf_used || !"Must be called after register allocation");
+   assert(s.info.grf_used || !"Must be called after register allocation");
 
    bool progress = false;
 
@@ -1021,7 +1077,8 @@ brw_lower_indirect_mov(brw_shader &s)
          /* Check if offset is odd or even so that we can choose either high or
           * low byte from the result.
           */
-         brw_reg is_odd = ibld.AND(offset, brw_imm_ud(1));
+         brw_reg is_odd =
+            ibld.AND(subscript(offset, BRW_TYPE_UW, 0), brw_imm_uw(1));
 
          /* Make sure offset is word (2-bytes) aligned */
          offset = ibld.AND(offset, brw_imm_uw(~1));

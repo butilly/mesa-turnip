@@ -603,6 +603,7 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
    radeon_get_drm_value(ws, RADEON_INFO_MAX_SH_PER_SE, NULL,
                         &ws->info.max_sa_per_se);
    if (ws->gen == DRV_SI) {
+      ws->info.max_good_cu_per_se = DIV_ROUND_UP(ws->info.num_cu, ws->info.max_se);
       ws->info.max_good_cu_per_sa =
       ws->info.min_good_cu_per_sa = ws->info.num_cu /
                                     (ws->info.max_se * ws->info.max_sa_per_se);
@@ -650,6 +651,8 @@ static bool do_winsys_init(struct radeon_drm_winsys *ws)
    ws->info.max_alignment = 1024*1024;
    ws->info.has_graphics = true;
    ws->info.cpdma_prefetch_writes_memory = true;
+   ws->info.has_cp_dma_unaligned_copy_perf_issue = ws->info.family <= CHIP_CARRIZO ||
+                                                   ws->info.family == CHIP_STONEY;
    ws->info.has_image_opcodes = true;
    ws->info.spi_cu_en_has_effect = false;
    ws->info.spi_cu_en = 0xffff;

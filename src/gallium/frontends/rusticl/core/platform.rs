@@ -47,13 +47,14 @@ impl Deref for PlatformVM<'_> {
 pub struct Platform {
     dispatch: &'static cl_icd_dispatch,
     pub dispatch_data: usize,
-    pub devs: Vec<Device>,
     pub extension_string: String,
     pub extensions: Vec<cl_name_version>,
     // lifetime has to match the one of devs
     pub vm: Option<PlatformVM<'static>>,
     pub worker_queue: LazyLock<util::queue::Queue>,
     pub meta: LazyLock<Meta>,
+    // Has to be last, given we give Devices a static lifetime guarantee.
+    pub devs: Vec<Device>,
 }
 
 pub enum PerfDebugLevel {
@@ -73,6 +74,8 @@ pub struct PlatformDebug {
     pub program: bool,
     pub reuse_context: bool,
     pub sync_every_event: bool,
+    pub untyped_pointers: bool,
+    pub use_llvm_spirv_target: bool,
     pub validate_spirv: bool,
 }
 
@@ -84,20 +87,7 @@ pub struct PlatformFeatures {
 static PLATFORM_ENV_ONCE: Once = Once::new();
 static PLATFORM_ONCE: Once = Once::new();
 
-static mut PLATFORM: Platform = Platform {
-    dispatch: &DISPATCH,
-    dispatch_data: 0,
-    devs: Vec::new(),
-    extension_string: String::new(),
-    extensions: Vec::new(),
-    vm: None,
-    worker_queue: LazyLock::new(|| {
-        let worker_count = u32::max(util::cpu_count() / 2, 1);
-        let max_job_count = worker_count * 8;
-        util::queue::Queue::new(c"clctxworker", max_job_count, worker_count)
-    }),
-    meta: LazyLock::new(|| Meta::new(&Platform::get().devs)),
-};
+static mut PLATFORM: Platform = Platform::new();
 static mut PLATFORM_DBG: PlatformDebug = PlatformDebug {
     allow_invalid_spirv: false,
     clc: false,
@@ -109,6 +99,8 @@ static mut PLATFORM_DBG: PlatformDebug = PlatformDebug {
     program: false,
     reuse_context: true,
     sync_every_event: false,
+    untyped_pointers: false,
+    use_llvm_spirv_target: false,
     validate_spirv: false,
 };
 static mut PLATFORM_FEATURES: PlatformFeatures = PlatformFeatures {
@@ -132,6 +124,8 @@ fn load_env() {
                 "perfspam" => debug.perf = PerfDebugLevel::Spam,
                 "program" => debug.program = true,
                 "sync" => debug.sync_every_event = true,
+                "untyped_pointers" => debug.untyped_pointers = true,
+                "use_llvm_spirv_target" => debug.use_llvm_spirv_target = true,
                 "validate" => debug.validate_spirv = true,
                 "" => (),
                 _ => eprintln!("Unknown RUSTICL_DEBUG flag found: {}", flag),
@@ -159,6 +153,23 @@ fn load_env() {
 }
 
 impl Platform {
+    const fn new() -> Self {
+        Platform {
+            dispatch: &DISPATCH,
+            dispatch_data: 0,
+            devs: Vec::new(),
+            extension_string: String::new(),
+            extensions: Vec::new(),
+            vm: None,
+            worker_queue: LazyLock::new(|| {
+                let worker_count = u32::max(util::cpu_count() / 2, 1);
+                let max_job_count = worker_count * 8;
+                util::queue::Queue::new(c"clctxworker", max_job_count, worker_count)
+            }),
+            meta: LazyLock::new(|| Meta::new(&Platform::get().devs)),
+        }
+    }
+
     pub fn as_ptr(&self) -> cl_platform_id {
         ptr::from_ref(self) as cl_platform_id
     }
@@ -195,7 +206,9 @@ impl Platform {
         }
 
         // No need to check system SVM devices
-        let devs = devs.iter().filter(|dev| !dev.system_svm_supported());
+        let devs = devs
+            .iter()
+            .filter(|dev| !dev.system_svm_supported() && dev.svm_supported());
 
         let (start, end) = devs.clone().filter_map(|dev| dev.vm_alloc_range()).reduce(
             |(min_a, max_a), (min_b, max_b)| (cmp::max(min_a, min_b), cmp::min(max_a, max_b)),
@@ -300,6 +313,10 @@ impl Platform {
         self.devs
             .iter()
             .all(|dev| dev.are_external_semaphores_supported())
+    }
+
+    pub fn all_devs_have_memory_sharing(&self) -> bool {
+        self.devs.iter().all(|dev| dev.memory_sharing_supported())
     }
 }
 

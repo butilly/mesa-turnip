@@ -31,16 +31,6 @@
 #define SQTT_SA_PER_SE         2
 #define SQTT_ACTIVE_PIXEL_PACKER_MASK_DWORDS 4
 
-enum sqtt_version
-{
-   SQTT_VERSION_NONE = 0x0,
-   SQTT_VERSION_2_2 = 0x5, /* GFX8 */
-   SQTT_VERSION_2_3 = 0x6, /* GFX9 */
-   SQTT_VERSION_2_4 = 0x7, /* GFX10+ */
-   SQTT_VERSION_3_2 = 0xb, /* GFX11+ */
-   SQTT_VERSION_3_3 = 0xc, /* GFX12+ */
-};
-
 /**
  * SQTT chunks.
  */
@@ -67,7 +57,7 @@ enum sqtt_file_chunk_type
 };
 
 struct sqtt_file_chunk_id {
-   enum sqtt_file_chunk_type type : 8;
+   uint32_t type : 8; /* enum sqtt_file_chunk_type */
    int32_t index : 8;
    int32_t reserved : 16;
 };
@@ -712,7 +702,7 @@ struct sqtt_file_chunk_sqtt_desc {
 static_assert(sizeof(struct sqtt_file_chunk_sqtt_desc) == 32,
               "sqtt_file_chunk_sqtt_desc doesn't match RGP spec");
 
-static enum sqtt_version ac_gfx_level_to_sqtt_version(enum amd_gfx_level gfx_level)
+enum sqtt_version ac_gfx_level_to_sqtt_version(enum amd_gfx_level gfx_level)
 {
    switch (gfx_level) {
    case GFX8:
@@ -1191,6 +1181,7 @@ static void ac_sqtt_dump_derived_spm(const struct ac_spm_derived_trace *spm_deri
 }
 
 #if defined(USE_LIBELF)
+/* TODO: Switch to the ac_rdf writer to remove code duplication (already used by RRA and RDP). */
 static void
 ac_sqtt_dump_data(const struct radeon_info *rad_info, struct ac_sqtt_trace *sqtt_trace,
                   const struct ac_spm_trace *spm_trace,

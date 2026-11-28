@@ -17,6 +17,7 @@
 #include "util/hash_table.h"
 #include "util/log.h"
 #include "util/thread_sched.h"
+#include "util/u_process.h"
 #include "util/xmlconfig.h"
 #include "drm-uapi/amdgpu_drm.h"
 #include <xf86drm.h>
@@ -34,10 +35,6 @@ char amdgpu_userq_str[AMDGPU_MAX_QUEUES][8] = {
 
 static struct hash_table *dev_tab = NULL;
 static simple_mtx_t dev_tab_mutex = SIMPLE_MTX_INITIALIZER;
-
-#if MESA_DEBUG
-DEBUG_GET_ONCE_BOOL_OPTION(all_bos, "RADEON_ALL_BOS", false)
-#endif
 
 /* Helper function to do the ioctls needed for setup and init. */
 static bool do_winsys_init(struct amdgpu_winsys *aws,
@@ -57,11 +54,8 @@ static bool do_winsys_init(struct amdgpu_winsys *aws,
 
    aws->check_vm = options->check_vm;
    aws->noop_cs = options->noop_cs;
-#if MESA_DEBUG
-   aws->debug_all_bos = debug_get_option_all_bos();
-#endif
+   aws->debug_all_bos = options->list_all_bo;
    aws->reserve_vmid = options->reserve_vmid;
-   aws->zero_all_vram_allocs = options->zero_vram;
    aws->userq_job_log = options->userq_job_log;
    aws->ib_caches_flush = options->ib_caches_flush;
 
@@ -74,6 +68,15 @@ static bool do_winsys_init(struct amdgpu_winsys *aws,
 
    if (aws->userq_job_log)
       amdgpu_userq_start_job_log_thread(aws);
+
+   if (options->dump_bo_history) {
+      char bo_hist_filename[512];
+      sprintf(bo_hist_filename, "/tmp/radeonsi_bo_history_%.12s_%lu_%u.log",
+              util_get_process_name(), (long unsigned) getpid(), aws->fd);
+      aws->bo_history_logfile = fopen(bo_hist_filename, "w+");
+      if (!aws->bo_history_logfile)
+         mesa_loge("radeonsi: Failed to create /tmp/radeonsi_bo_history.log.\n");
+   }
 
    return true;
 
@@ -111,9 +114,7 @@ static void do_winsys_deinit(struct amdgpu_winsys *aws)
    pb_cache_deinit(&aws->bo_cache);
    _mesa_hash_table_destroy(aws->bo_export_table, NULL);
    simple_mtx_destroy(&aws->sws_list_lock);
-#if MESA_DEBUG
    simple_mtx_destroy(&aws->global_bo_list_lock);
-#endif
    simple_mtx_destroy(&aws->bo_export_table_lock);
 
    ac_addrlib_destroy(aws->addrlib);
@@ -122,13 +123,15 @@ static void do_winsys_deinit(struct amdgpu_winsys *aws)
    simple_mtx_destroy(&aws->bo_fence_lock);
    simple_mtx_destroy(&aws->stats_lock);
 
+   if (aws->bo_history_logfile)
+      fclose(aws->bo_history_logfile);
+
    FREE(aws);
 }
 
-static void amdgpu_winsys_destroy_locked(struct radeon_winsys *rws, bool locked)
+static void amdgpu_winsys_destroy_locked(struct radeon_winsys *rws, struct amdgpu_winsys *aws, bool locked)
 {
    struct amdgpu_screen_winsys *sws = amdgpu_screen_winsys(rws);
-   struct amdgpu_winsys *aws = sws->aws;
    bool destroy;
 
    /* When the reference counter drops to zero, remove the device pointer
@@ -150,10 +153,12 @@ static void amdgpu_winsys_destroy_locked(struct radeon_winsys *rws, bool locked)
       }
    }
 
+   amdgpu_ctx_reference(&aws->pstate_ctx, NULL);
+
    if (!locked)
       simple_mtx_unlock(&dev_tab_mutex);
 
-   if (sws->fd != aws->fd)
+   if (sws->fd != aws->fd && sws->fd >= 0)
       close(sws->fd);
 
    if (destroy)
@@ -164,7 +169,7 @@ static void amdgpu_winsys_destroy_locked(struct radeon_winsys *rws, bool locked)
 
 static void amdgpu_winsys_destroy(struct radeon_winsys *rws)
 {
-   amdgpu_winsys_destroy_locked(rws, false);
+   amdgpu_winsys_destroy_locked(rws, amdgpu_screen_winsys(rws)->aws, false);
 }
 
 static void amdgpu_winsys_query_info(struct radeon_winsys *rws, struct radeon_info *info)
@@ -349,6 +354,12 @@ static bool
 amdgpu_cs_set_pstate(struct radeon_cmdbuf *rcs, enum radeon_ctx_pstate pstate)
 {
    struct amdgpu_cs *acs = amdgpu_cs(rcs);
+   struct amdgpu_winsys *aws = acs->aws;
+
+   if (aws->pstate_ctx && aws->pstate_ctx != acs->ctx)
+      return true;
+
+   amdgpu_ctx_reference(&aws->pstate_ctx, acs->ctx);
 
    uint32_t amdgpu_pstate = radeon_to_amdgpu_pstate(pstate);
    return ac_drm_cs_ctx_stable_pstate(acs->aws->dev, acs->ctx->ctx_handle,
@@ -504,9 +515,13 @@ amdgpu_winsys_create(int fd, const struct pipe_screen_config *config,
          goto fail_alloc;
 
       /* Create managers. */
+      uint64_t cache_mem_kb = aws->info.has_dedicated_vram ?
+         aws->info.vram_size_kb :
+         ((uint64_t)aws->info.vram_size_kb + aws->info.gart_size_kb);
+
       pb_cache_init(&aws->bo_cache, RADEON_NUM_HEAPS,
-                    500000, aws->check_vm ? 1.0f : 1.5f, 0,
-                    ((uint64_t)aws->info.vram_size_kb + aws->info.gart_size_kb) * 1024 / 8,
+                    500000, aws->check_vm ? 1.0f : 1.25f, 0,
+                    cache_mem_kb * 1024 / 8,
                     offsetof(struct amdgpu_bo_real_reusable, cache_entry), aws,
                     /* Cast to void* because one of the function parameters
                      * is a struct pointer instead of void*. */
@@ -522,7 +537,7 @@ amdgpu_winsys_create(int fd, const struct pipe_screen_config *config,
                          /* Cast to void* because one of the function parameters
                           * is a struct pointer instead of void*. */
                          (void*)amdgpu_bo_slab_free)) {
-         amdgpu_winsys_destroy_locked(&sws->base, true);
+         amdgpu_winsys_destroy_locked(&sws->base, aws, true);
          simple_mtx_unlock(&dev_tab_mutex);
          return NULL;
       }
@@ -531,22 +546,18 @@ amdgpu_winsys_create(int fd, const struct pipe_screen_config *config,
 
       /* init reference */
       pipe_reference_init(&aws->reference, 1);
-#if MESA_DEBUG
       list_inithead(&aws->global_bo_list);
-#endif
       aws->bo_export_table = util_hash_table_create_ptr_keys();
 
       (void) simple_mtx_init(&aws->sws_list_lock, mtx_plain);
-#if MESA_DEBUG
       (void) simple_mtx_init(&aws->global_bo_list_lock, mtx_plain);
-#endif
       (void) simple_mtx_init(&aws->bo_fence_lock, mtx_plain);
       (void) simple_mtx_init(&aws->stats_lock, mtx_plain);
       (void) simple_mtx_init(&aws->bo_export_table_lock, mtx_plain);
 
       if (!util_queue_init(&aws->cs_queue, "cs", 8, 1,
                            UTIL_QUEUE_INIT_RESIZE_IF_FULL, NULL)) {
-         amdgpu_winsys_destroy_locked(&sws->base, true);
+         amdgpu_winsys_destroy_locked(&sws->base, aws, true);
          simple_mtx_unlock(&dev_tab_mutex);
          return NULL;
       }
@@ -556,7 +567,7 @@ amdgpu_winsys_create(int fd, const struct pipe_screen_config *config,
       if (aws->reserve_vmid) {
          r = ac_drm_vm_reserve_vmid(aws->dev, 0);
          if (r) {
-            amdgpu_winsys_destroy_locked(&sws->base, true);
+            amdgpu_winsys_destroy_locked(&sws->base, aws,true);
             simple_mtx_unlock(&dev_tab_mutex);
             return NULL;
          }
@@ -597,7 +608,7 @@ amdgpu_winsys_create(int fd, const struct pipe_screen_config *config,
     * and link all drivers into one binary blob. */
    sws->base.screen = screen_create(&sws->base, config, debug_flags);
    if (!sws->base.screen) {
-      amdgpu_winsys_destroy_locked(&sws->base, true);
+      amdgpu_winsys_destroy_locked(&sws->base, sws->aws, true);
       simple_mtx_unlock(&dev_tab_mutex);
       return NULL;
    }

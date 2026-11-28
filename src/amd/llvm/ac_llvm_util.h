@@ -65,7 +65,7 @@ void ac_add_function_attr(LLVMContextRef ctx, LLVMValueRef function, int attr_id
                           const char *attr);
 void ac_dump_module(LLVMModuleRef module);
 LLVMModuleRef ac_create_module(LLVMTargetMachineRef tm, LLVMContextRef ctx);
-LLVMBuilderRef ac_create_builder(LLVMContextRef ctx, enum ac_float_mode float_mode);
+LLVMBuilderRef ac_create_builder(LLVMModuleRef module, enum ac_float_mode float_mode);
 void ac_enable_signed_zeros(struct ac_llvm_context *ctx);
 void ac_disable_signed_zeros(struct ac_llvm_context *ctx);
 
@@ -89,6 +89,12 @@ struct ac_backend_optimizer *ac_create_backend_optimizer(LLVMTargetMachineRef tm
 void ac_destroy_backend_optimizer(struct ac_backend_optimizer *beo);
 bool ac_compile_module_to_elf(struct ac_backend_optimizer *beo, LLVMModuleRef module,
                               char **pelf_buffer, size_t *pelf_size);
+
+/* LLVM 24+ no longer reserves s[0:1] for ring offsets with architected flat scratch. */
+static inline bool ac_llvm_reserves_ring_offsets(enum amd_gfx_level gfx_level)
+{
+   return LLVM_VERSION_MAJOR < 24 || gfx_level < GFX11;
+}
 
 static inline bool ac_has_vec3_support(enum amd_gfx_level chip, bool use_format)
 {

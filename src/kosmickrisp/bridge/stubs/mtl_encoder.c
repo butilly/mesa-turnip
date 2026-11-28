@@ -14,20 +14,23 @@ mtl_end_encoding(void *encoder)
 
 void
 mtl_barrier_after_stages(void *encoder, enum mtl_stages after_stages,
-                         enum mtl_stages before_queue_stages)
+                         enum mtl_stages before_queue_stages,
+                         enum mtl_visibility_options visibility)
 {
 }
 
 void
 mtl_barrier_after_encoder_stages(void *encoder, enum mtl_stages after_stages,
-                                 enum mtl_stages before_queue_stages)
+                                 enum mtl_stages before_stages,
+                                 enum mtl_visibility_options visibility)
 {
 }
 
 void
 mtl_barrier_after_queue_stages(void *encoder,
                                enum mtl_stages after_queue_stages,
-                               enum mtl_stages before_stages)
+                               enum mtl_stages before_stages,
+                               enum mtl_visibility_options visibility)
 {
 }
 
@@ -112,6 +115,12 @@ mtl_compute_set_argument_table(mtl_compute_encoder *encoder,
 }
 
 void
+mtl_set_threadgroup_memory_length(mtl_compute_encoder *encoder, uint32_t length,
+                                  uint32_t index)
+{
+}
+
+void
 mtl_dispatch_threads(mtl_compute_encoder *encoder, struct mtl_size grid_size,
                      struct mtl_size local_size)
 {
@@ -122,6 +131,18 @@ mtl_dispatch_threadgroups_with_indirect_buffer(mtl_compute_encoder *encoder,
                                                uint64_t addr,
                                                struct mtl_size local_size)
 {
+}
+
+void
+mtl_dispatch_threads_with_indirect_buffer(mtl_compute_encoder *encoder,
+                                          uint64_t addr)
+{
+}
+
+enum mtl_stages
+mtl_compute_used_stages(mtl_compute_encoder *encoder)
+{
+   return 0u;
 }
 
 /* MTLRenderEncoder */

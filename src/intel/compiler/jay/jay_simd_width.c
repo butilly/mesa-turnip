@@ -9,6 +9,46 @@
 #include "jay_ir.h"
 #include "jay_opcodes.h"
 
+#include "intel/compiler/brw/brw_rt.h"
+
+static bool
+movi_promotable(const jay_shader *shader, const jay_inst *I)
+{
+   assert(I->op == JAY_OPCODE_SHUFFLE);
+
+   return shader->devinfo->ver >= 20 &&
+          I->type == JAY_TYPE_U32 &&
+          I->src[0].file == GPR &&
+          jay_num_values(I->src[0]) == 1 &&
+          !jay_is_uniform(I->src[1]) &&
+          I->dst.file == GPR &&
+          jay_def_stride(shader, I->dst) == JAY_STRIDE_4 &&
+          !jay_lookup_block(&shader->partition, I->src[0].reg, GPR).split &&
+          4 * shader->dispatch_width <= shader->devinfo->grf_size;
+}
+
+/*
+ * Return the maximum SIMD width that can operate on a given operand.
+ */
+static inline unsigned
+operand_width(const jay_shader *shader, jay_def def, enum jay_type type)
+{
+   /* Look up the block, synthesizing a trivial one for non-GPRs */
+   struct jay_register_block B = { 0 };
+   if (def.file == GPR) {
+      B = jay_lookup_block(&shader->partition, def.reg, GPR);
+   }
+
+   /* Determine the effective stride in bits. This needs to also account for
+    * 64-bit UGPR-only instructions for the I->broadcast_flag case.
+    */
+   unsigned bits = MAX2(jay_stride_to_bits(B.stride), jay_type_size_bits(type));
+
+   /* We must fit within 2 GRFs and within the SIMDness of the register block */
+   return MIN2((512 * reg_unit(shader->devinfo)) / bits,
+               shader->dispatch_width >> B.split);
+}
+
 static unsigned
 max_simd_width(const jay_shader *shader, const jay_inst *I)
 {
@@ -29,36 +69,25 @@ max_simd_width(const jay_shader *shader, const jay_inst *I)
       return grf_simd;
    }
 
+   unsigned width = 32;
+
    /* These special instructions need to be split for various reasons. */
    if (I->op == JAY_OPCODE_EXPAND_QUAD ||
        I->op == JAY_OPCODE_EXTRACT_SUBSPAN_INFO ||
        I->op == JAY_OPCODE_EXTRACT_BYTE_PER_8LANES ||
        I->op == JAY_OPCODE_OFFSET_PACKED_PIXEL_COORDS) {
-      return 16;
+      width = MIN2(width, 16);
    }
 
    if (I->op != JAY_OPCODE_SEND) {
-      /* If any source/destination is 64-bit strided, we must split to avoid
-       * crossing more than 2 GRFs. Note that SENDs don't have this restriction,
-       * we don't have to split A64 load/store.
-       *
-       * This also applies for 64-bit UGPR-only instructions for the
-       * I->broadcast_flag case which has similar SIMD splitting rules.
-       */
-      if ((I->dst.file == GPR &&
-           jay_def_stride(shader, I->dst) == JAY_STRIDE_8) ||
-          jay_type_size_bits(I->type) == 64) {
-         return 16;
-      }
+      width = MIN2(width, operand_width(shader, I->dst, I->type));
 
       jay_foreach_src(I, s) {
-         if (I->src[s].file == GPR &&
-             jay_def_stride(shader, I->src[s]) == JAY_STRIDE_8) {
-            return 16;
-         }
+         width = MIN2(width, operand_width(shader, I->src[s], I->type));
       }
    } else {
-      /* TODO: Split SENDs, needs RA work */
+      /* Sends are split elsewhere */
+      return 32;
    }
 
    /* Bspec 56797 (r62012):
@@ -72,21 +101,21 @@ max_simd_width(const jay_shader *shader, const jay_inst *I)
        (I->dst.file == GPR && jay_def_stride(shader, I->dst) == JAY_STRIDE_2) &&
        (I->src[0].file == GPR &&
         jay_def_stride(shader, I->src[0]) == JAY_STRIDE_2)) {
-      return 16;
+      width = MIN2(width, 16);
    }
 
    /* BSpec 56640 requires that execution size be no greater than 16
     * for mixed-mode operations involving bfloats.
     */
    if (I->type == JAY_TYPE_BF16) {
-      return 16;
+      width = MIN2(width, 16);
    }
    jay_foreach_src(I, s) {
       if (jay_src_type(I, s) == JAY_TYPE_BF16)
-         return 16;
+         width = MIN2(width, 16);
    }
 
-   return 32;
+   return width;
 }
 
 unsigned
@@ -104,7 +133,9 @@ pass(jay_function *func)
    jay_builder b = jay_init_builder(func, jay_before_function(func));
 
    jay_foreach_inst_in_func_safe(func, block, I) {
-      unsigned split = jay_simd_split(func->shader, I);
+      unsigned split = I->op == JAY_OPCODE_SEND ?
+                          I->simd_split :
+                          jay_simd_split(func->shader, I);
       if (split) {
          I->simd_split = split;
          b.cursor = jay_after_inst(I);
@@ -113,6 +144,36 @@ pass(jay_function *func)
             jay_inst *clone = jay_clone_inst(&b, I, I->num_srcs);
             clone->simd_offs = i;
             jay_builder_insert(&b, clone);
+
+            if (I->op == JAY_OPCODE_SEND) {
+               if (jay_send_sfid(I) == GEN_SFID_RENDER_CACHE) {
+                  clone->src[0] = jay_imm(jay_as_uint(clone->src[0]) | 0x800);
+               } else if (jay_send_sfid(I) == GEN_SFID_RAY_TRACE_ACCELERATOR) {
+                  assert(clone->src[2].file == UGPR);
+                  jay_def global_lo = jay_bare_reg(UGPR, 32, clone->src[2].reg);
+                  signed offset_B = align(BRW_RT_DISPATCH_GLOBALS_SIZE, 64);
+
+                  assert(clone->src[2].reg != clone->dst.reg &&
+                         "must not be tied");
+                  assert(clone->src[2].file != clone->src[3].file &&
+                         "header + payload");
+
+                  b.cursor = jay_before_inst(clone);
+                  jay_ADD(&b, JAY_TYPE_U32, global_lo, global_lo, offset_B);
+
+                  b.cursor = jay_after_inst(clone);
+                  jay_ADD(&b, JAY_TYPE_U32, global_lo, global_lo, -offset_B);
+               }
+
+               /* Only the last SEND gets EOT */
+               jay_set_send_eot(clone, jay_send_eot(clone) &&
+                                          ((i + 1) == (1 << split)));
+            }
+         }
+
+         if (I->op == JAY_OPCODE_SEND) {
+            /* The first SEND can't possibly EOT */
+            jay_set_send_eot(I, false);
          }
       }
    }
@@ -122,7 +183,7 @@ pass(jay_function *func)
       b.cursor = jay_after_inst(I);
 
       if (I->op == JAY_OPCODE_MUL_32) {
-         jay_def acc = jay_bare_reg(ACCUM, 0);
+         jay_def acc = jay_bare_reg(ACCUM, 32, 0);
 
          jay_inst *mac =
             jay_MACL(&b, I->type, I->dst, I->src[0], I->src[1], acc);
@@ -144,26 +205,66 @@ pass(jay_function *func)
           * interfering with a0.0 and a0.2 users. This affects UGPR spilling.
           */
          bool VxH = !jay_is_uniform(I->src[1]);
-         unsigned addr = VxH ? 0 : 4;
+         bool use_movi = movi_promotable(func->shader, I);
          unsigned nr = VxH ? jay_simd_width_physical(func->shader, I) : 1;
-         jay_def a0 = jay_bare_regs(J_ADDRESS, addr, DIV_ROUND_UP(nr, 2));
+         unsigned addr = VxH ? 0 : 4;
 
-         struct jay_register_block block =
-            jay_lookup_block(&func->shader->partition, I->src[0].reg,
-                             I->src[0].file);
-         unsigned reg_width =
-            4 * (I->src[0].file == UGPR ? 1 : func->shader->dispatch_width);
-         unsigned offset_B = block.start_grf * func->shader->devinfo->grf_size +
-                             (I->src[0].reg - block.start_gpr) * reg_width;
+         jay_def a0 = jay_bare_regs(J_ADDRESS, 32, addr, DIV_ROUND_UP(nr, 2));
 
          b.cursor = jay_before_inst(I);
-         jay_inst *add = jay_ADD(&b, JAY_TYPE_U16, a0, I->src[1], offset_B);
-         add->uniform = !VxH;
-         add->simd_split = I->simd_split;
-         add->simd_offs = I->simd_offs;
 
-         I->op = JAY_OPCODE_MOV_INDIRECT;
-         I->src[1] = a0;
+         if (use_movi) {
+            /* Writes to the address register are uniform, so this AND is
+             * NoMask and covers disabled channels too.
+             */
+            jay_inst *mask =
+               jay_AND(&b, JAY_TYPE_U16, a0, I->src[1],
+                       jay_imm(func->shader->devinfo->grf_size - 1));
+            mask->simd_split = I->simd_split;
+            mask->simd_offs = I->simd_offs;
+
+            I->op = JAY_OPCODE_MOVI;
+            I->src[1] = a0;
+
+            /* MOVI does not pick its per-channel address register up from
+             * the channel offset, and on Xe2/Xe3 uses only 8 address
+             * subregisters starting at a0.0 or a0.8.
+             */
+            unsigned movi_width = MIN2(8, nr);
+            unsigned pieces = nr / movi_width;
+
+            assert(nr >= movi_width && util_is_power_of_two_nonzero(pieces));
+            assert(addr + nr <= 16);
+
+            if (pieces > 1) {
+               unsigned extra = util_logbase2(pieces);
+               b.cursor = jay_after_inst(I);
+
+               for (unsigned i = 1; i < pieces; ++i) {
+                  jay_inst *clone = jay_clone_inst(&b, I, I->num_srcs);
+                  clone->simd_split = I->simd_split + extra;
+                  clone->simd_offs = I->simd_offs * pieces + i;
+                  clone->src[1] =
+                     jay_bare_regs(J_ADDRESS, 32, addr + i * movi_width,
+                                   movi_width / 2);
+                  jay_builder_insert(&b, clone);
+               }
+
+               I->simd_split += extra;
+               I->simd_offs *= pieces;
+               I->src[1] = jay_bare_regs(J_ADDRESS, 32, addr, movi_width / 2);
+            }
+         } else {
+            unsigned offset_B = jay_reg_offset_B(func->shader, I->src[0]);
+
+            jay_inst *add = jay_ADD(&b, JAY_TYPE_U16, a0, I->src[1], offset_B);
+            add->uniform = !VxH;
+            add->simd_split = I->simd_split;
+            add->simd_offs = I->simd_offs;
+
+            I->op = JAY_OPCODE_MOV_INDIRECT;
+            I->src[1] = a0;
+         }
       } else if (I->op == JAY_OPCODE_SLICE_REPACK) {
          b.cursor = jay_after_inst(I);
          for (unsigned i = 1; i < (1 << jay_slice_repack_factor_log2(I)); ++i) {

@@ -68,9 +68,11 @@ r300_nir_prepare_presubtract = [
         (('fmul', 'a(is_ubo_or_input)', 2.0), ('fadd', a, a)),
 ]
 
-for multiplier in [2.0, 4.0, 8.0, 16.0, 0.5, 0.25, 0.125, 0.0625]:
+# Loads and shared values cannot absorb output modifiers. Move supported scales
+# after the product, leaving single-use ALU results for the backend to fold.
+for multiplier in [2.0, 4.0, 8.0, 0.5, 0.25, 0.125]:
     r300_nir_prepare_presubtract.extend([
-        (('fmul', a, ('fmul(is_used_once)', 'b(is_ubo_or_input)', multiplier)), ('fmul', multiplier, ('fmul', a, b))),
+        (('fmul', a, ('fmul(is_used_once)', 'b(is_not_single_use_alu)', multiplier)), ('fmul', multiplier, ('fmul', a, b))),
 ])
 
 r300_nir_opt_algebraic_late = [
@@ -88,10 +90,16 @@ r300_nir_opt_algebraic_late = [
         (('fmad(nsz)', 0.0, ('sne', a, b), c), c),
         (('fmad(nsz)', 0.0, ('slt', a, b), c), c),
         (('fmad(nsz)', 0.0, ('sge', a, b), c), c),
-        (('fcsel_gt', ('fcsel_ge', ('fadd', '#a(is_finite)', ('fneg', b)), 0.0, 1.0), c, d),
-         ('fcsel_gt', ('fadd', b, ('fneg', a)), c, d)),
         (('fcsel_ge', ('fneg', ('fcsel_ge', a, 0.0, 1.0)), b, c), ('fcsel_ge', a, b, c)),
         (('fcsel_ge', ('fneg', ('fcsel_ge', a, 1.0, 0.0)), b, c), ('fcsel_ge', a, c, b)),
+        # Select directly on comparisons lowered to 0.0 or 1.0.
+        (('fcsel_gt', ('fcsel_ge', a, 1.0, 0.0), b, c), ('fcsel_ge', a, b, c)),
+        (('fcsel_gt', ('fcsel_ge', a, 0.0, 1.0), b, c), ('fcsel_ge', a, c, b)),
+        # Fold multiplication by a boolean into the select.
+        (('fmul(nsz)', ('fcsel_ge(is_used_once)', a, 0.0, 1.0), 'b(is_finite)'),
+         ('fcsel_ge', a, 0.0, b)),
+        (('fmul(nsz)', ('fcsel_ge(is_used_once)', a, 1.0, 0.0), 'b(is_finite)'),
+         ('fcsel_ge', a, b, 0.0)),
         # NIR terminate_if expects bools, but we can handle floats just fine
         # so get rid of the unneeded select.
         (('fcsel_ge(is_only_used_by_terminate_if)', a, 0.0, 1.0), ('fneg', a)),
@@ -106,6 +114,8 @@ r300_nir_lower_vs_alu_r300 = [
         # fcsel_ge from ftrunc.
         (('fcsel_ge', a, b, c), ('flrp', c, b, ('sge', a, 0.0))),
         # seq/sne may be produced by bool/int lowering.
+        (('seq', 'a@32(is_not_negative)', 0.0), ('sge', 0.0, a)),
+        (('seq', 'a@32', 0.0), ('sge', 0.0, ('fabs', a))),
         (('seq', 'a@32', 'b@32'), ('fmul', ('sge', a, b), ('sge', b, a))),
         (('sne', 'a@32', 'b@32'), ('fmax', ('slt', a, b), ('slt', b, a))),
 ]

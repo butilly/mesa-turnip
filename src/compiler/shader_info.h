@@ -367,7 +367,7 @@ typedef struct shader_info {
     * Arrangement of invocations used to calculate derivatives in
     * compute/task/mesh shaders.  From KHR_compute_shader_derivatives.
     */
-   enum gl_derivative_group derivative_group:2;
+   enum gl_derivative_group derivative_group;
 
    /* Assume that data races do not happen. If this isn't set, data races
     * read/write undefined values, but do not cause undefined behaviour. This
@@ -387,7 +387,7 @@ typedef struct shader_info {
 
    /* Type of hash carried in source_blake3.
     */
-   enum shader_info_hash_type hash_type:2;
+   enum shader_info_hash_type hash_type;
 
    union {
       struct {
@@ -564,7 +564,7 @@ typedef struct shader_info {
          bool untyped_color_outputs:1;
 
          /** gl_FragDepth layout for ARB_conservative_depth. */
-         enum gl_frag_depth_layout depth_layout:3;
+         enum gl_frag_depth_layout depth_layout;
 
          /* Bitmask of gl_advanced_blend_mode values that may be used with this
           * shader.
@@ -575,12 +575,19 @@ typedef struct shader_info {
           * Defined by AMD_shader_early_and_late_fragment_tests.
           */
          bool early_and_late_fragment_tests:1;
-         enum gl_frag_stencil_layout stencil_front_layout:3;
-         enum gl_frag_stencil_layout stencil_back_layout:3;
+         enum gl_frag_stencil_layout stencil_front_layout;
+         enum gl_frag_stencil_layout stencil_back_layout;
       } fs;
 
       struct {
          uint16_t workgroup_size_hint[3];
+
+         /* If non-zero, this specifies the fixed number of invocations per
+          * workgroup when the workgroup size is variable but the number of
+          * invocations per workgroup doesn't change, i.e. only the shape
+          * of the workgroup changes.
+          */
+         uint16_t num_invocations_per_variable_workgroup;
 
          uint8_t user_data_components_amd:4;
 

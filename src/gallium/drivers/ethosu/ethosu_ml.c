@@ -9,6 +9,7 @@
 #include "util/macros.h"
 #include "util/u_dynarray.h"
 #include "util/u_inlines.h"
+#include "c11/time.h"
 
 #include <assert.h>
 #include <inttypes.h>
@@ -62,18 +63,279 @@ ethosu_dump_buffer(const uint8_t *ptr, char *name, int operation_nr,
    fclose(f);
 }
 
+static const char *
+ethosu_region_name(unsigned region)
+{
+   switch (region) {
+   case COEFS_REGION:
+      return "coefs";
+   case IO_REGION:
+      return "io";
+   case SCRATCH_REGION:
+      return "scratch";
+   case LUT_REGION:
+      return "shram_lut";
+   default:
+      return "unknown";
+   }
+}
+
+static unsigned
+ethosu_region_index(unsigned region)
+{
+   if (region & 0x100)
+      return 128 + (region & 0xff);
+
+   return region & 0xff;
+}
+
+static void
+ethosu_mem_account_range(unsigned *high_water, unsigned region,
+                         unsigned address, unsigned size)
+{
+   if (!size)
+      return;
+
+   unsigned index = ethosu_region_index(region);
+
+   high_water[index] = MAX2(high_water[index], address + size);
+}
+
+static unsigned
+ethosu_mem_feature_map_size(const struct ethosu_feature_map *fm)
+{
+   unsigned elem_size;
+   uint64_t size;
+
+   if (!fm->tensor)
+      return 0;
+
+   elem_size = 1 << fm->precision;
+
+   if (fm->tensor->layout == ETHOSU_LAYOUT_NHCWB16)
+      return fm->shape.height * fm->shape.width * align(fm->shape.depth, 16) *
+             elem_size;
+
+   size = elem_size;
+   if (fm->shape.height)
+      size += (uint64_t)(fm->shape.height - 1) * fm->stride.y;
+   if (fm->shape.width)
+      size += (uint64_t)(fm->shape.width - 1) * fm->stride.x;
+   if (fm->shape.depth)
+      size += (uint64_t)(fm->shape.depth - 1) * fm->stride.c;
+
+   assert(size <= UINT_MAX);
+   return size;
+}
+
+static void
+ethosu_mem_account_feature_map(unsigned *high_water,
+                               const struct ethosu_feature_map *fm)
+{
+   if (fm->activation_storage == ETHOSU_ACTIVATION_STORAGE_CHAINED)
+      return;
+
+   ethosu_mem_account_range(high_water, fm->region, fm->tiles.addresses[0],
+                            ethosu_mem_feature_map_size(fm));
+}
+
+static const char *
+ethosu_operation_name(enum ethosu_operation_type type)
+{
+   switch (type) {
+   case ETHOSU_OPERATION_TYPE_NONE:
+      return "none";
+   case ETHOSU_OPERATION_TYPE_CONVOLUTION:
+      return "conv";
+   case ETHOSU_OPERATION_TYPE_POOLING:
+      return "pool";
+   case ETHOSU_OPERATION_TYPE_ELTWISE:
+      return "eltwise";
+   case ETHOSU_OPERATION_TYPE_DMA:
+      return "dma";
+   default:
+      return "unknown";
+   }
+}
+
+static void
+ethosu_dump_memory_range(unsigned op_idx, const char *name, unsigned region,
+                         unsigned address, unsigned size)
+{
+   if (!size)
+      return;
+
+   mesa_logi("ethosu memory op=%u %s=%s:0x%x+0x%x\n", op_idx, name,
+             ethosu_region_name(region), address, size);
+}
+
+static void
+ethosu_dump_memory_feature_map(unsigned op_idx, const char *name,
+                               const struct ethosu_feature_map *fm)
+{
+   if (!fm->tensor)
+      return;
+
+   if (fm->activation_storage == ETHOSU_ACTIVATION_STORAGE_CHAINED) {
+      mesa_logi("ethosu memory op=%u %s[%u]=chained\n", op_idx, name,
+                fm->tensor->index);
+      return;
+   }
+
+   char tensor_name[32];
+
+   snprintf(tensor_name, sizeof(tensor_name), "%s[%u]", name,
+            fm->tensor->index);
+   ethosu_dump_memory_range(op_idx, tensor_name, fm->region,
+                            fm->tiles.addresses[0],
+                            ethosu_mem_feature_map_size(fm));
+}
+
+static void
+ethosu_dump_memory_usage(struct ethosu_subgraph *subgraph)
+{
+   unsigned high_water[256] = {0};
+   unsigned op_count =
+      util_dynarray_num_elements(&subgraph->operations, struct ethosu_operation);
+   unsigned tensor_count =
+      util_dynarray_num_elements(&subgraph->tensors, struct ethosu_tensor);
+   unsigned lut_region = LUT_REGION;
+   unsigned scratch_size = ethosu_ml_device(subgraph->base.device)->sram_size;
+   unsigned scratch_feature_maps = 0;
+   unsigned scratch_staged_start = scratch_size;
+   unsigned op_idx = 0;
+
+   if (!DBG_ENABLED(ETHOSU_DBG_MEM))
+      return;
+
+   high_water[COEFS_REGION] = subgraph->coefs_used;
+   high_water[IO_REGION] = subgraph->io_used;
+
+   util_dynarray_foreach (&subgraph->operations, struct ethosu_operation, operation) {
+      mesa_logi("ethosu memory op=%u type=%s block=%ux%ux%u\n", op_idx,
+                ethosu_operation_name(operation->type),
+                operation->block_config.ofm_block.height,
+                operation->block_config.ofm_block.width,
+                operation->block_config.ofm_block.depth);
+      ethosu_dump_memory_feature_map(op_idx, "ifm", &operation->ifm);
+      ethosu_dump_memory_feature_map(op_idx, "ifm2", &operation->ifm2);
+      ethosu_dump_memory_feature_map(op_idx, "ofm", &operation->ofm);
+
+      ethosu_mem_account_feature_map(high_water, &operation->ifm);
+      ethosu_mem_account_feature_map(high_water, &operation->ifm2);
+      ethosu_mem_account_feature_map(high_water, &operation->ofm);
+
+      if (operation->ifm.activation_storage !=
+             ETHOSU_ACTIVATION_STORAGE_CHAINED &&
+          operation->ifm.region == SCRATCH_REGION)
+         scratch_feature_maps = MAX2(scratch_feature_maps,
+                                     operation->ifm.tiles.addresses[0] +
+                                        ethosu_mem_feature_map_size(&operation->ifm));
+      if (operation->ifm2.activation_storage !=
+             ETHOSU_ACTIVATION_STORAGE_CHAINED &&
+          operation->ifm2.region == SCRATCH_REGION)
+         scratch_feature_maps = MAX2(scratch_feature_maps,
+                                     operation->ifm2.tiles.addresses[0] +
+                                        ethosu_mem_feature_map_size(&operation->ifm2));
+      if (operation->ofm.activation_storage !=
+             ETHOSU_ACTIVATION_STORAGE_CHAINED &&
+          operation->ofm.region == SCRATCH_REGION)
+         scratch_feature_maps = MAX2(scratch_feature_maps,
+                                     operation->ofm.tiles.addresses[0] +
+                                        ethosu_mem_feature_map_size(&operation->ofm));
+
+      switch (operation->type) {
+      case ETHOSU_OPERATION_TYPE_CONVOLUTION:
+         ethosu_dump_memory_range(op_idx, "scales", operation->conv.scales.region,
+                                  operation->conv.scales.address,
+                                  operation->conv.scales.size);
+         ethosu_dump_memory_range(op_idx, "weights", operation->conv.weights.region,
+                                  operation->conv.weights.address,
+                                  operation->conv.weights.size);
+         ethosu_mem_account_range(high_water, operation->conv.scales.region,
+                                  operation->conv.scales.address,
+                                  operation->conv.scales.size);
+         ethosu_mem_account_range(high_water, operation->conv.weights.region,
+                                  operation->conv.weights.address,
+                                  operation->conv.weights.size);
+         break;
+      case ETHOSU_OPERATION_TYPE_POOLING:
+         ethosu_dump_memory_range(op_idx, "lut", operation->lut.region,
+                                  operation->lut.address, operation->lut.size);
+         ethosu_mem_account_range(high_water, operation->lut.region,
+                                  operation->lut.address, operation->lut.size);
+         break;
+      case ETHOSU_OPERATION_TYPE_DMA:
+         ethosu_dump_memory_range(op_idx, "dma-src", COEFS_REGION,
+                                  operation->dma.address, operation->dma.size);
+         ethosu_dump_memory_range(op_idx, "dma-dst", operation->dma.dst_region,
+                                  operation->dma.dst_address, operation->dma.size);
+         ethosu_mem_account_range(high_water, COEFS_REGION,
+                                  operation->dma.address,
+                                  operation->dma.size);
+         ethosu_mem_account_range(high_water, operation->dma.dst_region,
+                                  operation->dma.dst_address,
+                                  operation->dma.size);
+         if (operation->dma.dst_region == SCRATCH_REGION)
+            scratch_staged_start = MIN2(scratch_staged_start,
+                                        operation->dma.dst_address);
+         break;
+      default:
+         break;
+      }
+
+      op_idx++;
+   }
+
+   mesa_logi("ethosu memory: operations=%u tensors=%u io=%u coefs=%u "
+             "scratch=%u shram_lut=%u scratch_available=%u\n",
+             op_count, tensor_count, high_water[IO_REGION],
+             high_water[COEFS_REGION], high_water[SCRATCH_REGION],
+             high_water[ethosu_region_index(lut_region)],
+             scratch_size);
+
+   mesa_logi("ethosu memory scratch: feature_maps=%u staged_coefficients=%u "
+             "address_peak=%u available=%u\n",
+             scratch_feature_maps, scratch_size - scratch_staged_start,
+             high_water[SCRATCH_REGION], scratch_size);
+
+   mesa_logi("ethosu memory regions: %s=%u %s=%u %s=%u %s=%u\n",
+             ethosu_region_name(IO_REGION), high_water[IO_REGION],
+             ethosu_region_name(COEFS_REGION), high_water[COEFS_REGION],
+             ethosu_region_name(SCRATCH_REGION), high_water[SCRATCH_REGION],
+             ethosu_region_name(lut_region),
+             high_water[ethosu_region_index(lut_region)]);
+
+   util_dynarray_foreach (&subgraph->tensors, struct ethosu_tensor, tensor) {
+      mesa_logi("ethosu memory tensor: index=%u layout=%u offset=%u "
+                "size=%u users=%u\n",
+                tensor->index, tensor->layout, tensor->offset, tensor->size,
+                tensor->users);
+   }
+}
+
 void
 ethosu_register_tensor(struct ethosu_subgraph *subgraph,
                        const struct pipe_tensor *ptensor)
 {
+   struct ethosu_tensor *tensor;
+
+   if ((tensor = ethosu_find_tensor(subgraph, ptensor->index))) {
+      tensor->users++;
+      tensor->is_external_output |= ptensor->is_external_output;
+      return;
+   }
+
    struct ethosu_tensor new_tensor = {0};
    new_tensor.index = ptensor->index;
+   new_tensor.users = 1;
    new_tensor.shape.height = ptensor->dims[1];
    new_tensor.shape.width = ptensor->dims[2];
    new_tensor.shape.depth = ptensor->dims[3];
    new_tensor.layout = ETHOSU_LAYOUT_NHWC;
    new_tensor.batches = subgraph->batches;
    new_tensor.type_size = ptensor->type_size;
+   new_tensor.is_external_output = ptensor->is_external_output;
    util_dynarray_append(&subgraph->tensors, new_tensor);
 }
 
@@ -294,8 +556,13 @@ ethosu_resize_bilinear_supported(const struct pipe_ml_operation *operation)
 
    if (input->type_size != 1 || output->type_size != 1 ||
        input->is_signed != output->is_signed || input->scale != output->scale ||
-       input->zero_point != output->zero_point ||
-       operation->resize_bilinear.half_pixel_centers)
+       input->zero_point != output->zero_point)
+      return false;
+
+   if (!memcmp(input->dims, output->dims, sizeof(input->dims)))
+      return true;
+
+   if (operation->resize_bilinear.half_pixel_centers)
       return false;
 
    if (input->dims[1] == 1 && input->dims[2] == 1)
@@ -323,7 +590,8 @@ ethosu_argmax_supported(struct pipe_ml_device *pdevice,
    if (operation->argmax.axis != 3 || input->type_size != 1 ||
        output->type_size != 4 || input->dims[0] != 1 ||
        input->is_signed != output->is_signed || !input->dims[3] ||
-       !input->dims[1] || !input->dims[2] || input->dims[2] > (1 << 16) ||
+       !input->dims[1] || !input->dims[2] ||
+       input->dims[2] > FEATURE_MAP_MAX_DIM ||
        (ethosu_ml_device(pdevice)->is_u65 && input->dims[3] > 127) ||
        (!ethosu_ml_device(pdevice)->is_u65 && input->dims[3] > (1 << 15)))
       return false;
@@ -348,6 +616,54 @@ ethosu_space_batch_supported(const struct pipe_ml_operation *operation)
           operation->space_batch.after_y >= 0 &&
           operation->space_batch.before_x >= 0 &&
           operation->space_batch.after_x >= 0;
+}
+
+static bool
+ethosu_dims_fit(const unsigned dims[4])
+{
+   return dims[1] <= FEATURE_MAP_MAX_DIM &&
+          dims[2] <= FEATURE_MAP_MAX_DIM &&
+          dims[3] <= FEATURE_MAP_MAX_DIM;
+}
+
+static bool
+ethosu_tensors_fit(struct pipe_tensor **tensors, unsigned count)
+{
+   for (unsigned i = 0; i < count; i++) {
+      if (tensors[i] && !tensors[i]->data && !ethosu_dims_fit(tensors[i]->dims))
+         return false;
+   }
+
+   return true;
+}
+
+static bool
+ethosu_feature_maps_fit(const struct pipe_ml_operation *operation)
+{
+   switch (operation->type) {
+   case PIPE_ML_OPERATION_TYPE_RESHAPE:
+      return true;
+   case PIPE_ML_OPERATION_TYPE_CONCATENATION:
+   case PIPE_ML_OPERATION_TYPE_PACK:
+      return ethosu_tensors_fit(operation->input_tensors,
+                                operation->input_count);
+   case PIPE_ML_OPERATION_TYPE_SPLIT:
+   case PIPE_ML_OPERATION_TYPE_UNPACK:
+   case PIPE_ML_OPERATION_TYPE_STRIDED_SLICE:
+      return ethosu_tensors_fit(operation->output_tensors,
+                                operation->output_count);
+   case PIPE_ML_OPERATION_TYPE_FULLY_CONNECTED: {
+      unsigned in[4], out[4];
+
+      ethosu_fc_lowered_dims(operation, in, out);
+      return ethosu_dims_fit(in) && ethosu_dims_fit(out);
+   }
+   default:
+      return ethosu_tensors_fit(operation->input_tensors,
+                                operation->input_count) &&
+             ethosu_tensors_fit(operation->output_tensors,
+                                operation->output_count);
+   }
 }
 
 bool
@@ -465,7 +781,9 @@ ethosu_ml_operation_supported(struct pipe_ml_device *pdevice,
                   output->type_size == 1 &&
                   input->is_signed == output->is_signed &&
                   input->dims[3] > 1 &&
-                  input->dims[3] <= SOFTMAX_MAX_DEPTH;
+                  input->dims[3] <= SOFTMAX_MAX_DEPTH &&
+                  (uint64_t)input->dims[1] * input->dims[2] <=
+                     FEATURE_MAP_MAX_DIM;
       break;
    }
    case PIPE_ML_OPERATION_TYPE_SPLIT: {
@@ -553,7 +871,18 @@ ethosu_ml_operation_supported(struct pipe_ml_device *pdevice,
       supported = false;
    }
 
-   return supported;
+   return supported && ethosu_feature_maps_fit(operation);
+}
+
+static void
+ethosu_ml_operation_free(struct ethosu_operation *operation)
+{
+   free(operation->kernel.scales);
+   free(operation->kernel.zero_points);
+   if (operation->type == ETHOSU_OPERATION_TYPE_CONVOLUTION) {
+      free(operation->conv.weight_data);
+      free(operation->conv.bias_data);
+   }
 }
 
 struct pipe_ml_subgraph *
@@ -588,10 +917,8 @@ ethosu_ml_subgraph_create(struct pipe_ml_device *pdevice,
 
    if (subgraph->failed) {
       util_dynarray_foreach (&subgraph->operations,
-                             struct ethosu_operation, operation) {
-         free(operation->kernel.scales);
-         free(operation->kernel.zero_points);
-      }
+                             struct ethosu_operation, operation)
+         ethosu_ml_operation_free(operation);
       util_dynarray_fini(&subgraph->operations);
       free(subgraph->cmd0_state);
       free(subgraph->cmd1_state);
@@ -605,10 +932,8 @@ ethosu_ml_subgraph_create(struct pipe_ml_device *pdevice,
 
    if (subgraph->failed) {
       util_dynarray_foreach (&subgraph->operations,
-                             struct ethosu_operation, operation) {
-         free(operation->kernel.scales);
-         free(operation->kernel.zero_points);
-      }
+                             struct ethosu_operation, operation)
+         ethosu_ml_operation_free(operation);
       util_dynarray_fini(&subgraph->operations);
       free(subgraph->cmd0_state);
       free(subgraph->cmd1_state);
@@ -618,10 +943,10 @@ ethosu_ml_subgraph_create(struct pipe_ml_device *pdevice,
       return NULL;
    }
 
-   util_dynarray_foreach (&subgraph->operations, struct ethosu_operation, operation) {
-      free(operation->kernel.scales);
-      free(operation->kernel.zero_points);
-   }
+   ethosu_dump_memory_usage(subgraph);
+
+   util_dynarray_foreach (&subgraph->operations, struct ethosu_operation, operation)
+      ethosu_ml_operation_free(operation);
    util_dynarray_fini(&subgraph->operations);
 
    free(subgraph->cmd0_state);
@@ -918,10 +1243,11 @@ ethosu_ml_subgraph_invoke(struct pipe_context *pcontext,
 
    if (subgraph->coefs_rsrc) {
       job.region_bo_handles[COEFS_REGION] = ethosu_resource(subgraph->coefs_rsrc)->handle;
-      if (!DBG_ENABLED(ETHOSU_DBG_DISABLE_SRAM)) {
-         job.region_bo_handles[SCRATCH_REGION] = 0;
-         job.sram_size = ethosu_ml_device(subgraph->base.device)->sram_size;
-      }
+   }
+
+   if (!DBG_ENABLED(ETHOSU_DBG_DISABLE_SRAM)) {
+      job.region_bo_handles[SCRATCH_REGION] = 0;
+      job.sram_size = ethosu_ml_device(subgraph->base.device)->sram_size;
    }
 
    job.region_bo_handles[IO_REGION] = ethosu_resource(subgraph->io_rsrc)->handle;

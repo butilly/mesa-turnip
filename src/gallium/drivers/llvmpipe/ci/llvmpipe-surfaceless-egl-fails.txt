@@ -15,14 +15,8 @@ glx@glx-visuals-stencil -pixmap,Crash
 glx@glx_arb_create_context@invalid flag,Fail
 
 spec@!opengl 1.0@gl-1.0-swapbuffers-behavior,Fail
-spec@!opengl 1.0@rasterpos,Fail
-spec@!opengl 1.0@rasterpos@glsl_vs_gs_linked,Fail
-spec@!opengl 1.0@rasterpos@glsl_vs_tes_linked,Fail
 spec@!opengl 3.0@clearbuffer-depth-cs-probe,Fail
 spec@arb_post_depth_coverage@arb_post_depth_coverage-multisampling,Fail
-
-spec@arb_program_interface_query@arb_program_interface_query-getprogramresourceindex,Fail
-spec@arb_program_interface_query@arb_program_interface_query-getprogramresourceindex@'vs_input2[1][0]' on GL_PROGRAM_INPUT,Fail
 
 spec@arb_shader_image_load_store@execution@image-array-out-of-bounds-access-load,Crash
 spec@arb_shader_image_load_store@execution@image-array-out-of-bounds-access-store,Crash
@@ -76,9 +70,6 @@ spec@!opengl 1.1@polygon-mode-offset@config 4: Expected white pixel on top edge,
 spec@arb_framebuffer_object@execution@msaa-alpha-to-coverage_alpha-to-one_write-z,Fail
 spec@ovr_multiview@compiler@multiple-num-views-in-single-declaration-mismatch.vert,Fail
 
-# src/compiler/nir/nir.h:2850: nir_src_comp_as_uint: Assertion `nir_src_is_const(src)' failed.
-spec@glsl-1.50@execution@geometry@dynamic_input_array_index,Crash
-
 # Nightly run expectations update
 spec@ext_image_dma_buf_import@ext_image_dma_buf_import-transcode-nv12-as-r8-gr88,Fail
 
@@ -89,7 +80,15 @@ spec@!opengl 1.0@gl-1.0-front-invalidate-back,Crash
 spec@!opengl 1.1@masked-clear,Crash
 spec@!opengl 1.1@ppgtt_memory_alignment,Crash
 spec@!opengl 3.0@gl30basic,Crash
-spec@arb_timer_query@query gl_timestamp,Fail
 spec@ext_framebuffer_blit@fbo-blit-check-limits,Crash
 spec@ext_framebuffer_blit@fbo-sys-blit,Crash
 spec@ext_framebuffer_blit@fbo-sys-sub-blit,Crash
+
+# uprev Piglit in Mesa
+glx@glx-front-flush-after-swap,Fail
+glx@glx-read-back-after-swap -rgba,Fail
+glx@glx-read-back-after-swap,Fail
+spec@!opengl 1.0@gl-1.0-front-back-interleave,Crash
+spec@!opengl 1.0@gl-1.0-read-front-after-swap,Crash
+spec@!opengl 1.5@gl-1.5-gen-buffers-unique,Crash
+

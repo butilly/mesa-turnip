@@ -7,6 +7,7 @@
 #ifndef MALI_PERF_H
 #define MALI_PERF_H
 
+#include <stdbool.h>
 #include <util/macros.h>
 
 #define MALI_PERF_MAX_COUNTERS_PER_BLOCK 128
@@ -17,6 +18,7 @@ enum mali_perf_block_type {
    MALI_PERF_BLOCK_MEMSYS,
    MALI_PERF_BLOCK_SHADER_CORE,
    MALI_PERF_BLOCK_TILER,
+   MALI_PERF_BLOCK_NEURAL,
    MALI_PERF_BLOCK_TYPE_COUNT,
 };
 
@@ -45,6 +47,7 @@ enum mali_perf_counter_units {
    MALI_PERF_COUNTER_UNITS_BOXES,
    MALI_PERF_COUNTER_UNITS_BYTES_PER_SECOND,
    MALI_PERF_COUNTER_UNITS_INSTANCES,
+   MALI_PERF_COUNTER_UNITS_BLOCKS,
 };
 
 struct mali_perf_constants {
@@ -65,6 +68,7 @@ struct mali_perf_counter_source {
    uint16_t counter;
 };
 
+#define MALI_PERF_HW_COUNTER_ID_BLOCK_INDEX_ALL UINT8_MAX
 struct mali_perf_hw_counter_id {
    struct {
       int8_t type;
@@ -106,6 +110,12 @@ struct mali_perf_counter {
                        const struct mali_perf_dump_info *dump_info);
 };
 
+static inline bool
+mali_perf_counter_is_config(const struct mali_perf_counter *c)
+{
+   return c->sources[0].block == MALI_PERF_BLOCK_NONE;
+}
+
 struct mali_perf_gpu_info {
    const struct mali_perf_counter *counters;
 };
@@ -135,9 +145,9 @@ mali_perf_block_count(enum mali_perf_block_type block_type,
 {
    switch (block_type) {
    case MALI_PERF_BLOCK_MEMSYS:
-      return constants->shader_core_count;
-   case MALI_PERF_BLOCK_SHADER_CORE:
       return constants->l2_cache_count;
+   case MALI_PERF_BLOCK_SHADER_CORE:
+      return constants->shader_core_count;
    case MALI_PERF_BLOCK_GPU_FRONT_END:
    case MALI_PERF_BLOCK_TILER:
    case MALI_PERF_BLOCK_NONE:
@@ -145,6 +155,29 @@ mali_perf_block_count(enum mali_perf_block_type block_type,
    default:
       return 0;
    }
+}
+
+static inline double
+mali_perf_get_hw_counter_value(struct mali_perf_backend *backend,
+                               struct mali_perf_hw_counter_id id,
+                               const struct mali_perf_constants *constants)
+{
+   uint32_t nblocks = mali_perf_block_count(
+      (enum mali_perf_block_type)id.block.type, constants);
+
+   if (nblocks == 0)
+      return 0;
+
+   if (id.block.index != MALI_PERF_HW_COUNTER_ID_BLOCK_INDEX_ALL)
+      return (double)backend->get_hw_counter_value(backend, id);
+
+   double res = 0.0;
+   for (uint32_t blk = 0; blk < nblocks; ++blk) {
+      id.block.index = blk;
+      res += (double)backend->get_hw_counter_value(backend, id);
+   }
+
+   return res;
 }
 
 extern const struct mali_perf_gpu_info mali_perf_g1;

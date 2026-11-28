@@ -21,7 +21,7 @@
 # IN THE SOFTWARE.
 
 import ast
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 import itertools
 import struct
 import sys
@@ -29,7 +29,7 @@ import mako.template
 import re
 import traceback
 
-from nir_opcodes import opcodes, type_sizes
+from nir_opcodes import opcodes, type_sizes, type_size, type_has_size, type_base_type
 from enum import Enum
 
 
@@ -77,6 +77,10 @@ def get_cond_index(conds, cond):
         return -1
 
 
+def op_num_srcs(op):
+    return 1 if op in conv_opcode_types else opcodes[op].num_inputs
+
+
 def get_c_opcode(op):
     if op in conv_opcode_types:
         return 'nir_search_op_' + op
@@ -84,17 +88,15 @@ def get_c_opcode(op):
         return 'nir_op_' + op
 
 
-_type_re = re.compile(r"(?P<type>int|uint|bool|float)?(?P<bits>\d+)?")
+def is_2src_commutative(op, num_srcs):
+    """Return whether the first two of num_srcs sources of op can be swapped
+    """
+    return num_srcs >= 2 and op not in conv_opcode_types and \
+           "2src_commutative" in opcodes[op].algebraic_properties
 
 
 def type_bits(type_str):
-    m = _type_re.match(type_str)
-    assert m.group('type')
-
-    if m.group('bits') is None:
-        return 0
-    else:
-        return int(m.group('bits'))
+    return type_size(type_str) if type_has_size(type_str) else 0
 
 # Represents a set of variables, each with a unique id
 
@@ -210,6 +212,7 @@ class Value(object):
       ${'true' if len(val.sources) > 1 and isinstance(val.sources[1], Constant) else 'false'},
       ${val.swizzle},
       ${val.c_opcode()},
+      ${val.replace_num_components},
       ${val.comm_expr_idx}, ${val.comm_exprs},
       { ${', '.join(src.array_index for src in val.sources)} },
       ${val.cond_index},
@@ -295,7 +298,7 @@ class Constant(Value):
 # doesn't match one of the field patterns.
 _var_name_re = re.compile(r"(?P<const>#)?(?P<name>\w+)"
                           r"(?P<bits>@\d+)?"
-                          r"(?P<cond>\([^\)]+\))?"
+                          r"(?:\((?P<cond>[^\)]+)\))?"
                           r"(?P<swiz>\.[xyzwabcdefghijklmnop]+)?"
                           r"$")
 
@@ -324,13 +327,25 @@ class Variable(Value):
         assert self.var_name != 'False'
 
         self.is_constant = m.group('const') is not None
-        self.cond = m.group('cond')
-        self.cond_index = get_cond_index(
-            algebraic_pass.variable_cond, m.group('cond'))
+        self.constant_type = None
         self._bit_size = int(m.group('bits')[1:]) if m.group('bits') else None
         self.swiz = m.group('swiz')
 
         self.index = varset[self.var_name]
+
+        self.cond = m.group('cond')
+        if self.is_constant and self.cond:
+            cond = self.cond.split(',')
+            valid_types = ['uint', 'int', 'float', 'bool']
+            types = [c for c in cond if c in valid_types]
+            conds = [c for c in cond if c not in valid_types]
+            assert len(types) <= 1
+            assert len(conds) <= 1
+            self.cond = conds[0] if conds else None
+            self.constant_type = types[0] if types else None
+
+        self.cond_index = get_cond_index(
+            algebraic_pass.variable_cond, self.cond)
 
     def equivalent(self, other):
         """Check that two variables are equivalent.
@@ -389,6 +404,12 @@ class Expression(Value):
            self.preserve_nan_inf = True
            self.preserve_sz = True
 
+        self.replace_num_components = 0
+        for i in range(1, 5):
+           if cond.pop(f'vec{i}', False):
+              assert self.replace_num_components == 0
+              self.replace_num_components = i
+
         # Single component index of the swizzle of the output of this
         # expression, or -1 if no swizzle (all components)
         self.swizzle = - \
@@ -444,18 +465,17 @@ class Expression(Value):
 
         return all(s.equivalent(o) for s, o in zip(self.sources, other.sources))
 
+    def is_2src_commutative(self):
+        """Return whether the first two sources of the expression can be swapped
+        """
+        return is_2src_commutative(self.opcode, len(self.sources))
+
     def __index_comm_exprs(self, base_idx):
         """Recursively count and index commutative expressions
         """
         self.comm_exprs = 0
 
-        # A note about the explicit "len(self.sources)" check. The list of
-        # sources comes from user input, and that input might be bad.  Check
-        # that the expected second source exists before accessing it. Without
-        # this check, a unit test that does "('iadd', 'a')" will crash.
-        if self.opcode not in conv_opcode_types and \
-           "2src_commutative" in opcodes[self.opcode].algebraic_properties and \
-           len(self.sources) >= 2 and \
+        if self.is_2src_commutative() and \
            not self.sources[0].equivalent(self.sources[1]):
             self.comm_expr_idx = base_idx
             self.comm_exprs += 1
@@ -828,6 +848,125 @@ class BitSizeValidator(object):
         self.validate_replace(replace, search)
 
 
+TransformCondExprVar = namedtuple('TransformCondExprVar', ['index', 'name', 'is_const', 'data_type'])
+
+class SearchVarTypes(object):
+    def __init__(self):
+        self.float_srcs = False
+        self.nonfloat_srcs = False
+        self.explicit = None
+
+    def get_constant_type(self):
+        assert self.explicit or not self.nonfloat_srcs, \
+            'Unclear type in search expression constant'
+        return self.explicit or ('float' if self.float_srcs else 'bool')
+
+class TransformCondExpr(object):
+    def __init__(self, expr):
+        self.expr = expr
+        self.variables = {}
+
+        self.components = None
+        self.consts = set()
+
+    def _add_variables(self, val, components, data_type):
+        if isinstance(val, Expression):
+            opcode = opcodes[val.opcode + '32' if val.opcode in conv_opcode_types else val.opcode]
+
+            if components is None:
+                components = opcode.output_size
+
+            for src, src_type, src_size in zip(val.sources, opcode.input_types, opcode.input_sizes):
+                src_size = components if src_size == 0 else src_size
+                self._add_variables(src, src_size, type_base_type(src_type))
+        elif isinstance(val, Variable):
+            cur_var = self.variables.setdefault(val.index, SearchVarTypes())
+
+            # A string is an explicit type, False is an integer or conflicting type
+            if val.constant_type:
+                assert cur_var.explicit is None or cur_var == val.constant_type, \
+                    'Conflicting explicit constant types'
+                cur_var.explicit = val.constant_type
+
+            if data_type == 'float':
+                cur_var.float_srcs = True
+            elif val.c_bit_size != 1:
+                cur_var.nonfloat_srcs = True
+
+            if val.is_constant:
+                if self.components is None:
+                    self.components = components
+                else:
+                    assert self.components == components, \
+                        'All constant sources must have the same number of components'
+                self.consts.add(val.index)
+
+    def init(self, varset, search):
+        # Gather information on variables which are required to be a constant
+        self._add_variables(search, None, 'none')
+        self.variables = sorted(self.variables.items())
+        var_index_to_name = {i:n for n,i in varset.names.items()}
+        self.variables = tuple(TransformCondExprVar(k, var_index_to_name[k], k in self.consts,
+                                                    v) for k,v in self.variables)
+
+    def _get_const_val(self, var):
+        name = var.name
+        dtype = var.data_type.get_constant_type()
+        c_type = f'{dtype}64_t'
+        if dtype == 'bool':
+            c_type = 'bool'
+        elif dtype == 'float':
+            c_type = 'double'
+
+        load_const = f'nir_def_as_load_const({name}_def)'
+        component = f'{name}_var->src.swizzle[component]'
+        res = f'nir_const_value *{name}_cv = &{load_const}->value[{component}];\n'
+        res += f'UNUSED {c_type} {name} = '
+        if dtype == 'bool':
+            return res + f'nir_const_value_as_bool(*{name}_cv, {name}_def->bit_size);\n'
+        elif dtype == 'uint':
+            return res + f'nir_const_value_as_uint(*{name}_cv, {name}_def->bit_size);\n'
+        elif dtype == 'int':
+            return res + f'nir_const_value_as_int(*{name}_cv, {name}_def->bit_size);\n'
+        elif dtype == 'float':
+            return res + f'nir_const_value_as_float(*{name}_cv, {name}_def->bit_size);\n'
+        else:
+            assert False, 'unreachable'
+
+    def create_function_body(self):
+        res = 'UNUSED const nir_shader *shader = state->shader;\n'
+        res += 'UNUSED const nir_shader_compiler_options *options = state->options;\n'
+        res += 'UNUSED const shader_info *info = state->info;\n'
+
+        num_components = None
+        for var in self.variables:
+            res += f'UNUSED const nir_match_variable *{var.name}_var = &vars[{var.index}];\n'
+            res += f'UNUSED const nir_def *{var.name}{"_def" if var.is_const else ""} = vars[{var.index}].src.src.ssa;\n'
+            if var.is_const and num_components is None:
+                num_components = f'{var.name}_var->num_components'
+
+        if num_components:
+            res += f'for (unsigned component = 0; component < {num_components}; component++) {{\n'
+
+        for var in self.variables:
+            if var.is_const:
+                res += self._get_const_val(var)
+        res += f'if (!({self.expr})) return false;\n'
+
+        if num_components:
+            res += '}\n'
+        res += 'return true;\n'
+        return res
+
+    def __eq__(self, other):
+        return (self.expr, self.variables) == (other.expr, other.variables)
+
+    def __hash__(self):
+        return hash((self.expr, self.variables))
+
+    def __repr__(self):
+        return f'when({self.expr})'
+
 _optimization_ids = itertools.count()
 
 class SearchAndReplace(object):
@@ -836,19 +975,22 @@ class SearchAndReplace(object):
 
         search = transform[0]
         replace = transform[1]
-        if len(transform) > 2:
-            self.condition = transform[2]
-        else:
-            self.condition = 'true'
 
-        if len(transform) > 3:
-            self.test_status = transform[3]
-        else:
-            self.test_status = TestStatus.PASS
+        self.condition_flag = 'true'
+        self.test_status = TestStatus.PASS
+        self.transform_cond = None
 
-        if self.condition not in algebraic_pass.pattern_cond:
-            algebraic_pass.pattern_cond.append(self.condition)
-        self.condition_index = algebraic_pass.pattern_cond.index(self.condition)
+        for extra in transform[2:]:
+            if isinstance(extra, str):
+                self.condition_flag = extra
+            elif isinstance(extra, TestStatus):
+                self.test_status = extra
+            elif isinstance(extra, TransformCondExpr):
+                self.transform_cond = extra
+
+        if self.condition_flag not in algebraic_pass.pattern_cond:
+            algebraic_pass.pattern_cond.append(self.condition_flag)
+        self.condition_flag_index = algebraic_pass.pattern_cond.index(self.condition_flag)
 
         varset = VarSet()
         if isinstance(search, Expression):
@@ -867,6 +1009,12 @@ class SearchAndReplace(object):
 
         BitSizeValidator(varset).validate(self.search, self.replace)
 
+        if self.transform_cond:
+            self.transform_cond.init(varset, self.search)
+
+        self.transform_cond_index = get_cond_index(
+            algebraic_pass.transform_cond, self.transform_cond)
+
 
 class TreeAutomaton(object):
     """This class calculates a bottom-up tree automaton to quickly search for
@@ -881,7 +1029,7 @@ class TreeAutomaton(object):
     + 1 table lookups for each n-source operation. The implementation is based
     on the theory described in "Tree Automatons: Two Taxonomies and a Toolkit."
     In the language of that reference, this is a frontier-to-root deterministic
-    automaton using only symbol filtering. The filtering is crucial to reduce
+    automaton using symbol and operand-position filtering. Filtering reduces
     both the time taken to generate the tables and the size of the tables.
     """
 
@@ -889,6 +1037,8 @@ class TreeAutomaton(object):
         self.patterns = [t.search for t in transforms]
         self._compute_items()
         self._build_table()
+        assert all(len(rep) <= 256 for rep in self.rep.values())
+        self._flatten_tables()
         # print('num items: {}'.format(len(set(self.items.values()))))
         # print('num states: {}'.format(len(self.states)))
         # for state, patterns in zip(self.states, self.patterns):
@@ -951,8 +1101,7 @@ class TreeAutomaton(object):
             self.children = children
             # These are the indices of patterns for which this item is the root node.
             self.patterns = []
-            # This the set of opcodes for parents of this item. Used to speed up
-            # filtering.
+            # Parent opcode/source positions at which this item is relevant.
             self.parent_ops = set()
 
         def __str__(self):
@@ -971,8 +1120,7 @@ class TreeAutomaton(object):
         self.opcodes = self.IndexMap()
 
         def get_item(opcode, children, pattern=None):
-            commutative = len(children) >= 2 \
-                and "2src_commutative" in opcodes[opcode].algebraic_properties
+            commutative = is_2src_commutative(opcode, len(children))
             item = self.items.setdefault((opcode, children),
                                          self.Item(opcode, children))
             if commutative:
@@ -1014,7 +1162,10 @@ class TreeAutomaton(object):
                 children = tuple(process_subpattern(c) for c in src.sources)
                 item = get_item(opcode, children, pattern)
                 for i, child in enumerate(children):
-                    child.parent_ops.add(opcode)
+                    child.parent_ops.add((opcode, i))
+                    # The aliases above swap only the first two sources.
+                    if i < 2 and src.is_2src_commutative():
+                        child.parent_ops.add((opcode, 1 - i))
                 return item
 
         for i, pattern in enumerate(self.patterns):
@@ -1037,19 +1188,18 @@ class TreeAutomaton(object):
         self.state_patterns = [None]
         # Offset in the ->transforms table for each state index
         self.state_pattern_offsets = []
-        # Map from state index to filtered state index for each opcode.
+        # Map from state index to filtered state index for each (opcode, source).
         self.filter = defaultdict(list)
         # Bijections from filtered state to filtered state index for each
-        # opcode, called the "representor sets" in the original algorithm.
-        # q_{a,j} in the original algorithm is len(self.rep[op]).
+        # operand position, called the "representor sets" in the original algorithm.
+        # q_{a,j} in the original algorithm is len(self.rep[op, j]).
         self.rep = defaultdict(self.IndexMap)
 
         # Everything in self.states with a index at least worklist_index is part
         # of the worklist of newly created states. There is also a worklist of
         # newly fitered states for each opcode, for which worklist_indices
         # serves a similar purpose. worklist_index corresponds to p in the
-        # original algorithm, while worklist_indices is p_{a,j} (although since
-        # we only filter by opcode/symbol, it's really just p_a).
+        # original algorithm, while worklist_indices is p_{a,j}.
         self.worklist_index = 0
         worklist_indices = defaultdict(lambda: 0)
 
@@ -1086,17 +1236,18 @@ class TreeAutomaton(object):
                 # calculate filter table for this state, and update filtered
                 # worklists.
                 for op in self.opcodes:
-                    filt = self.filter[op]
-                    rep = self.rep[op]
-                    filtered = frozenset(item for item in state if
-                                         op in item.parent_ops)
-                    if filtered in rep:
-                        rep_index = rep.index(filtered)
-                    else:
-                        rep_index = rep.add(filtered)
-                        new_opcodes.add(op)
-                    assert len(filt) == self.worklist_index
-                    filt.append(rep_index)
+                    for i in range(op_num_srcs(op)):
+                        filt = self.filter[op, i]
+                        rep = self.rep[op, i]
+                        filtered = frozenset(item for item in state if
+                                             (op, i) in item.parent_ops)
+                        if filtered in rep:
+                            rep_index = rep.index(filtered)
+                        else:
+                            rep_index = rep.add(filtered)
+                            new_opcodes.add(op)
+                        assert len(filt) == self.worklist_index
+                        filt.append(rep_index)
                 self.worklist_index += 1
 
         # There are two start states: one which can only match as a wildcard,
@@ -1111,21 +1262,17 @@ class TreeAutomaton(object):
 
         while len(new_opcodes) > 0:
             for op in new_opcodes:
-                rep = self.rep[op]
+                reps = [self.rep[op, i] for i in range(op_num_srcs(op))]
                 table = self.table[op]
-                op_worklist_index = worklist_indices[op]
-                if op in conv_opcode_types:
-                    num_srcs = 1
-                else:
-                    num_srcs = opcodes[op].num_inputs
 
                 # Iterate over all possible source combinations where at least one
                 # is on the worklist.
-                for src_indices in itertools.product(range(len(rep)), repeat=num_srcs):
-                    if all(src_idx < op_worklist_index for src_idx in src_indices):
+                for src_indices in itertools.product(*(range(len(rep)) for rep in reps)):
+                    if all(src_idx < worklist_indices[op, i]
+                           for i, src_idx in enumerate(src_indices)):
                         continue
 
-                    srcs = tuple(rep[src_idx] for src_idx in src_indices)
+                    srcs = tuple(rep[src_idx] for rep, src_idx in zip(reps, src_indices))
 
                     # Try all possible pairings of source items and add the
                     # corresponding parent items. This is Comp_a from the paper.
@@ -1137,9 +1284,38 @@ class TreeAutomaton(object):
                     parent.add(self.wildcard)
 
                     table[src_indices] = self.states.add(frozenset(parent))
-                worklist_indices[op] = len(rep)
+                for i, rep in enumerate(reps):
+                    worklist_indices[op, i] = len(rep)
             new_opcodes.clear()
             process_new_states()
+
+    def _flatten_tables(self):
+        """Fill in self.src_filters[op], a list with one
+        (filter, num_filtered_states) pair per source where filter is None if
+        every state maps to 0, and self.op_table[op], the dense transition
+        table in itertools.product() order.
+        """
+        self.src_filters = {}
+        self.op_table = {}
+        for op in self.opcodes:
+            table = self.table[op]
+            srcs = range(op_num_srcs(op))
+            dims = [len(self.rep[op, i]) for i in srcs]
+            self.src_filters[op] = [
+                (self.filter[op, i] if any(self.filter[op, i]) else None,
+                 dims[i]) for i in srcs]
+            self.op_table[op] = [table[indices] for indices in
+                                 itertools.product(*(range(n) for n in dims))]
+
+    def filter_arrays(self):
+        """Return the distinct non-NULL source filters, so that sources and
+        opcodes which share a filter can share the array that holds it."""
+        arrays = self.IndexMap()
+        for op in self.opcodes:
+            for filt, _ in self.src_filters[op]:
+                if filt is not None:
+                    arrays.add(tuple(filt))
+        return arrays
 
 
 _algebraic_pass_template = mako.template.Template("""
@@ -1173,9 +1349,28 @@ UNUSED static const nir_search_expression_cond ${pass_name}_expression_cond[] = 
 % endif
 
 % if variable_cond:
-static const nir_search_variable_cond ${pass_name}_variable_cond[] = {
+${ '' if build_tests else 'static ' }const nir_search_variable_cond ${pass_name}_variable_cond[] = {
 % for cond in variable_cond:
    ${cond[0]},
+% endfor
+};
+% endif
+
+% for cond in transform_cond:
+% if build_tests:
+bool ${pass_name}_transform_cond_${cond[1]}(const nir_search_state *state, const nir_match_variable *vars);
+% endif
+${ '' if build_tests else 'static ' }bool
+${pass_name}_transform_cond_${cond[1]}(const nir_search_state *state, const nir_match_variable *vars)
+{
+   ${cond[0].create_function_body()}
+}
+% endfor
+
+% if transform_cond:
+${ '' if build_tests else 'static ' }const nir_search_transform_cond ${pass_name}_transform_cond[] = {
+% for cond in transform_cond:
+   ${pass_name}_transform_cond_${cond[1]},
 % endfor
 };
 % endif
@@ -1183,36 +1378,38 @@ static const nir_search_variable_cond ${pass_name}_variable_cond[] = {
 static const struct transform ${pass_name}_transforms[] = {
 % for i in automaton.state_patterns:
 % if i is not None:
-   { ${xforms[i].search.array_index}, ${xforms[i].replace.array_index}, ${xforms[i].condition_index} },
+   { ${xforms[i].search.array_index}, ${xforms[i].replace.array_index}, ${xforms[i].condition_flag_index}, ${xforms[i].transform_cond_index} },
 % else:
-   { ~0, ~0, ~0 }, /* Sentinel */
+   { ~0, ~0, ~0, ~0 }, /* Sentinel */
 
 % endif
 % endfor
 };
 
+<% filter_arrays = automaton.filter_arrays() %>
+% for i, filt in enumerate(filter_arrays):
+static const uint8_t ${pass_name}_filter_${i}[] = {
+% for e in filt:
+   ${e},
+% endfor
+};
+% endfor
+
 static const struct per_op_table ${pass_name}_pass_op_table[nir_num_search_ops] = {
 % for op in automaton.opcodes:
    [${get_c_opcode(op)}] = {
-% if all(e == 0 for e in automaton.filter[op]):
-      .filter = NULL,
+      .srcs = (const struct per_src_filter []) {
+% for filt, num_filtered in automaton.src_filters[op]:
+% if filt is None:
+         { NULL, ${num_filtered} },
 % else:
-      .filter = (const uint16_t []) {
-      % for e in automaton.filter[op]:
-         ${e},
-      % endfor
-      },
+         { ${pass_name}_filter_${filter_arrays.index(tuple(filt))}, ${num_filtered} },
 % endif
-      <%
-        num_filtered = len(automaton.rep[op])
-      %>
-      .num_filtered_states = ${num_filtered},
+% endfor
+      },
       .table = (const uint16_t []) {
-      <%
-        num_srcs = len(next(iter(automaton.table[op])))
-      %>
-      % for indices in itertools.product(range(num_filtered), repeat=num_srcs):
-         ${automaton.table[op][indices]},
+      % for e in automaton.op_table[op]:
+         ${e},
       % endfor
       },
    },
@@ -1233,6 +1430,7 @@ static const nir_algebraic_table ${pass_name}_table = {
    .values = ${pass_name}_values,
    .expression_cond = ${ pass_name + "_expression_cond" if expression_cond else "NULL" },
    .variable_cond = ${ pass_name + "_variable_cond" if variable_cond else "NULL" },
+   .transform_cond = ${ pass_name + "_transform_cond" if transform_cond else "NULL" },
 };
 
 bool
@@ -1243,14 +1441,14 @@ ${pass_name}(
 % endfor
 ) {
    bool progress = false;
-   bool condition_flags[${len(condition_list)}];
+   bool condition_flags[${len(condition_flag_list)}];
    const nir_shader_compiler_options *options = shader->options;
    const shader_info *info = &shader->info;
    (void) options;
    (void) info;
 
    STATIC_ASSERT(${str(cache["next_index"])} == ARRAY_SIZE(${pass_name}_values));
-   % for index, condition in enumerate(condition_list):
+   % for index, condition in enumerate(condition_flag_list):
    condition_flags[${index}] = ${condition};
    % endfor
 
@@ -1268,13 +1466,15 @@ _algebraic_pass_pattern_test_template = mako.template.Template("""
 #include "tests/nir_algebraic_pattern_test.h"
 #include "nir_search_helpers.h"
 
+extern "C" {
 % if variable_cond:
-UNUSED static const nir_search_variable_cond ${pass_name}_variable_cond[] = {
-% for cond in variable_cond:
-   ${cond[0]},
-% endfor
-};
+UNUSED extern const nir_search_variable_cond ${pass_name}_variable_cond[];
 % endif
+
+% if transform_cond:
+UNUSED extern const nir_search_transform_cond ${pass_name}_transform_cond[];
+% endif
+}
 
 class ${pass_name}_pattern_test : public nir_algebraic_pattern_test {
 protected:
@@ -1287,7 +1487,7 @@ protected:
 % for subset, chunk in enumerate(chunks):
 #if SUBSET == ${subset}
 
-% for test_name, verbose_name, xform_defs, expr_conds, search_def, replace_def, test_status, expected_result in chunk:
+% for test_name, verbose_name, xform_defs, expr_conds, search_def, replace_def, transform_cond_index, test_status, expected_result in chunk:
 TEST_F(${pass_name}_pattern_test, ${test_name})
 {
    b->shader->info.name = "${verbose_name}";
@@ -1310,6 +1510,9 @@ TEST_F(${pass_name}_pattern_test, ${test_name})
 % for cond in expr_conds:
    ${cond}
 % endfor
+% if transform_cond_index != -1:
+   transform_cond = ${pass_name}_transform_cond[${transform_cond_index}];
+% endif
    validate_pattern();
 }
 
@@ -1494,7 +1697,7 @@ def get_expression_def(expr, name, value_comps, variable_map, defs, expr_conds, 
         # patterns using them is "don't do this transformation when there are
         # actual constants rather than variable values here."  Similarly for
         # is_fmul in fma distribution
-        if isinstance(expr, Variable) and expr.cond_index != -1 and expr.cond not in {"(is_not_const)", "(is_not_const_zero)", "(is_fmul)", "(is_not_const_and_not_fsign)"}:
+        if isinstance(expr, Variable) and expr.cond_index != -1 and expr.cond not in {"is_not_const", "is_not_const_zero", "is_fmul", "is_not_const_and_not_fsign"}:
             defs.append(
                 f"variable_conds.push_back(nir_algebraic_pattern_test_variable_cond(nir_def_as_alu({def_name}), {src_index}, {pass_name}_variable_cond[{expr.cond_index}]));")
 
@@ -1507,9 +1710,11 @@ class AlgebraicPass(object):
         self.xforms = []
         self.opcode_xforms = defaultdict(lambda: [])
         self.pass_name = pass_name
+        self.build_tests = build_tests
         self.expression_cond = {}
         self.variable_cond = {}
         self.pattern_cond = ['true']
+        self.transform_cond = {}
         self.params = params
 
         error = False
@@ -1598,12 +1803,12 @@ class AlgebraicPass(object):
                 xform.replace, "replace", value_comps, variable_map, xform_defs, expr_conds, fp_math_ctrl, self.pass_name)
 
             # lowering patterns can lose precision
-            if expression_is_inexact(xform.search) or (xform.condition != "true" and expression_has_float(xform.search)):
+            if expression_is_inexact(xform.search) or (xform.condition_flag != "true" and expression_has_float(xform.search)):
                 xform_defs.append("exact = false;")
 
             if fp_math_ctrl:
                 xform_defs.append(
-                    f"fp_math_ctrl = (nir_fp_math_control) (fp_math_ctrl & ~({' | '.join(fp_math_ctrl)}));")
+                    f"fp_math_ctrl = (nir_fp_math_control) (fp_math_ctrl & ~({' | '.join(sorted(fp_math_ctrl))}));")
 
             # Do a little setup before our unit_test_assert_eq so some top-level expression conditions pass and
             # we get better coverage.
@@ -1630,7 +1835,7 @@ class AlgebraicPass(object):
 
             verbose_name = f"{str(xform.search)} -> {str(xform.replace)}"
             self.tests.append((name, verbose_name, xform_defs, expr_conds, search_def, replace_def,
-                              TestStatus, xform.test_status))
+                               xform.transform_cond_index, TestStatus, xform.test_status))
 
             xform_index += 1
 
@@ -1641,14 +1846,17 @@ class AlgebraicPass(object):
 
     def render(self):
         return _algebraic_pass_template.render(pass_name=self.pass_name,
+                                               build_tests=self.build_tests,
                                                xforms=self.xforms,
                                                opcode_xforms=self.opcode_xforms,
-                                               condition_list=self.pattern_cond,
+                                               condition_flag_list=self.pattern_cond,
                                                automaton=self.automaton,
                                                expression_cond=sorted(
                                                    self.expression_cond.items(), key=lambda kv: kv[1]),
                                                variable_cond=sorted(
                                                    self.variable_cond.items(), key=lambda kv: kv[1]),
+                                               transform_cond=sorted(
+                                                   self.transform_cond.items(), key=lambda kv: kv[1]),
                                                get_c_opcode=get_c_opcode,
                                                itertools=itertools,
                                                params=self.params)
@@ -1662,6 +1870,6 @@ class AlgebraicPass(object):
             pass_name=self.pass_name,
             chunks=chunks,
             subset=i,
-            variable_cond=sorted(
-                self.variable_cond.items(), key=lambda kv: kv[1])
+            variable_cond=len(self.variable_cond) > 0,
+            transform_cond=len(self.transform_cond) > 0,
         )
